@@ -247,6 +247,25 @@ class TestUpPipeline(unittest.TestCase):
             self.assertIn("check.html", out2.getvalue())
             self.assertIn("严禁复制到宿主浏览器", out2.getvalue())
 
+    def test_unexpected_error_deletes_plaintext_marks_failed_and_reraises(self):
+        with tempfile.TemporaryDirectory() as td:
+            ctx = _ctx(td)
+            steps = self._stub_steps([])
+
+            def boom(c):
+                raise RuntimeError("unexpected")
+
+            steps["download"] = boom
+            with mock.patch.dict(cchouse_mod.STEP_FUNCS, steps), mock.patch("sys.stdout", io.StringIO()):
+                with self.assertRaises(RuntimeError):
+                    cchouse_mod.run_pipeline(ctx)
+            self.assertFalse(ctx.seed_iso.exists())
+            self.assertFalse(ctx.rendered.exists())
+            state = json.loads(ctx.state_path.read_text(encoding="utf-8"))
+            self.assertEqual(state["status"], "FAILED")
+            self.assertEqual(state["failed_step"], "up:download")
+            self.assertEqual(state["timings"]["download"]["result"], "failed")
+
     def test_firstboot_failure_forces_reimport(self):
         with tempfile.TemporaryDirectory() as td:
             calls = []

@@ -1130,6 +1130,17 @@ def run_pipeline(ctx):
                 "seconds": round(time.monotonic() - t0, 1), "result": "failed",
             }
             return on_failure(ctx, steps, i, name, title, reason)
+        except BaseException as exc:
+            # 非预期异常：同样先删明文、写 FAILED，再原样抛出便于排查（原因只记类型，不记可能含敏感值的消息）
+            ctx.state["timings"][name] = {
+                "started_at": started, "ended_at": _now_iso(),
+                "seconds": round(time.monotonic() - t0, 1), "result": "failed",
+            }
+            try:
+                on_failure(ctx, steps, i, name, title, f"意外错误 {type(exc).__name__}（详见下方 traceback）")
+            finally:
+                ctx.delete_plaintext()
+            raise
         ctx.state["timings"][name] = {
             "started_at": started, "ended_at": _now_iso(),
             "seconds": round(time.monotonic() - t0, 1), "result": "cached" if cached else "fresh",
