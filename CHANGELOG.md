@@ -7,3 +7,4 @@
 - 新增面向外部 AI Agent 的 6 步状态机手册（`AGENTS.md`）、`scripts/preflight.py(.ps1)`、`scripts/make-seed-iso.py`、`scripts/verify-linux.sh` 与单元测试 `tests/test_v2.py`。
 - 保留 Apple Silicon Mac `tart` + macOS 客机路线（`guest/`、`host/`）。
 - 完善 v1 macOS 文档与模板：`docs/build.md` 补充 `mihomo` / `tart-guest-agent` 下载与 sha256 核对命令、明确基础镜像版本及本地 vanilla 底包 CoW 复用说明、移除私有目录硬引用；`instance.env.example` 显式声明 `GUEST_OS`/`EXIT_MODE` 并将外置盘 `VM_STORAGE` 默认置空。
+- 修正 `scripts/preflight.py` 的 Tart 底包缓存判定：仅在 `cache/OCIs` 或命名含 `vanilla`/`base` 的本地底包下存在真实 `disk.img` 时视为命中缓存，避免 `tart prune` 残留悬空软链或已有成品实例导致低磁盘误放行，并按是否命中底包区分 30–50 GB 警告文案。

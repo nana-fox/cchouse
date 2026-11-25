@@ -93,12 +93,19 @@ def tart_home_dir():
     return Path.home() / ".tart"
 
 
-def has_tart_cached_image():
-    th = tart_home_dir()
-    for sub in ("cache/OCIs", "vms"):
-        d = th / sub
-        if d.is_dir() and any(d.iterdir()):
-            return True
+def has_tart_cached_image(th=None):
+    th = Path(th) if th is not None else tart_home_dir()
+    oci_dir = th / "cache" / "OCIs"
+    if oci_dir.is_dir():
+        for disk in oci_dir.rglob("disk.img"):
+            if disk.is_file():
+                return True
+    vms_dir = th / "vms"
+    if vms_dir.is_dir():
+        for entry in vms_dir.iterdir():
+            name = entry.name.lower()
+            if entry.is_dir() and ("vanilla" in name or "base" in name) and (entry / "disk.img").is_file():
+                return True
     return False
 
 
@@ -230,7 +237,10 @@ def main():
             )
             next_action = "free_disk_or_set_tart_home"
         elif disk_gb < 50:
-            warnings.append(f"LOW_DISK: Tart 目标卷剩余 {disk_gb} GB，建议 ≥ 50 GB（本地有缓存底包可继续）")
+            if tart_cached:
+                warnings.append(f"LOW_DISK: Tart 目标卷剩余 {disk_gb} GB，建议 ≥ 50 GB（检测到本地缓存底包，可基于 CoW 克隆继续）")
+            else:
+                warnings.append(f"LOW_DISK: Tart 目标卷剩余 {disk_gb} GB，建议 ≥ 50 GB（首次拉取镜像空间较紧张，建议预留余量或使用外置 TART_HOME）")
     elif route == "vmware-linux":
         if sys_name == "Darwin" and arch == "arm64":
             warnings.append(
