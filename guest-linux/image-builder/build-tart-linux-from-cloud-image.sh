@@ -5,8 +5,11 @@ set -euo pipefail
 
 VM_NAME="${VM_NAME:-cchouse-debian13-arm64}"
 WORK_DIR="${WORK_DIR:-$HOME/.cache/cchouse-tart-linux-build}"
-CLOUD_IMAGE_URL="${CLOUD_IMAGE_URL:-https://cloud.debian.org/images/cloud/trixie/20261123-2671/debian-13-generic-arm64-20261123-2671.raw}"
-CLOUD_IMAGE_SHA512="${CLOUD_IMAGE_SHA512:-056644b92b6e70c96b8f6bd4b9c5635d61d8193f768489dd62ee33dd7251055ead9db6c83619345beae146f8782e5877a660590320c060471814ee0e88246495}"
+DEFAULT_CLOUD_IMAGE_VERSION="20261123-2671"
+DEFAULT_CLOUD_IMAGE_SHA512="800e63be2901b32689ea00a4a6eaab0df5b7ef43eb543cf59627b575cd9c279d93d791be96ba9306617d28e1973f9222d3ab490138117ee41eb7432f61e5f55f"
+CLOUD_IMAGE_VERSION="${CLOUD_IMAGE_VERSION:-$DEFAULT_CLOUD_IMAGE_VERSION}"
+CLOUD_IMAGE_URL="${CLOUD_IMAGE_URL:-https://cloud.debian.org/images/cloud/trixie/${CLOUD_IMAGE_VERSION}/debian-13-generic-arm64-${CLOUD_IMAGE_VERSION}.tar.xz}"
+CLOUD_IMAGE_SHA512="${CLOUD_IMAGE_SHA512:-$DEFAULT_CLOUD_IMAGE_SHA512}"
 MIHOMO_VERSION="${MIHOMO_VERSION:-v1.19.19}"
 MIHOMO_SHA256="${MIHOMO_SHA256:-5035df7d6ae01ab33090fe612ec1b98ccc68917f03a97fb62ed474dc0b99cdcc}"
 MIHOMO_URL="https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VERSION}/mihomo-linux-arm64-${MIHOMO_VERSION}.gz"
@@ -31,22 +34,57 @@ GUEST_LINUX_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
   exit 1
 }
 
+if [ "$CLOUD_IMAGE_VERSION" != "$DEFAULT_CLOUD_IMAGE_VERSION" ] && [ "$CLOUD_IMAGE_SHA512" = "$DEFAULT_CLOUD_IMAGE_SHA512" ]; then
+  echo "错误：自定义 CLOUD_IMAGE_VERSION=${CLOUD_IMAGE_VERSION} 时必须同步传入对应的 CLOUD_IMAGE_SHA512" >&2
+  exit 1
+fi
+
 mkdir -p "$WORK_DIR"
-RAW_IMG="${WORK_DIR}/debian-13-generic-arm64.raw"
+CLOUD_BASENAME="$(basename "$CLOUD_IMAGE_URL")"
+case "$CLOUD_BASENAME" in
+  *.tar.xz|*.raw) ;;
+  *)
+    echo "错误：不支持的云镜像文件格式：${CLOUD_BASENAME}（仅支持 .tar.xz 或 .raw）" >&2
+    exit 1
+    ;;
+esac
+CLOUD_IMG="${WORK_DIR}/${CLOUD_BASENAME}"
 MIHOMO_GZ="${WORK_DIR}/mihomo-linux-arm64-${MIHOMO_VERSION}.gz"
 
-if [ ! -f "$RAW_IMG" ]; then
-  echo "== [1/7] 下载 Debian 13 官方 arm64 云镜像 (~330 MB)..."
-  curl -fL "$CLOUD_IMAGE_URL" -o "$RAW_IMG"
+if [ ! -f "$CLOUD_IMG" ]; then
+  echo "== [1/7] 下载 Debian 13 官方 arm64 压缩云镜像 (${CLOUD_BASENAME}, ~288 MB)..."
+  curl -fL "$CLOUD_IMAGE_URL" -o "${CLOUD_IMG}.part"
+  if ! echo "${CLOUD_IMAGE_SHA512}  ${CLOUD_IMG}.part" | shasum -a 512 -c -; then
+    rm -f "${CLOUD_IMG}.part"
+    echo "错误：下载的云镜像 SHA-512 校验失败，已清理临时文件" >&2
+    exit 1
+  fi
+  mv "${CLOUD_IMG}.part" "$CLOUD_IMG"
+else
+  if ! echo "${CLOUD_IMAGE_SHA512}  ${CLOUD_IMG}" | shasum -a 512 -c -; then
+    rm -f "$CLOUD_IMG"
+    echo "错误：本地缓存云镜像 SHA-512 校验失败，已自动删除损坏缓存，请重新运行脚本" >&2
+    exit 1
+  fi
 fi
-echo "${CLOUD_IMAGE_SHA512}  ${RAW_IMG}" | shasum -a 512 -c -
-echo "  OK  Debian 13 arm64 raw SHA-512 校验通过"
+echo "  OK  Debian 13 arm64 云镜像 SHA-512 校验通过"
 
 if [ ! -f "$MIHOMO_GZ" ]; then
   echo "== [2/7] 下载 mihomo arm64 ${MIHOMO_VERSION}..."
-  curl -fL "$MIHOMO_URL" -o "$MIHOMO_GZ"
+  curl -fL "$MIHOMO_URL" -o "${MIHOMO_GZ}.part"
+  if ! echo "${MIHOMO_SHA256}  ${MIHOMO_GZ}.part" | shasum -a 256 -c -; then
+    rm -f "${MIHOMO_GZ}.part"
+    echo "错误：下载的 mihomo SHA-256 校验失败，已清理临时文件" >&2
+    exit 1
+  fi
+  mv "${MIHOMO_GZ}.part" "$MIHOMO_GZ"
+else
+  if ! echo "${MIHOMO_SHA256}  ${MIHOMO_GZ}" | shasum -a 256 -c -; then
+    rm -f "$MIHOMO_GZ"
+    echo "错误：本地缓存 mihomo SHA-256 校验失败，已自动删除损坏缓存，请重新运行脚本" >&2
+    exit 1
+  fi
 fi
-echo "${MIHOMO_SHA256}  ${MIHOMO_GZ}" | shasum -a 256 -c -
 echo "  OK  mihomo arm64 SHA-256 校验通过"
 
 echo "== [3/7] 创建 Tart Linux VM (${VM_NAME}, ${DISK_SIZE_GB} GB) 并写入基础盘..."
@@ -57,7 +95,19 @@ echo "== [3/7] 创建 Tart Linux VM (${VM_NAME}, ${DISK_SIZE_GB} GB) 并写入�
 
 DISK_IMG="${TART_HOME_DIR}/vms/${VM_NAME}/disk.img"
 [ -f "$DISK_IMG" ] || { echo "错误：未找到 Tart 磁盘文件：$DISK_IMG" >&2; exit 1; }
-cp -c "$RAW_IMG" "$DISK_IMG" 2>/dev/null || cp "$RAW_IMG" "$DISK_IMG"
+if [[ "$CLOUD_IMG" == *.tar.xz ]]; then
+  EXTRACT_DIR="$(mktemp -d "$(dirname "$DISK_IMG")/.extract.XXXXXX")"
+  (
+    trap 'rm -rf "$EXTRACT_DIR"' EXIT
+    tar -xJf "$CLOUD_IMG" -C "$EXTRACT_DIR" disk.raw
+    mv -f "${EXTRACT_DIR}/disk.raw" "$DISK_IMG"
+  )
+elif [[ "$CLOUD_IMG" == *.raw ]]; then
+  cp -c "$CLOUD_IMG" "$DISK_IMG" 2>/dev/null || cp "$CLOUD_IMG" "$DISK_IMG"
+else
+  echo "错误：不支持的云镜像文件格式：${CLOUD_IMG}" >&2
+  exit 1
+fi
 python3 -c "import os; os.truncate('${DISK_IMG}', ${DISK_SIZE_GB} * 1024 * 1024 * 1024)"
 
 echo "== [4/7] 生成一次性 cidata ISO 与临时 SSH 密钥..."
