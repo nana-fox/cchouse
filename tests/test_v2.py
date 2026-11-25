@@ -598,6 +598,69 @@ class TestCchouseV2(unittest.TestCase):
         self.assertIn("sudo -n -l", vl_sh)
         self.assertIn("cchouse-verify/cchouse-power", vl_sh)
 
+    def test_ustc_mirror_is_removed_before_golden_image_assertions(self):
+        import re
+
+        bash = find_bash()
+        if bash is None:
+            self.skipTest("bash unavailable")
+        builder = ROOT / "guest-linux" / "image-builder"
+        tart = (builder / "build-tart-linux-from-cloud-image.sh").read_text(encoding="utf-8")
+        golden = (builder / "build-debian13-golden.sh").read_text(encoding="utf-8")
+        assertions = (builder / "assert-empty-state.sh").read_text(encoding="utf-8")
+        self.assertIn('BUILD_CMD="USE_USTC_MIRROR=${USE_USTC_MIRROR}', tart)
+        rewrite = re.search(r"^rewrite_apt_sources\(\) \{\n.*?^\}$", golden, re.M | re.S)
+        check = re.search(r"^apt_without_ustc\(\) \{\n.*?^\}$", assertions, re.M | re.S)
+        self.assertIsNotNone(rewrite)
+        self.assertIsNotNone(check)
+        enable, restore = re.findall(r"^\s*rewrite_apt_sources /etc/apt ('.*')$", golden, re.M)
+        self.assertLess(golden.index(enable), golden.index("apt-get update"))
+        self.assertLess(golden.index("apt-get clean"), golden.index(restore))
+        self.assertLess(golden.index(restore), golden.index('bash "${SCRIPT_DIR}/assert-empty-state.sh"'))
+        self.assertIn("apt_without_ustc /etc/apt", assertions)
+
+        with tempfile.TemporaryDirectory() as td:
+            apt_dir = Path(td) / "apt with spaces"
+            (apt_dir / "sources.list.d").mkdir(parents=True)
+            (apt_dir / "mirrors").mkdir()
+            (apt_dir / "apt.conf.d").mkdir()
+            packages = apt_dir / "mirrors" / "debian.list"
+            packages.write_text("https://deb.debian.org/debian\n", encoding="utf-8")
+            security = apt_dir / "sources.list.d" / "security.sources"
+            security.write_text("URIs: https://deb.debian.org/debian-security\n", encoding="utf-8")
+            residue = apt_dir / "apt.conf.d" / "99-unused"
+            script = "\n".join((
+                "set -euo pipefail",
+                rewrite.group(0),
+                check.group(0),
+                'case "$1" in',
+                f'  enable) rewrite_apt_sources "$2" {enable} ;;',
+                f'  restore) rewrite_apt_sources "$2" {restore} ;;',
+                '  check) apt_without_ustc "$2" ;;',
+                "esac",
+            ))
+            harness = Path(td) / "apt-mirror.sh"
+            harness.write_text(script + "\n", encoding="utf-8")
+
+            def apply(action):
+                return subprocess.run(
+                    [bash, str(harness), action, apt_dir.as_posix()],
+                    capture_output=True, text=True,
+                )
+
+            result = apply("enable")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(packages.read_text(), "https://mirrors.ustc.edu.cn/debian\n")
+            self.assertEqual(security.read_text(), "URIs: https://mirrors.ustc.edu.cn/debian-security\n")
+            self.assertNotEqual(apply("check").returncode, 0)
+            result = apply("restore")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(packages.read_text(), "https://deb.debian.org/debian\n")
+            self.assertEqual(security.read_text(), "URIs: https://security.debian.org/debian-security\n")
+            self.assertEqual(apply("check").returncode, 0)
+            residue.write_text("# MIRRORS.USTC.EDU.CN\n", encoding="utf-8")
+            self.assertNotEqual(apply("check").returncode, 0)
+
     def test_builders_do_not_background_golden_chain_and_write_release_meta(self):
         import re
 
