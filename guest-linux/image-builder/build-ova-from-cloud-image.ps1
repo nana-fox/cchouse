@@ -78,17 +78,30 @@ if ($got256 -ne $MihomoSha256.ToLower()) {
 Write-Host "  OK  mihomo SHA-256 校验通过"
 
 $vmDir = Join-Path $WorkDir "vm"
+$vmx = Join-Path $vmDir "cchouse-debian13-amd64.vmx"
+if (Test-Path $vmx) {
+  $prevEap = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+  & $vmrun -T ws stop $vmx hard 2>$null | Out-Null
+  $ErrorActionPreference = $prevEap
+  Start-Sleep 2
+}
 if (Test-Path $vmDir) { Remove-Item -Recurse -Force $vmDir }
 New-Item -ItemType Directory -Force -Path $vmDir | Out-Null
 
 Write-Host "== [3/7] 转换 qcow2 -> VMDK (24 GiB)..."
 $workQcow = Join-Path $vmDir "work.qcow2"
 Copy-Item $qcow2 $workQcow
+$prevEap = $ErrorActionPreference; $ErrorActionPreference = "Continue"
 & $qemuImg resize $workQcow 24G
-if ($LASTEXITCODE -ne 0) { throw "qemu-img resize 失败" }
+$rc = $LASTEXITCODE
+$ErrorActionPreference = $prevEap
+if ($rc -ne 0) { throw "qemu-img resize 失败" }
 $vmdk = Join-Path $vmDir "cchouse-debian13.vmdk"
+$prevEap = $ErrorActionPreference; $ErrorActionPreference = "Continue"
 & $qemuImg convert -f qcow2 -O vmdk -o adapter_type=lsilogic,subformat=monolithicSparse $workQcow $vmdk
-if ($LASTEXITCODE -ne 0) { throw "qemu-img convert 失败" }
+$rc = $LASTEXITCODE
+$ErrorActionPreference = $prevEap
+if ($rc -ne 0) { throw "qemu-img convert 失败" }
 Remove-Item $workQcow -Force
 
 Write-Host "== [4/7] 生成一次性 cidata ISO 与临时 SSH 密钥..."
@@ -194,18 +207,24 @@ mks.enable3d = "FALSE"
 [System.IO.File]::WriteAllText($vmx, $vmxContent, [System.Text.UTF8Encoding]::new($false))
 
 Write-Host "== [5/7] 启动临时构建机并等待 SSH..."
+$prevEap = $ErrorActionPreference; $ErrorActionPreference = "Continue"
 & $vmrun -T ws start $vmx nogui
-if ($LASTEXITCODE -ne 0) { throw "vmrun start 失败" }
+$rc = $LASTEXITCODE
+$ErrorActionPreference = $prevEap
+if ($rc -ne 0) { throw "vmrun start 失败" }
 
 # 轮询 VMware NAT DHCP 租约 / getGuestIPAddress / arp 获取客机 IP 并探测 SSH 22 端口（最多 150 秒）
 $guestIp = ""
 $sshReady = $false
-$sshOpts = @("-i", $sshKey, "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=NUL", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes")
+$sshOpts = @("-i", $sshKey, "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=NUL", "-o", "LogLevel=ERROR", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes")
 $leaseFile = "C:\ProgramData\VMware\vmnetdhcp.leases"
 for ($i = 0; $i -lt 50; $i++) {
   Start-Sleep 3
+  $prevEap = $ErrorActionPreference; $ErrorActionPreference = "Continue"
   $ipOut = & $vmrun -T ws getGuestIPAddress $vmx 2>$null
-  if ($LASTEXITCODE -eq 0 -and $ipOut -match '^\d+\.\d+\.\d+\.\d+$') {
+  $ipRc = $LASTEXITCODE
+  $ErrorActionPreference = $prevEap
+  if ($ipRc -eq 0 -and $ipOut -match '^\d+\.\d+\.\d+\.\d+$') {
     $guestIp = $ipOut.Trim()
   } else {
     $macLine = (Select-String -Path $vmx -Pattern 'ethernet0\.generatedAddress\s*=\s*"([^"]+)"' -ErrorAction SilentlyContinue)
@@ -230,17 +249,24 @@ for ($i = 0; $i -lt 50; $i++) {
     }
   }
   if ($guestIp) {
+    $prevEap = $ErrorActionPreference; $ErrorActionPreference = "Continue"
     & ssh.exe @sshOpts "root@$guestIp" "true" 2>$null
-    if ($LASTEXITCODE -eq 0) { $sshReady = $true; break }
+    $sshRc = $LASTEXITCODE
+    $ErrorActionPreference = $prevEap
+    if ($sshRc -eq 0) { $sshReady = $true; break }
   }
 }
 if (-not $sshReady) { throw "150 秒内未获取到客机 IP 或 SSH 未就绪（当前 IP: $guestIp）" }
 Write-Host "  OK  客机 SSH 已就绪：$guestIp"
 
 Write-Host "== [6/7] 注入脚本与 mihomo，执行 build-debian13-golden.sh..."
+$prevEap = $ErrorActionPreference; $ErrorActionPreference = "Continue"
 & ssh.exe @sshOpts "root@$guestIp" "mkdir -p /tmp/cchouse-guest-linux"
+if ($LASTEXITCODE -ne 0) { $ErrorActionPreference = $prevEap; throw "ssh mkdir 失败" }
 & scp.exe @sshOpts -r "$GuestLinuxDir\*" "root@${guestIp}:/tmp/cchouse-guest-linux/"
+if ($LASTEXITCODE -ne 0) { $ErrorActionPreference = $prevEap; throw "scp guest-linux 失败" }
 & scp.exe @sshOpts $mihomoGz "root@${guestIp}:/tmp/mihomo.gz"
+if ($LASTEXITCODE -ne 0) { $ErrorActionPreference = $prevEap; throw "scp mihomo.gz 失败" }
 
 $mirrorCmd = ""
 if ($UseUstcMirror) {
@@ -248,15 +274,19 @@ if ($UseUstcMirror) {
 }
 $buildCmd = "${mirrorCmd}MIHOMO_VERSION=$MihomoVersion MIHOMO_SHA256=$MihomoSha256 MIHOMO_LOCAL_GZ=/tmp/mihomo.gz bash /tmp/cchouse-guest-linux/image-builder/build-debian13-golden.sh && rm -rf /tmp/cchouse-guest-linux /tmp/mihomo.gz"
 & ssh.exe @sshOpts "root@$guestIp" $buildCmd
-if ($LASTEXITCODE -ne 0) { throw "build-debian13-golden.sh 执行失败" }
+$rc = $LASTEXITCODE
+$ErrorActionPreference = $prevEap
+if ($rc -ne 0) { throw "build-debian13-golden.sh 执行失败" }
 
 Write-Host "== [7/7] 关机、清理临时光驱并导出黄金 .ova..."
+$prevEap = $ErrorActionPreference; $ErrorActionPreference = "Continue"
 & ssh.exe @sshOpts "root@$guestIp" "systemctl poweroff" 2>$null
 for ($i = 0; $i -lt 30; $i++) {
   Start-Sleep 2
   $running = & $vmrun -T ws list
   if (-not ($running -match [regex]::Escape($vmx))) { break }
 }
+$ErrorActionPreference = $prevEap
 
 # 清理 cidata 光驱，设置出厂物理断网与禁共享文件夹
 $vmxFinal = (Get-Content $vmx -Raw) `
@@ -270,8 +300,11 @@ Remove-Item -Recurse -Force $ciDir -ErrorAction SilentlyContinue
 
 $ovaOut = Join-Path $WorkDir "cchouse-debian13-amd64.ova"
 if (Test-Path $ovaOut) { Remove-Item -Force $ovaOut }
+$prevEap = $ErrorActionPreference; $ErrorActionPreference = "Continue"
 & $ovftool --compress=9 $vmx $ovaOut
-if ($LASTEXITCODE -ne 0) { throw "ovftool 导出 .ova 失败" }
+$rc = $LASTEXITCODE
+$ErrorActionPreference = $prevEap
+if ($rc -ne 0) { throw "ovftool 导出 .ova 失败" }
 
 $ovaSha = (Get-FileHash -Algorithm SHA256 $ovaOut).Hash.ToLower()
 $ovaMb = [math]::Round((Get-Item $ovaOut).Length / 1MB, 1)
