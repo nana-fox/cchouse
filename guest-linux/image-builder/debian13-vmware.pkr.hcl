@@ -67,6 +67,10 @@ source "vmware-iso" "debian13" {
 build {
   sources = ["source.vmware-iso.debian13"]
 
+  provisioner "shell" {
+    inline = ["mkdir -p /tmp/cchouse-guest-linux"]
+  }
+
   provisioner "file" {
     source      = "../"
     destination = "/tmp/cchouse-guest-linux"
