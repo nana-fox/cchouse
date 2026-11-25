@@ -1,0 +1,15 @@
+{
+  "WebRtcIPHandlingPolicy": "disable_non_proxied_udp",
+  "HomepageLocation": "file:///usr/local/<TAG>/check.html",
+  "RestoreOnStartup": 4,
+  "RestoreOnStartupURLs": [
+    "file:///usr/local/<TAG>/check.html"
+  ],
+  "BackgroundModeEnabled": false,
+  "MetricsReportingEnabled": false,
+  "NetworkPredictionOptions": 2,
+  "DnsOverHttpsMode": "off",
+  "BrowserSignin": 0,
+  "SyncDisabled": true,
+  "AutofillCreditCardEnabled": false
+}

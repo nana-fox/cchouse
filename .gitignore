@@ -1,0 +1,13 @@
+# 实例参数、渲染输出、密钥：只放私有目录，绝不进仓库
+*.env
+!instance.env.example
+rendered/
+live/
+monitor/
+id_ed25519*
+known_hosts
+kcpassword
+authorized_keys
+mihomo
+tart-guest-agent
+.DS_Store

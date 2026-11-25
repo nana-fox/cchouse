@@ -1,0 +1,171 @@
+---
+find-process-mode: off
+external-controller: 127.0.0.1:9090
+allow-lan: false
+bind-address: 127.0.0.1
+mode: rule
+log-level: warning
+ipv6: false
+tun:
+  enable: true
+  stack: system
+  auto-route: true
+  auto-detect-interface: true
+  strict-route: false
+  route-exclude-address:
+  - 192.168.64.0/24
+  - <HOME_LAN_CIDR>
+  dns-hijack:
+  - any:53
+  - tcp://any:53
+dns:
+  enable: true
+  listen: 127.0.0.1:1053
+  ipv6: false
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  prefer-h3: false
+  respect-rules: true
+  default-nameserver:
+  - https://1.1.1.1/dns-query#<TAG_UPPER>-Fixed-ISP
+  nameserver:
+  - https://1.1.1.1/dns-query#<TAG_UPPER>-Fixed-ISP
+  proxy-server-nameserver:
+  - https://1.1.1.1/dns-query#<TAG_UPPER>-Fixed-ISP
+proxies:
+# 主入口：自建前置（VLESS + REALITY 直连 + 经 Cloudflare 的 VLESS + WS），每台环境一个独立 UUID
+- name: <TAG_UPPER>-Front
+  type: vless
+  server: <FRONT_SERVER_IP>
+  port: <FRONT_PORT>
+  uuid: <FRONT_UUID>
+  udp: false
+  tls: true
+  skip-cert-verify: false
+  flow: xtls-rprx-vision
+  client-fingerprint: <FRONT_FINGERPRINT>
+  servername: <FRONT_SNI>
+  reality-opts:
+    public-key: <FRONT_PUBLIC_KEY>
+    short-id: <FRONT_SHORT_ID>
+- name: <TAG_UPPER>-Front-CF
+  type: vless
+  server: <FRONT_CF_SERVER_IP>
+  port: 443
+  uuid: <FRONT_UUID>
+  udp: false
+  tls: true
+  skip-cert-verify: false
+  flow: ''
+  client-fingerprint: chrome
+  servername: <FRONT_CF_HOST>
+  network: ws
+  ws-opts:
+    path: "<FRONT_CF_WS_PATH>"
+    headers:
+      Host: <FRONT_CF_HOST>
+# 备用入口：机场两个节点
+- name: <TAG_UPPER>-<NODE_LABEL>-WS
+  type: vless
+  server: <NODE_WS_SERVER_IP>
+  port: 443
+  uuid: <NODE_UUID>
+  udp: false
+  tls: true
+  skip-cert-verify: false
+  flow: ''
+  client-fingerprint: chrome
+  servername: <NODE_WS_HOST>
+  network: ws
+  ws-opts:
+    path: "<NODE_WS_PATH>"
+    headers:
+      Host: <NODE_WS_HOST>
+- name: <TAG_UPPER>-<NODE_LABEL>-ThreeNetworks
+  type: vless
+  server: <NODE_REALITY_SERVER_IP>
+  port: 443
+  uuid: <NODE_UUID>
+  udp: false
+  tls: true
+  skip-cert-verify: false
+  flow: xtls-rprx-vision
+  client-fingerprint: ios
+  servername: <NODE_REALITY_SNI>
+  reality-opts:
+    public-key: <NODE_REALITY_PUBLIC_KEY>
+    short-id: <NODE_REALITY_SHORT_ID>
+- type: socks5
+  server: <WEBSHARE_HOST>
+  port: <WEBSHARE_PORT>
+  username: <WEBSHARE_USER>
+  password: <WEBSHARE_PASS>
+  udp: false
+  name: <TAG_UPPER>-ISP-via-Front
+  dialer-proxy: <TAG_UPPER>-Front
+- type: socks5
+  server: <WEBSHARE_HOST>
+  port: <WEBSHARE_PORT>
+  username: <WEBSHARE_USER>
+  password: <WEBSHARE_PASS>
+  udp: false
+  name: <TAG_UPPER>-ISP-via-Front-CF
+  dialer-proxy: <TAG_UPPER>-Front-CF
+- type: socks5
+  server: <WEBSHARE_HOST>
+  port: <WEBSHARE_PORT>
+  username: <WEBSHARE_USER>
+  password: <WEBSHARE_PASS>
+  udp: false
+  name: <TAG_UPPER>-ISP-via-<NODE_LABEL>-WS
+  dialer-proxy: <TAG_UPPER>-<NODE_LABEL>-WS
+- type: socks5
+  server: <WEBSHARE_HOST>
+  port: <WEBSHARE_PORT>
+  username: <WEBSHARE_USER>
+  password: <WEBSHARE_PASS>
+  udp: false
+  name: <TAG_UPPER>-ISP-via-<NODE_LABEL>-ThreeNetworks
+  dialer-proxy: <TAG_UPPER>-<NODE_LABEL>-ThreeNetworks
+proxy-groups:
+- name: <TAG_UPPER>-Fixed-ISP
+  type: fallback
+  proxies:
+  - <TAG_UPPER>-ISP-via-Front
+  - <TAG_UPPER>-ISP-via-Front-CF
+  - <TAG_UPPER>-ISP-via-<NODE_LABEL>-WS
+  - <TAG_UPPER>-ISP-via-<NODE_LABEL>-ThreeNetworks
+  url: https://www.cloudflare.com/cdn-cgi/trace
+  interval: 120
+  timeout: 8000
+  lazy: false
+  disable-udp: true
+- name: <TAG_UPPER>-Stripe
+  type: fallback
+  proxies:
+  - <TAG_UPPER>-Front
+  - <TAG_UPPER>-Front-CF
+  - <TAG_UPPER>-<NODE_LABEL>-WS
+  - <TAG_UPPER>-<NODE_LABEL>-ThreeNetworks
+  url: https://js.stripe.com/v3/
+  interval: 300
+  timeout: 8000
+  lazy: false
+  disable-udp: true
+- name: GLOBAL
+  type: select
+  proxies:
+  - <TAG_UPPER>-Fixed-ISP
+  disable-udp: true
+rules:
+- NETWORK,UDP,REJECT
+# 系统更新：拒绝苹果更新服务器。否则「有可用更新」的角标会反复出现，新手一点就经固定出口下载几个 GB
+- DOMAIN-SUFFIX,swscan.apple.com,REJECT
+- DOMAIN-SUFFIX,swdist.apple.com,REJECT
+- DOMAIN-SUFFIX,swcdn.apple.com,REJECT
+- DOMAIN-SUFFIX,mesu.apple.com,REJECT
+- DOMAIN-SUFFIX,gdmf.apple.com,REJECT
+- DOMAIN-SUFFIX,stripe.com,<TAG_UPPER>-Stripe
+- DOMAIN-SUFFIX,stripe.network,<TAG_UPPER>-Stripe
+- DOMAIN-SUFFIX,stripecdn.com,<TAG_UPPER>-Stripe
+- MATCH,<TAG_UPPER>-Fixed-ISP

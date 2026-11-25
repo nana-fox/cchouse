@@ -1,0 +1,15 @@
+[Unit]
+Description=cchouse (<TAG>) nftables fail-closed guard
+DefaultDependencies=no
+Before=network-pre.target
+Wants=network-pre.target
+After=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /usr/local/<TAG>/nftables.conf
+ExecReload=/usr/sbin/nft -f /usr/local/<TAG>/nftables.conf
+
+[Install]
+WantedBy=sysinit.target

@@ -1,0 +1,5 @@
+#!/bin/sh
+# tart 包装脚本示例：把虚拟机数据放到外置盘。复制到 ~/.local/bin/tart 并 chmod +x，
+# instance.env 的 TART_BIN 指向它。tart 装在系统盘默认位置时不需要这个。
+export TART_HOME="/Volumes/<外置盘>/虚拟机/tart/home"
+exec "/Volumes/<外置盘>/虚拟机/tart/app/tart.app/Contents/MacOS/tart" "$@"

@@ -1,0 +1,10 @@
+[Unit]
+Description=cchouse (<TAG>) HTTPS time sync timer
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=30min
+Unit=cchouse-timesync.service
+
+[Install]
+WantedBy=timers.target

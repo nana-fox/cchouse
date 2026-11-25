@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Network Check</title>
+<style>
+body{font:15px system-ui,-apple-system,sans-serif;max-width:720px;margin:40px auto;padding:0 20px;color:#1d1d1f}
+h1{font-size:22px;margin:0 0 4px}
+#verdict{font-size:20px;font-weight:600;padding:16px 20px;border-radius:12px;margin:20px 0;background:#f2f2f7}
+#verdict.ok{background:#d9f7e1;color:#0a6b2c}#verdict.bad{background:#fde2e1;color:#a3140e}
+table{border-collapse:collapse;width:100%}td{padding:8px 6px;border-bottom:1px solid #e5e5ea;vertical-align:top}
+td:first-child{width:28px;font-size:18px}.dim{color:#86868b;font-size:13px}button{font-size:14px;padding:6px 14px}
+</style></head><body>
+<h1>Network Check</h1>
+<div class="dim">Checks this browser's public IP and settings before you sign in anywhere.</div>
+<div id="verdict">Checking…</div>
+<table id="rows"></table>
+<p><button onclick="location.reload()">Check again</button></p>
+<script>
+const EXPECT_IP = "<EXPECTED_EGRESS_IP>", EXPECT_TZ = "<TIMEZONE>", EXPECT_ASN = "<EXPECTED_EGRESS_ASN>";
+const rows = document.getElementById("rows"), results = [];
+function row(ok, name, detail){
+  results.push(ok);
+  const tr = rows.insertRow();
+  tr.insertCell().textContent = ok === null ? "…" : ok ? "✅" : "❌";
+  const td = tr.insertCell(); td.textContent = name;
+  if (detail){ const d=document.createElement("div"); d.className="dim"; d.textContent=detail; td.appendChild(d); }
+}
+async function getJSON(url){ const r = await fetch(url, {cache:"no-store"}); return r.json(); }
+function webrtcIPs(ms){
+  return new Promise(res => {
+    const ips = new Set();
+    let pc; try { pc = new RTCPeerConnection({iceServers:[{urls:"stun:stun.l.google.com:19302"}]}); } catch(e){ return res(ips); }
+    pc.createDataChannel("x");
+    pc.onicecandidate = e => { if (e.candidate){ const m = e.candidate.candidate.match(/(\d+\.\d+\.\d+\.\d+)/); if (m) ips.add(m[1]); } };
+    pc.createOffer().then(o => pc.setLocalDescription(o)).catch(()=>{});
+    setTimeout(() => { pc.close(); res(ips); }, ms);
+  });
+}
+const isPrivate = ip => /^(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|198\.18\.)/.test(ip);
+(async () => {
+  let info = {}, ip2 = "";
+  try { info = await getJSON("https://ipinfo.io/json"); } catch(e){}
+  try { ip2 = (await getJSON("https://api.ipify.org?format=json")).ip; } catch(e){}
+  row(info.ip === EXPECT_IP, "Public IP", (info.ip || "unreachable") + (info.city ? ` — ${info.city}, ${info.region}, ${info.country} (${info.org})` : ""));
+  row(ip2 === EXPECT_IP, "Public IP (second source)", ip2 || "unreachable");
+  row((info.org || "").split(" ")[0] === EXPECT_ASN, "IP network (ISP)", info.org || "unknown");
+  row(info.timezone === EXPECT_TZ, "IP location time zone", info.timezone || "unknown");
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  row(tz === EXPECT_TZ, "Browser time zone", tz);
+  row(/^en-US/.test(navigator.language), "Browser language", navigator.languages.join(", "));
+  const leaked = [...await webrtcIPs(4000)].filter(ip => !isPrivate(ip) && ip !== EXPECT_IP);
+  row(leaked.length === 0, "WebRTC leak", leaked.length ? "Other public IP exposed: " + leaked.join(", ") : "No other public IP exposed");
+  const v = document.getElementById("verdict");
+  if (results.every(Boolean)){ v.className = "ok"; v.textContent = "All good — you can sign in."; }
+  else { v.className = "bad"; v.textContent = "Do NOT sign in. Something is wrong — ask the admin."; }
+})();
+</script></body></html>

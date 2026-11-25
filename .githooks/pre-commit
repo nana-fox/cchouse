@@ -1,0 +1,18 @@
+#!/bin/bash
+# 拦截疑似凭据和私密文件。启用：git config core.hooksPath .githooks
+fail=0
+files=$(git diff --cached --name-only --diff-filter=ACM)
+for f in $files; do
+  case "$f" in
+    *.env|*/id_ed25519*|id_ed25519*|*known_hosts|*kcpassword|*authorized_keys|*/rendered/*|*/live/*)
+      echo "拒绝提交私密文件：$f"; fail=1 ;;
+  esac
+done
+# 内容：密码/密钥字段写了真实值（不是 <占位符>）、UUID、私钥
+pat='((password|uuid|public-key|short-id|username):[[:space:]]*[^<[:space:]]|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|BEGIN [A-Z ]*PRIVATE KEY)'
+for f in $files; do
+  [ "$f" = ".githooks/pre-commit" ] && continue
+  hits=$(git show ":$f" 2>/dev/null | grep -nEi "$pat" | grep -v "''")
+  if [ -n "$hits" ]; then echo "疑似凭据：$f"; echo "$hits" | sed 's/:.*//; s/^/  第 /; s/$/ 行/'; fail=1; fi
+done
+[ $fail = 0 ] || { echo "如果确认不是凭据，用 git commit --no-verify 跳过。"; exit 1; }

@@ -1,0 +1,14 @@
+[Unit]
+Description=cchouse firstboot offline provisioning (before network)
+DefaultDependencies=no
+After=local-fs.target systemd-udevd.service cchouse-default-drop.service
+Before=network-pre.target cchouse-nftables.service
+ConditionPathExists=!/var/lib/cchouse/firstboot.done
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/cchouse-firstboot.sh
+
+[Install]
+WantedBy=sysinit.target

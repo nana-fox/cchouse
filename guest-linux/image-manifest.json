@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "guest_os": "debian-13",
+  "arch": "amd64",
+  "image_version": "unreleased-dev",
+  "format": "ova",
+  "urls": [],
+  "sha256": "",
+  "minisign_pubkey": "",
+  "included_components": [
+    "debian-13-base",
+    "openbox",
+    "chromium",
+    "nodejs-lts",
+    "mihomo",
+    "nftables",
+    "open-vm-tools"
+  ],
+  "excluded_components": [
+    "claude-code (installed offline at firstboot from host-verified npm tarball)"
+  ],
+  "empty_state_assertions": [
+    "/etc/machine-id must be empty (0 bytes)",
+    "/etc/ssh/ssh_host_* must not exist",
+    "/home/claude/.config/chromium must not exist",
+    "/home/claude/.claude* must not exist",
+    "/etc/cchouse/nftables-default-drop.conf must be active before network-pre.target"
+  ]
+}

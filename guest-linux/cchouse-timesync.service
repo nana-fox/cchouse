@@ -1,0 +1,7 @@
+[Unit]
+Description=cchouse (<TAG>) HTTPS time sync
+After=cchouse-mihomo.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/<TAG>/timesync.sh
