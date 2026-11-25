@@ -56,8 +56,56 @@ if [ -z "${STRIPE_EXIT_MODE:-}" ]; then
   fi
 fi
 
-SSH_OPTS=(-F none -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=\"$SSH_KNOWN_HOSTS\"")
-guest() { ssh "${SSH_OPTS[@]}" "claude@$GUEST_IP" "$@"; }
+# NAT 端口转发（VirtualBox）时 GUEST_IP 仍是 127.0.0.1，宿主端口不是 22。
+# instance.env 可写 SSH_PORT；不写则保持直连客机的 22。
+SSH_PORT="${SSH_PORT:-22}"
+case "$SSH_PORT" in
+  ''|*[!0-9]*|0*)
+    echo "instance.env 的 SSH_PORT 必须是 1-65535 的整数" >&2
+    exit 1
+    ;;
+esac
+if [ "${#SSH_PORT}" -gt 5 ] || [ "$SSH_PORT" -gt 65535 ]; then
+  echo "instance.env 的 SSH_PORT 必须是 1-65535 的整数" >&2
+  exit 1
+fi
+
+# cchouse.py 在 Windows 上把 System32\OpenSSH 加到 PATH 前面。Git Bash 启动时仍把
+# /usr/bin 放在最前，/usr/bin/ssh 会盖住无扩展名 shim；C:\Program Files\OpenSSH\ssh.exe
+# 还会忽略 ConnectTimeout。这里按绝对路径调用 System32 的 ssh.exe / scp.exe。
+# VERIFY_OPENSSH_DIR 只在单测里使用，且仅当上面两个 System32 路径都不存在时才生效。
+resolve_openssh() {
+  local _name="$1" _hit
+  for _hit in \
+    "/c/Windows/System32/OpenSSH/${_name}.exe" \
+    "/mnt/c/Windows/System32/OpenSSH/${_name}.exe"
+  do
+    if [ -x "$_hit" ]; then
+      printf '%s\n' "$_hit"
+      return 0
+    fi
+  done
+  if [ -n "${VERIFY_OPENSSH_DIR:-}" ] && [ -x "${VERIFY_OPENSSH_DIR}/${_name}.exe" ]; then
+    printf '%s\n' "${VERIFY_OPENSSH_DIR}/${_name}.exe"
+    return 0
+  fi
+  printf '%s\n' "$_name"
+}
+SSH_BIN="$(resolve_openssh ssh)"
+SCP_BIN="$(resolve_openssh scp)"
+
+SSH_OPTS=(-F none -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=\"$SSH_KNOWN_HOSTS\"" -p "$SSH_PORT")
+# scp 的端口是 -P；-p 在 scp 里表示保留时间戳，不能复用 SSH_OPTS。
+SCP_OPTS=(-F none -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=\"$SSH_KNOWN_HOSTS\"" -P "$SSH_PORT")
+guest() { "$SSH_BIN" "${SSH_OPTS[@]}" "claude@$GUEST_IP" "$@"; }
+guest_scp() { "$SCP_BIN" "${SCP_OPTS[@]}" "$@"; }
+
+# 单测探针：正常验收不设置。退出码 86，避免被当成验收通过。
+if [ "${VERIFY_LINUX_TRANSPORT_PROBE:-}" = 1 ]; then
+  "$SSH_BIN" "${SSH_OPTS[@]}" "claude@$GUEST_IP" true
+  guest_scp -- "probe-local" "claude@${GUEST_IP}:probe-remote"
+  exit 86
+fi
 
 TRACE=https://www.cloudflare.com/cdn-cgi/trace
 pass=0; fail=0; warn_count=0; stripe_ok="unknown"

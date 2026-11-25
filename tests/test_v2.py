@@ -1299,5 +1299,108 @@ async function check(fixtures) {
                 self.assertEqual(r.returncode, 0, r.stderr.decode("utf-8", "replace"))
                 self.assertEqual(out, [want, f"calls={calls}"], scen)
 
+    def test_verify_linux_ssh_port_and_system32_openssh(self):
+        # VirtualBox NAT：GUEST_IP=127.0.0.1 且 SSH_PORT 不是 22。Git Bash 的 /usr/bin/ssh
+        # 会盖住 PATH，所以 Windows 上必须直接执行 System32 的 ssh.exe / scp.exe。
+        bash = find_bash()
+        if not bash:
+            self.skipTest("需要 bash")
+        src = (ROOT / "scripts" / "verify-linux.sh").read_text(encoding="utf-8")
+        self.assertIn('"/c/Windows/System32/OpenSSH/${_name}.exe"', src)
+        self.assertIn('"/mnt/c/Windows/System32/OpenSSH/${_name}.exe"', src)
+        self.assertIn("resolve_openssh ssh", src)
+        self.assertIn("resolve_openssh scp", src)
+        self.assertIn('-p "$SSH_PORT"', src)
+        self.assertIn('-P "$SSH_PORT"', src)
+        self.assertIn('UserKnownHostsFile=\\"$SSH_KNOWN_HOSTS\\"', src)
+        syntax = subprocess.run([bash, "-n", str(ROOT / "scripts" / "verify-linux.sh")], capture_output=True, text=True)
+        self.assertEqual(syntax.returncode, 0, syntax.stderr)
+
+        def write_verify_env(directory, **extra):
+            data = base_single_linux_env()
+            data.update({
+                "GUEST_IP": "127.0.0.1",
+                "ROUTER_IP": "192.168.100.1",
+                "SSH_KEY": str(directory / "nonexistent_key"),
+                "SSH_KNOWN_HOSTS": str(directory / "known_hosts"),
+            })
+            data.update(extra)
+            path = directory / f"verify-{extra.get('SSH_PORT', 'default')}.env"
+            write_env(path, data)
+            return path
+
+        def tool(path):
+            path.write_text(
+                "#!/bin/bash\nprintf '%s\\n' \"$0\" >> \"$LOG\"\nprintf '%s\\n' \"$*\" >> \"$LOG\"\nexit 0\n",
+                encoding="utf-8",
+            )
+            path.chmod(0o755)
+
+        with tempfile.TemporaryDirectory() as td_raw:
+            td = Path(td_raw)
+            bindir = td / "bin"
+            bindir.mkdir()
+            tool(bindir / "ssh")
+            tool(bindir / "scp")
+            win = td / "OpenSSH"
+            win.mkdir()
+            tool(win / "ssh.exe")
+            tool(win / "scp.exe")
+            win_log = td / "win.log"
+            path_log = td / "path.log"
+
+            env = os.environ.copy()
+            env["PATH"] = str(bindir) + os.pathsep + env.get("PATH", "")
+            env["LOG"] = str(win_log)
+            env["VERIFY_OPENSSH_DIR"] = str(win)
+            env["VERIFY_LINUX_TRANSPORT_PROBE"] = "1"
+            env["LC_ALL"] = "en_US.UTF-8"
+            probed = subprocess.run(
+                [bash, str(ROOT / "scripts" / "verify-linux.sh"), str(write_verify_env(td, SSH_PORT="2222"))],
+                capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
+            )
+            self.assertEqual(probed.returncode, 86, probed.stderr)
+            logged = win_log.read_text(encoding="utf-8")
+            self.assertIn("ssh.exe", logged)
+            self.assertIn("-p 2222", logged)
+            self.assertIn("claude@127.0.0.1", logged)
+            self.assertIn("scp.exe", logged)
+            self.assertIn("-P 2222", logged)
+            self.assertIn("claude@127.0.0.1:probe-remote", logged)
+            self.assertNotIn(str(bindir / "ssh"), logged)
+            self.assertNotIn(str(bindir / "scp"), logged)
+            self.assertFalse(path_log.exists())
+
+            env_default = os.environ.copy()
+            env_default["PATH"] = str(bindir) + os.pathsep + env_default.get("PATH", "")
+            env_default["LOG"] = str(path_log)
+            env_default["VERIFY_LINUX_TRANSPORT_PROBE"] = "1"
+            env_default["LC_ALL"] = "en_US.UTF-8"
+            env_default.pop("VERIFY_OPENSSH_DIR", None)
+            defaulted = subprocess.run(
+                [bash, str(ROOT / "scripts" / "verify-linux.sh"), str(write_verify_env(td))],
+                capture_output=True, text=True, encoding="utf-8", errors="replace", env=env_default,
+            )
+            self.assertEqual(defaulted.returncode, 86, defaulted.stderr)
+            default_log = path_log.read_text(encoding="utf-8")
+            self.assertIn("-p 22", default_log)
+            self.assertIn("-P 22", default_log)
+            self.assertIn("claude@127.0.0.1", default_log)
+            self.assertNotIn("ssh.exe", default_log)
+
+            for bad in ("0", "65536", "22abc", "08", "100000"):
+                env_bad = os.environ.copy()
+                env_bad["PATH"] = str(bindir) + os.pathsep + env_bad.get("PATH", "")
+                env_bad["LOG"] = str(td / f"bad-{bad}.log")
+                env_bad["VERIFY_LINUX_TRANSPORT_PROBE"] = "1"
+                env_bad["LC_ALL"] = "en_US.UTF-8"
+                rejected = subprocess.run(
+                    [bash, str(ROOT / "scripts" / "verify-linux.sh"), str(write_verify_env(td, SSH_PORT=bad))],
+                    capture_output=True, text=True, encoding="utf-8", errors="replace", env=env_bad,
+                )
+                self.assertEqual(rejected.returncode, 1, bad)
+                self.assertIn("SSH_PORT", rejected.stderr)
+                self.assertFalse((td / f"bad-{bad}.log").exists(), bad)
+
 if __name__ == "__main__":
     unittest.main()
