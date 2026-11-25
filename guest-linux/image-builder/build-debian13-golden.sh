@@ -13,36 +13,176 @@ GUEST_LINUX_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 export DEBIAN_FRONTEND=noninteractive
 
-echo "== [1/6] 安装基础桌面、Chromium、nftables 与虚拟化工具（${TARGET_HYPERVISOR}/${MIHOMO_ARCH}，无需 Node.js）"
+echo "== [1/6] 安装基础桌面、Chromium、中文字体、fcitx5 拼音、tint2、nftables 与虚拟化工具（${TARGET_HYPERVISOR}/${MIHOMO_ARCH}，无需 Node.js）"
 HYPERVISOR_PKGS=()
 if [ "$TARGET_HYPERVISOR" = "vmware" ]; then
   HYPERVISOR_PKGS=(open-vm-tools open-vm-tools-desktop)
+elif [ "$TARGET_HYPERVISOR" = "tart" ]; then
+  HYPERVISOR_PKGS=(spice-vdagent)
 fi
 apt-get update
 apt-get install -y --no-install-recommends \
-  openbox xorg lightdm xterm \
+  openbox xorg lightdm tint2 lxterminal x11-xserver-utils xclip \
   chromium \
+  fonts-noto-cjk fonts-noto-color-emoji \
+  fcitx5 fcitx5-chinese-addons fcitx5-frontend-gtk3 fcitx5-frontend-gtk4 fcitx5-module-xorg \
   nftables curl ca-certificates dnsutils openssh-server sudo \
   "${HYPERVISOR_PKGS[@]}" \
   locales tzdata iproute2 procps gzip
 
-echo "== [2/6] 创建普通用户 claude 与 LightDM 自动登录（Openbox 会话）"
+echo "== [2/6] 创建普通用户 claude 与完整 Openbox 桌面配置（自动登录、任务栏、拼音输入法、终端）"
 if ! id -u claude >/dev/null 2>&1; then
   useradd -m -s /bin/bash claude
 fi
 gpasswd -d claude sudo 2>/dev/null || true
-mkdir -p /etc/lightdm/lightdm.conf.d /home/claude/.config/openbox
+mkdir -p /etc/lightdm/lightdm.conf.d \
+  /home/claude/.config/openbox \
+  /home/claude/.config/fcitx5 \
+  /home/claude/.config/tint2 \
+  /home/claude/.config/lxterminal
 cat >/etc/lightdm/lightdm.conf.d/50-cchouse-autologin.conf <<'EOF'
 [Seat:*]
 autologin-user=claude
 autologin-user-timeout=0
 user-session=openbox
 EOF
+cat >/home/claude/.config/openbox/environment <<'EOF'
+export GTK_IM_MODULE=fcitx
+export QT_IM_MODULE=fcitx
+export XMODIFIERS=@im=fcitx
+export SDL_IM_MODULE=fcitx
+EOF
+cat >/home/claude/.config/openbox/menu.xml <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<openbox_menu xmlns="http://openbox.org/3.4/menu">
+  <menu id="root-menu" label="cchouse">
+    <item label="Chromium Browser">
+      <action name="Execute"><command>chromium --start-maximized --no-first-run --disable-session-crashed-bubble</command></action>
+    </item>
+    <item label="Terminal (Claude Code)">
+      <action name="Execute"><command>lxterminal</command></action>
+    </item>
+    <separator />
+    <item label="Toggle Pinyin / EN">
+      <action name="Execute"><command>fcitx5-remote -t</command></action>
+    </item>
+    <separator />
+    <item label="Power Off (Safe Shutdown)">
+      <action name="Execute"><command>systemctl poweroff</command></action>
+    </item>
+    <item label="Reboot">
+      <action name="Execute"><command>systemctl reboot</command></action>
+    </item>
+  </menu>
+</openbox_menu>
+EOF
+cat >/home/claude/.config/fcitx5/profile <<'EOF'
+[Groups/0]
+Name=Default
+Default Layout=us
+DefaultIM=keyboard-us
+
+[Groups/0/Items/0]
+Name=keyboard-us
+Layout=
+
+[Groups/0/Items/1]
+Name=pinyin
+Layout=
+
+[GroupOrder]
+0=Default
+EOF
+cat >/home/claude/.config/fcitx5/config <<'EOF'
+[Hotkey]
+EnumerateWithTriggerKeys=True
+EnumerateSkipFirst=False
+
+[Hotkey/TriggerKeys]
+0=Control+space
+1=Alt+space
+2=Shift_L
+
+[Hotkey/EnumerateForwardKeys]
+0=Control+Shift_L
+EOF
+cat >/home/claude/.config/tint2/tint2rc <<'EOF'
+rounded = 0
+border_width = 0
+background_color = #1e222a 100
+
+rounded = 4
+border_width = 1
+background_color = #2c323c 100
+border_color = #3e4451 100
+
+rounded = 4
+border_width = 1
+background_color = #3b82f6 100
+border_color = #60a5fa 100
+
+panel_items = TSBC
+panel_size = 100% 34
+panel_margin = 0 0
+panel_padding = 6 4 6
+panel_background_id = 1
+panel_position = bottom center horizontal
+panel_layer = top
+panel_monitor = all
+strut_policy = follow_size
+
+taskbar_mode = single_desktop
+taskbar_padding = 4 0 4
+task_text = 1
+task_icon = 1
+task_centered = 0
+task_maximum_size = 240 28
+task_padding = 8 2 4
+task_font = Noto Sans CJK SC 10
+task_font_color = #e5e7eb 100
+task_active_font_color = #ffffff 100
+task_background_id = 2
+task_active_background_id = 3
+mouse_left = toggle_iconify
+mouse_middle = close
+
+systray_padding = 6 4 6
+systray_icon_size = 20
+systray_sort = ascending
+
+time1_format = %H:%M  %m-%d
+time1_font = Noto Sans CJK SC 10
+clock_font_color = #e5e7eb 100
+clock_padding = 8 0
+EOF
+cat >/home/claude/.config/lxterminal/lxterminal.conf <<'EOF'
+[general]
+fontname=Noto Sans Mono CJK SC 12
+selchars=-A-Za-z0-9,./?%&#:_
+scrollback=10000
+bgcolor=rgb(24,27,32)
+fgcolor=rgb(235,238,245)
+hidemenubar=false
+hidescrollbar=false
+geometry_columns=100
+geometry_rows=28
+EOF
 cat >/home/claude/.config/openbox/autostart <<'EOF'
-chromium &
-xterm &
+xset s off -dpms s noblank &
+xsetroot -solid "#2b2f3a" &
+command -v spice-vdagent >/dev/null 2>&1 && spice-vdagent &
+tint2 &
+fcitx5 -d &
+chromium --start-maximized --no-first-run --disable-session-crashed-bubble &
+lxterminal &
 EOF
 chown -R claude:claude /home/claude/.config
+cat >/etc/profile.d/cchouse-ime.sh <<'EOF'
+export GTK_IM_MODULE=fcitx
+export QT_IM_MODULE=fcitx
+export XMODIFIERS=@im=fcitx
+EOF
+chmod 644 /etc/profile.d/cchouse-ime.sh
 
 echo "== [3/6] 安装 mihomo 二进制（必须显式提供 MIHOMO_SHA256 校验）"
 [ -n "$MIHOMO_SHA256" ] || { echo "错误：必须显式传入 MIHOMO_SHA256 以校验 mihomo 二进制" >&2; exit 1; }
@@ -94,8 +234,9 @@ IPv6AcceptRA=no
 LinkLocalAddressing=no
 
 [DHCPv4]
-UseDNS=no
 ClientIdentifier=mac
+UseDNS=no
+UseNTP=no
 EOF
 systemctl enable systemd-networkd.service
 apt-get purge -y avahi-daemon cups-browsed unattended-upgrades cloud-init cloud-guest-utils 2>/dev/null || true
