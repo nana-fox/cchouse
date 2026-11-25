@@ -72,6 +72,7 @@ if (-not $vmrunFound) {
   $errors += "MISSING_VMWARE: 未检测到 VMware Workstation Pro (vmrun.exe)"
 }
 
+$nextAction = if ($vmrunFound) { "install_python_or_uv" } else { "install_python_or_uv_and_vmware" }
 $payload = [ordered]@{
   ok = $false
   status = "HUMAN_WAIT"
@@ -84,7 +85,7 @@ $payload = [ordered]@{
   route = $Route
   errors = $errors
   warnings = $warnings
-  next_action = "install_python_or_uv_and_vmware"
+  next_action = $nextAction
 }
 $payload | ConvertTo-Json -Depth 6
 exit 1

@@ -2,6 +2,7 @@
 """cchouse v1 兼容与 v2 (Linux/EXIT_MODE/preflight) 单元测试。"""
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -11,6 +12,18 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 RENDER = ROOT / "scripts" / "render.py"
 PREFLIGHT = ROOT / "scripts" / "preflight.py"
+
+
+def find_bash():
+    for cand in (
+        "/bin/bash",
+        shutil.which("bash"),
+        r"C:\Program Files\Git\bin\bash.exe",
+        r"C:\Program Files (x86)\Git\bin\bash.exe",
+    ):
+        if cand and os.path.isfile(cand):
+            return cand
+    return None
 
 
 def write_env(path, data):
@@ -113,9 +126,11 @@ class TestCchouseV2(unittest.TestCase):
             self.assertIn('oifname "cchouse0" meta nfproto ipv4 accept', non_comment_nft)
             self.assertIn('meta skuid "mihomo" ip daddr 203.0.113.55 tcp dport 1080 accept', non_comment_nft)
             self.assertIn("meta nfproto ipv6 drop", non_comment_nft)
-            for sh in ("firstboot.sh", "timesync.sh", "cchouse-probe.sh"):
-                chk = subprocess.run(["bash", "-n", str(out / sh)], capture_output=True, text=True)
-                self.assertEqual(chk.returncode, 0, f"{sh}: {chk.stderr}")
+            bash_exe = find_bash()
+            if bash_exe:
+                for sh in ("firstboot.sh", "timesync.sh", "cchouse-probe.sh"):
+                    chk = subprocess.run([bash_exe, "-n", str(out / sh)], capture_output=True, text=True)
+                    self.assertEqual(chk.returncode, 0, f"{sh}: {chk.stderr}")
 
     def test_linux_single_domain_pinned_to_ip(self):
         with tempfile.TemporaryDirectory() as td:
@@ -196,13 +211,15 @@ class TestCchouseV2(unittest.TestCase):
             self.assertEqual(state["route"], "vmware-linux")
 
     def test_image_builder_scripts_and_seed_iso(self):
-        for sh in (
-            ROOT / "guest-linux" / "image-builder" / "build-debian13-golden.sh",
-            ROOT / "guest-linux" / "image-builder" / "assert-empty-state.sh",
-            ROOT / "guest-linux" / "image-builder" / "cchouse-firstboot-loader.sh",
-        ):
-            chk = subprocess.run(["bash", "-n", str(sh)], capture_output=True, text=True)
-            self.assertEqual(chk.returncode, 0, f"{sh}: {chk.stderr}")
+        bash_exe = find_bash()
+        if bash_exe:
+            for sh in (
+                ROOT / "guest-linux" / "image-builder" / "build-debian13-golden.sh",
+                ROOT / "guest-linux" / "image-builder" / "assert-empty-state.sh",
+                ROOT / "guest-linux" / "image-builder" / "cchouse-firstboot-loader.sh",
+            ):
+                chk = subprocess.run([bash_exe, "-n", str(sh)], capture_output=True, text=True)
+                self.assertEqual(chk.returncode, 0, f"{sh}: {chk.stderr}")
 
         with tempfile.TemporaryDirectory() as td:
             env_f = Path(td) / "instance.env"
@@ -293,20 +310,22 @@ class TestCchouseV2(unittest.TestCase):
             fb_svc = (ROOT / "guest-linux" / "cchouse-firstboot.service").read_text(encoding="utf-8")
             self.assertIn("cchouse-default-drop.service", fb_svc)
 
-            # 5) verify-linux.sh 在本机 Bash 3.2 下可解析带 BOM + CRLF 的 env（不报缺 TAG）
-            v_env = Path(td) / "verify.env"
-            v_data = base_single_linux_env()
-            v_data.update({
-                "GUEST_IP": "127.0.0.1",
-                "ROUTER_IP": "192.168.100.1",
-                "SSH_KEY": str(Path(td) / "nonexistent_key"),
-                "SSH_KNOWN_HOSTS": str(Path(td) / "known_hosts"),
-            })
-            raw = "\r\n".join(f"{k}='{v}'" for k, v in v_data.items()) + "\r\n"
-            v_env.write_bytes(b"\xef\xbb\xbf" + raw.encode("utf-8"))
-            cp_v = subprocess.run(["/bin/bash", str(ROOT / "scripts" / "verify-linux.sh"), str(v_env)], capture_output=True, text=True)
-            self.assertNotIn("缺 TAG", cp_v.stderr)
-            self.assertIn("期望出口 198.51.100.55", cp_v.stdout)
+            # 5) verify-linux.sh 在 Bash 3.2 / Git Bash 下可解析带 BOM + CRLF 的 env（不报缺 TAG）
+            bash_exe = find_bash()
+            if bash_exe:
+                v_env = Path(td) / "verify.env"
+                v_data = base_single_linux_env()
+                v_data.update({
+                    "GUEST_IP": "127.0.0.1",
+                    "ROUTER_IP": "192.168.100.1",
+                    "SSH_KEY": str(Path(td) / "nonexistent_key"),
+                    "SSH_KNOWN_HOSTS": str(Path(td) / "known_hosts"),
+                })
+                raw = "\r\n".join(f"{k}='{v}'" for k, v in v_data.items()) + "\r\n"
+                v_env.write_bytes(b"\xef\xbb\xbf" + raw.encode("utf-8"))
+                cp_v = subprocess.run([bash_exe, str(ROOT / "scripts" / "verify-linux.sh"), str(v_env)], capture_output=True, text=True)
+                self.assertNotIn("缺 TAG", cp_v.stderr)
+                self.assertIn("期望出口 198.51.100.55", cp_v.stdout)
 
 
 if __name__ == "__main__":
