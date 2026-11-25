@@ -1,0 +1,273 @@
+name: Build Tart OCI (Debian 13 arm64)
+
+on:
+  workflow_dispatch:
+    inputs:
+      cloud_image_url:
+        description: "Debian 13 arm64 official cloud .tar.xz URL"
+        required: false
+        default: "https://cloud.debian.org/images/cloud/trixie/20261123-2671/debian-13-generic-arm64-20261123-2671.tar.xz"
+      cloud_image_sha512:
+        description: "Expected SHA-512 of Debian 13 arm64 cloud .tar.xz"
+        required: false
+        default: "800e63be2901b32689ea00a4a6eaab0df5b7ef43eb543cf59627b575cd9c279d93d791be96ba9306617d28e1973f9222d3ab490138117ee41eb7432f61e5f55f"
+      mihomo_version:
+        description: "mihomo release tag"
+        required: false
+        default: "v1.19.19"
+      mihomo_sha256:
+        description: "Expected SHA-256 of mihomo-linux-arm64-<version>.gz"
+        required: false
+        default: "5035df7d6ae01ab33090fe612ec1b98ccc68917f03a97fb62ed474dc0b99cdcc"
+      oci_tag:
+        description: "GHCR tag for ghcr.io/<owner>/cchouse-debian13-arm64:<tag>"
+        required: false
+        default: "ci-test"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-tvm:
+    name: Build Debian 13 arm64 Tart OCI (QEMU aarch64)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    env:
+      CLOUD_IMAGE_URL: ${{ inputs.cloud_image_url || 'https://cloud.debian.org/images/cloud/trixie/20261123-2671/debian-13-generic-arm64-20261123-2671.tar.xz' }}
+      CLOUD_IMAGE_SHA512: ${{ inputs.cloud_image_sha512 || '800e63be2901b32689ea00a4a6eaab0df5b7ef43eb543cf59627b575cd9c279d93d791be96ba9306617d28e1973f9222d3ab490138117ee41eb7432f61e5f55f' }}
+      MIHOMO_VERSION: ${{ inputs.mihomo_version || 'v1.19.19' }}
+      MIHOMO_SHA256: ${{ inputs.mihomo_sha256 || '5035df7d6ae01ab33090fe612ec1b98ccc68917f03a97fb62ed474dc0b99cdcc' }}
+      OCI_TAG: ${{ inputs.oci_tag || 'ci-test' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check /dev/kvm and runner resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "WORK_DIR=${RUNNER_TEMP}/cchouse-arm64-build" >> "$GITHUB_ENV"
+          echo "BUILD_START_TS=$(date +%s)" >> "$GITHUB_ENV"
+          if [ -c /dev/kvm ]; then
+            if [ ! -r /dev/kvm ] || [ ! -w /dev/kvm ]; then
+              sudo chmod 666 /dev/kvm
+            fi
+            ls -la /dev/kvm
+            echo "QEMU_ACCEL=kvm" >> "$GITHUB_ENV"
+            echo "QEMU_CPU=host" >> "$GITHUB_ENV"
+            echo "KVM_STATUS=available" >> "$GITHUB_ENV"
+            echo "INFO: /dev/kvm is available on ubuntu-24.04-arm (using KVM)."
+          else
+            echo "QEMU_ACCEL=tcg" >> "$GITHUB_ENV"
+            echo "QEMU_CPU=cortex-a72" >> "$GITHUB_ENV"
+            echo "KVM_STATUS=unavailable (TCG fallback)" >> "$GITHUB_ENV"
+            echo "WARN: /dev/kvm is NOT available on ubuntu-24.04-arm; falling back to QEMU TCG (-cpu cortex-a72)."
+          fi
+          uname -a
+          echo "CPUs: $(nproc)"
+          free -h
+          df -h "$RUNNER_TEMP"
+
+      - name: Install QEMU aarch64, AAVMF UEFI firmware, xorriso, and python3-lz4
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-arm qemu-efi-aarch64 qemu-utils xorriso python3-lz4
+
+      - name: Download and verify Debian 13 arm64 cloud image & mihomo
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$WORK_DIR"
+          CLOUD_TAR="${WORK_DIR}/debian-13-generic-arm64.tar.xz"
+          MIHOMO_GZ="${WORK_DIR}/mihomo-linux-arm64-${MIHOMO_VERSION}.gz"
+          MIHOMO_URL="https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VERSION}/mihomo-linux-arm64-${MIHOMO_VERSION}.gz"
+
+          echo "== [1/4] Downloading Debian 13 arm64 cloud image (.tar.xz)..."
+          curl -fL --retry 3 --retry-delay 5 "$CLOUD_IMAGE_URL" -o "$CLOUD_TAR"
+          echo "${CLOUD_IMAGE_SHA512}  ${CLOUD_TAR}" | sha512sum -c -
+
+          echo "== [2/4] Downloading mihomo arm64 ${MIHOMO_VERSION}..."
+          curl -fL --retry 3 --retry-delay 5 "$MIHOMO_URL" -o "$MIHOMO_GZ"
+          echo "${MIHOMO_SHA256}  ${MIHOMO_GZ}" | sha256sum -c -
+
+          echo "== Extracting disk.raw and resizing to 24 GiB..."
+          tar -xJf "$CLOUD_TAR" -C "$WORK_DIR" disk.raw
+          rm -f "$CLOUD_TAR"
+          truncate -s 24G "${WORK_DIR}/disk.raw"
+          ls -lh "${WORK_DIR}/disk.raw"
+
+      - name: Boot QEMU aarch64 guest and run build-debian13-golden.sh + assert-empty-state.sh
+        shell: bash
+        run: |
+          set -euo pipefail
+          SOURCE_COMMIT="$(git rev-parse HEAD)"
+          if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+            SOURCE_COMMIT="${SOURCE_COMMIT}-dirty"
+          fi
+          BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "SOURCE_COMMIT=${SOURCE_COMMIT}" >> "$GITHUB_ENV"
+          echo "BUILD_TIME=${BUILD_TIME}" >> "$GITHUB_ENV"
+
+          DISK_RAW="${WORK_DIR}/disk.raw"
+          MIHOMO_GZ="${WORK_DIR}/mihomo-linux-arm64-${MIHOMO_VERSION}.gz"
+          SERIAL_LOG="${WORK_DIR}/serial.log"
+          QEMU_LOG="${WORK_DIR}/qemu.log"
+
+          SSH_KEY="${WORK_DIR}/build_ed25519"
+          rm -f "$SSH_KEY" "${SSH_KEY}.pub"
+          ssh-keygen -q -t ed25519 -N "" -f "$SSH_KEY"
+          PUB_KEY="$(cat "${SSH_KEY}.pub")"
+
+          CI_DIR="${WORK_DIR}/cidata"
+          rm -rf "$CI_DIR"
+          mkdir -p "$CI_DIR"
+          printf 'instance-id: cchouse-ci-arm64-01\nlocal-hostname: debian\n' > "${CI_DIR}/meta-data"
+          cat > "${CI_DIR}/user-data" <<EOF
+          #cloud-config
+          disable_root: false
+          ssh_pwauth: false
+          users:
+            - name: root
+              ssh_authorized_keys:
+                - ${PUB_KEY}
+          growpart:
+            mode: auto
+            devices: ['/']
+          resize_rootfs: true
+          EOF
+
+          CI_ISO="${WORK_DIR}/cidata.iso"
+          xorriso -as mkisofs -o "$CI_ISO" -V cidata -J -R "$CI_DIR" >/dev/null 2>&1
+
+          QEMU_PID=""
+          cleanup() {
+            if [ -n "$QEMU_PID" ] && kill -0 "$QEMU_PID" 2>/dev/null; then
+              kill -TERM "$QEMU_PID" 2>/dev/null || true
+              sleep 2
+              kill -KILL "$QEMU_PID" 2>/dev/null || true
+            fi
+          }
+          trap cleanup EXIT
+
+          echo "== [3/4] Starting QEMU aarch64 guest (accel=${QEMU_ACCEL}, cpu=${QEMU_CPU})..."
+          qemu-system-aarch64 \
+            -machine "virt,accel=${QEMU_ACCEL}" \
+            -cpu "${QEMU_CPU}" \
+            -smp 4 \
+            -m 4096 \
+            -bios /usr/share/qemu-efi-aarch64/QEMU_EFI.fd \
+            -display none \
+            -serial "file:${SERIAL_LOG}" \
+            -drive "file=${DISK_RAW},if=virtio,format=raw" \
+            -drive "file=${CI_ISO},if=virtio,format=raw,readonly=on" \
+            -netdev user,id=net0,hostfwd=tcp:127.0.0.1:2222-:22 \
+            -device virtio-net-pci,netdev=net0 \
+            >"$QEMU_LOG" 2>&1 &
+          QEMU_PID=$!
+
+          SSH_OPTS=(-p 2222 -i "$SSH_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=5 -o BatchMode=yes)
+          SCP_OPTS=(-P 2222 -i "$SSH_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=5 -o BatchMode=yes)
+
+          SSH_READY=0
+          for i in $(seq 1 150); do
+            if ! kill -0 "$QEMU_PID" 2>/dev/null; then
+              echo "ERROR: QEMU exited unexpectedly while waiting for SSH." >&2
+              cat "$QEMU_LOG" >&2 || true
+              tail -n 80 "$SERIAL_LOG" >&2 || true
+              exit 1
+            fi
+            if ssh "${SSH_OPTS[@]}" root@127.0.0.1 true 2>/dev/null; then
+              SSH_READY=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$SSH_READY" -ne 1 ]; then
+            echo "ERROR: Guest SSH did not become ready within 300s." >&2
+            tail -n 100 "$SERIAL_LOG" >&2 || true
+            exit 1
+          fi
+          echo "  OK  Guest SSH ready on 127.0.0.1:2222"
+
+          ssh "${SSH_OPTS[@]}" root@127.0.0.1 "mkdir -p /tmp/cchouse-guest-linux/image-builder"
+          scp "${SCP_OPTS[@]}" \
+            guest-linux/nftables-default-drop.conf \
+            guest-linux/cchouse-firstboot.service \
+            root@127.0.0.1:/tmp/cchouse-guest-linux/
+          scp "${SCP_OPTS[@]}" \
+            guest-linux/image-builder/build-debian13-golden.sh \
+            guest-linux/image-builder/assert-empty-state.sh \
+            guest-linux/image-builder/cchouse-firstboot-loader.sh \
+            root@127.0.0.1:/tmp/cchouse-guest-linux/image-builder/
+          scp "${SCP_OPTS[@]}" "$MIHOMO_GZ" root@127.0.0.1:/tmp/mihomo.gz
+
+          # Reuse existing build-debian13-golden.sh (which invokes assert-empty-state.sh fail-closed).
+          BUILD_CMD="TARGET_HYPERVISOR=tart MIHOMO_ARCH=arm64 MIHOMO_VERSION=${MIHOMO_VERSION} MIHOMO_SHA256=${MIHOMO_SHA256} MIHOMO_LOCAL_GZ=/tmp/mihomo.gz SOURCE_COMMIT=${SOURCE_COMMIT} BUILD_TIME=${BUILD_TIME} bash /tmp/cchouse-guest-linux/image-builder/build-debian13-golden.sh && rm -rf /tmp/cchouse-guest-linux /tmp/mihomo.gz && sync && { nohup sh -c 'sleep 2 && systemctl poweroff' </dev/null >/dev/null 2>&1 & }"
+          ssh "${SSH_OPTS[@]}" root@127.0.0.1 "$BUILD_CMD"
+
+          echo "== Waiting for clean guest poweroff..."
+          SHUTDOWN_OK=0
+          for _ in $(seq 1 90); do
+            if ! kill -0 "$QEMU_PID" 2>/dev/null; then
+              SHUTDOWN_OK=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$SHUTDOWN_OK" -ne 1 ]; then
+            echo "ERROR: Guest did not power off cleanly within 180s." >&2
+            tail -n 80 "$SERIAL_LOG" >&2 || true
+            exit 1
+          fi
+          wait "$QEMU_PID" || true
+          QEMU_PID=""
+          rm -rf "$CI_DIR" "$CI_ISO" "$SSH_KEY" "${SSH_KEY}.pub"
+          echo "  OK  Guest powered off cleanly."
+
+      - name: Push Tart-compatible OCI image (disk.v2) to GHCR
+        shell: bash
+        env:
+          GHCR_USERNAME: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          OWNER_LOWER="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
+          IMAGE_REF="ghcr.io/${OWNER_LOWER}/cchouse-debian13-arm64:${OCI_TAG}"
+
+          echo "== [4/4] Compressing disk.raw (Apple bv41 LZ4) and pushing Tart OCI to ${IMAGE_REF}..."
+          python3 -I guest-linux/image-builder/push-tart-oci.py \
+            --disk "${WORK_DIR}/disk.raw" \
+            --image "${IMAGE_REF}" \
+            --cpu 4 \
+            --memory-mb 4096 \
+            --display 1440x900 \
+            | tee "${WORK_DIR}/oci-result.json"
+
+          END_TS="$(date +%s)"
+          ELAPSED="$((END_TS - BUILD_START_TS))"
+          ELAPSED_MIN="$((ELAPSED / 60))"
+          ELAPSED_SEC="$((ELAPSED % 60))"
+
+          python3 -I - "${WORK_DIR}/oci-result.json" "${KVM_STATUS}" "${SOURCE_COMMIT}" "${BUILD_TIME}" "${ELAPSED_MIN}m${ELAPSED_SEC}s" <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, sys
+          res_path, kvm_status, commit, build_time, elapsed = sys.argv[1:6]
+          # The script prints chunk progress lines followed by JSON; extract the JSON block.
+          raw = open(res_path, encoding="utf-8").read()
+          data = json.loads(raw[raw.index("{"):])
+          uniq_mib = data["unique_blob_bytes"] / 1048576
+          man_mib = data["manifest_compressed_bytes"] / 1048576
+          print("## Cloud Tart OCI (arm64) Build Summary\n")
+          print(f"- **Image**: `{data['image']}`")
+          print(f"- **Manifest Digest**: `{data['manifest_digest']}`")
+          print(f"- **KVM Status**: `{kvm_status}`")
+          print(f"- **Unique Compressed Upload**: `{uniq_mib:.1f} MiB` (`{data['unique_blob_bytes']}` bytes)")
+          print(f"- **Manifest Compressed Sum**: `{man_mib:.1f} MiB` (`{data['manifest_compressed_bytes']}` bytes)")
+          print(f"- **Uncompressed Disk**: `{data['uncompressed_disk_bytes'] // (1024**3)} GiB`")
+          print(f"- **Source Commit**: `{commit}`")
+          print(f"- **Build Time (UTC)**: `{build_time}`")
+          print(f"- **Elapsed**: `{elapsed}`")
+          PY
