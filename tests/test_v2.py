@@ -1192,6 +1192,8 @@ class TestCchouseV2(unittest.TestCase):
             "refusing to upload: manifest does not publish this tag and ova_sha256 input is empty",
             "gh release upload",
             "--clobber",
+            "--repo",
+            "GH_REPO:",
             "brew install cirruslabs/cli/tart",
             "tart login ghcr.io",
             "tart clone",

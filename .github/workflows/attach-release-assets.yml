@@ -45,6 +45,7 @@ jobs:
       OCI_DIGEST: ${{ inputs.oci_digest }}
       OVA_SHA256_INPUT: ${{ inputs.ova_sha256 }}
       GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -133,7 +134,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh release upload "$RELEASE_TAG" ova-artifact/cchouse-debian13-amd64.ova --clobber
+          gh release upload "$RELEASE_TAG" ova-artifact/cchouse-debian13-amd64.ova --clobber --repo "$GITHUB_REPOSITORY"
 
   attach-tvm:
     name: Export arm64 TVM from GHCR and attach
@@ -144,6 +145,7 @@ jobs:
       OCI_DIGEST: ${{ inputs.oci_digest }}
       GH_TOKEN: ${{ github.token }}
       GITHUB_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
       HOMEBREW_NO_AUTO_UPDATE: "1"
       HOMEBREW_NO_INSTALL_CLEANUP: "1"
     steps:
@@ -195,4 +197,4 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh release upload "$RELEASE_TAG" cchouse-debian13-arm64.tvm --clobber
+          gh release upload "$RELEASE_TAG" cchouse-debian13-arm64.tvm --clobber --repo "$GITHUB_REPOSITORY"
