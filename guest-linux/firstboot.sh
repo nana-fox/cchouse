@@ -148,12 +148,18 @@ systemctl start --no-block cchouse-mihomo.service cchouse-timesync.timer
 touch /var/lib/cchouse/firstboot.done
 systemctl disable cchouse-firstboot.service || true
 
-# 10. 离线安装 Claude Code 原生二进制（无需 Node.js，置于 done 之后且非致命）
+# 10. 离线安装 Claude Code 原生二进制（无需 Node.js，置于 done 之后且非致命；先原子落盘再 rename，避免硬断电截断）
 if [ -f "$MNT/claude-code.tgz" ]; then
-  if tar -xzf "$MNT/claude-code.tgz" -C /tmp package/claude && install -m 755 -o root -g root /tmp/package/claude /usr/local/bin/claude; then
+  if tar -xzf "$MNT/claude-code.tgz" -C /tmp package/claude \
+    && install -m 755 -o root -g root /tmp/package/claude /usr/local/bin/.claude.tmp \
+    && sync \
+    && mv -f /usr/local/bin/.claude.tmp /usr/local/bin/claude; then
     rm -rf /tmp/package
   else
-    rm -rf /tmp/package
+    rm -rf /tmp/package /usr/local/bin/.claude.tmp
     echo "警告：Claude Code 离线安装失败，请按手册手动提取 package/claude 至 /usr/local/bin/claude" >&2
   fi
 fi
+
+# 首次注入全部关键文件与二进制强制刷盘，避免后续 tart stop / 关窗硬断电导致 ext4 脏页截断
+sync

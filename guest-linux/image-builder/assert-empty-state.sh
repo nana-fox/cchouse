@@ -32,8 +32,8 @@ check "root 无可用密码哈希" bash -c 'awk -F: "\$1==\"root\"{exit (\$2==\"
 check "LightDM 自动登录已配置" test -f /etc/lightdm/lightdm.conf.d/50-cchouse-autologin.conf
 check "中文桌面与输入法组件已就绪" bash -c 'dpkg -s fonts-noto-cjk fcitx5-chinese-addons tint2 lxterminal dbus-user-session >/dev/null 2>&1 && test -x /usr/bin/fcitx5 && test -f /home/claude/.config/openbox/autostart && [ "$(stat -c %U /home/claude/.config)" = "claude" ]'
 check "出厂默认全断 nftables 规则存在" test -f /etc/cchouse/nftables-default-drop.conf
-check "cchouse-default-drop.service 已启用" systemctl is-enabled cchouse-default-drop.service >/dev/null 2>&1
-check "cchouse-firstboot.service 已启用" systemctl is-enabled cchouse-firstboot.service >/dev/null 2>&1
+check "cchouse-default-drop.service 已启用" bash -c 'systemctl is-enabled cchouse-default-drop.service >/dev/null 2>&1'
+check "cchouse-firstboot.service 已启用" bash -c 'systemctl is-enabled cchouse-firstboot.service >/dev/null 2>&1'
 check "firstboot.done 尚未生成" test ! -e /var/lib/cchouse/firstboot.done
 
 [ "$fail" = 0 ] || { echo "空状态断言失败：$fail 项未通过" >&2; exit 1; }

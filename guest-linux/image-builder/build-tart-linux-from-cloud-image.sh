@@ -139,9 +139,10 @@ SSH_KEY="${RUN_DIR}/build_ed25519"
 ssh-keygen -q -t ed25519 -N "" -f "$SSH_KEY"
 PUB_KEY="$(cat "${SSH_KEY}.pub")"
 
+BUILD_HOST="cchouse-build-$(openssl rand -hex 3 2>/dev/null || echo $$)"
 CI_DIR="${RUN_DIR}/cidata"
 mkdir -p "$CI_DIR"
-printf 'instance-id: cchouse-arm64-build-01\nlocal-hostname: debian\n' >"${CI_DIR}/meta-data"
+printf 'instance-id: %s\nlocal-hostname: %s\n' "$BUILD_HOST" "$BUILD_HOST" >"${CI_DIR}/meta-data"
 cat >"${CI_DIR}/user-data" <<EOF
 #cloud-config
 disable_root: false
@@ -173,6 +174,15 @@ for _ in $(seq 1 60); do
     exit 1
   fi
   ip="$("$TART_BIN" ip --resolver=arp "$BUILD_VM_NAME" --wait 2 2>/dev/null || "$TART_BIN" ip "$BUILD_VM_NAME" --wait 2 2>/dev/null || true)"
+  if [[ ! "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && [ -r /var/db/dhcpd_leases ]; then
+    # 原始 Debian 云镜像尚未配置 ClientIdentifier=mac，默认以 DUID 申请 DHCP 且 ARP 可能未缓存，按唯一临时主机名精确回退解析
+    ip="$(awk -v h="$BUILD_HOST" '
+      /^[[:space:]]*\{/ { name=""; addr="" }
+      /^[[:space:]]*name=/ { sub(/^[[:space:]]*name=/, ""); name=$0 }
+      /^[[:space:]]*ip_address=/ { sub(/^[[:space:]]*ip_address=/, ""); addr=$0 }
+      /^[[:space:]]*\}/ { if (name == h && addr != "") { print addr; exit } }
+    ' /var/db/dhcpd_leases 2>/dev/null || true)"
+  fi
   if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     GUEST_IP="$ip"
     if ssh "${SSH_OPTS[@]}" "root@${GUEST_IP}" true 2>/dev/null; then
@@ -182,7 +192,11 @@ for _ in $(seq 1 60); do
   fi
   sleep 2
 done
-[ "$SSH_READY" -eq 1 ] || { echo "错误：120 秒内未获取到客机 SSH（IP: ${GUEST_IP}）" >&2; exit 1; }
+if [ "$SSH_READY" -ne 1 ]; then
+  echo "错误：120 秒内未获取到客机 SSH（IP: ${GUEST_IP}）" >&2
+  [ -s "${RUN_DIR}/tart.log" ] && cat "${RUN_DIR}/tart.log" >&2
+  exit 1
+fi
 echo "  OK  客机 SSH 已就绪：${GUEST_IP}"
 
 echo "== [6/7] 注入脚本与 mihomo，执行 build-debian13-golden.sh (tart/arm64)..."
