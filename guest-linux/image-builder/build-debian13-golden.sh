@@ -25,7 +25,7 @@ apt-get install -y --no-install-recommends \
   openbox xorg lightdm dbus-user-session tint2 lxterminal x11-xserver-utils xclip \
   chromium \
   fonts-noto-cjk fonts-noto-color-emoji \
-  fcitx5 fcitx5-chinese-addons fcitx5-frontend-gtk3 fcitx5-frontend-gtk4 fcitx5-module-xorg \
+  fcitx5 fcitx5-chinese-addons fcitx5-frontend-gtk3 fcitx5-frontend-gtk4 \
   nftables curl ca-certificates dnsutils openssh-server sudo \
   "${HYPERVISOR_PKGS[@]}" \
   locales tzdata iproute2 procps gzip
@@ -36,8 +36,9 @@ if ! id -u claude >/dev/null 2>&1; then
 fi
 gpasswd -d claude sudo 2>/dev/null || true
 mkdir -p /etc/lightdm/lightdm.conf.d \
+  /etc/chromium.d \
   /home/claude/.config/openbox \
-  /home/claude/.config/fcitx5 \
+  /home/claude/.config/fcitx5/conf \
   /home/claude/.config/tint2 \
   /home/claude/.config/lxterminal
 cat >/etc/lightdm/lightdm.conf.d/50-cchouse-autologin.conf <<'EOF'
@@ -46,18 +47,41 @@ autologin-user=claude
 autologin-user-timeout=0
 user-session=openbox
 EOF
-cat >/home/claude/.config/openbox/environment <<'EOF'
+cat >/etc/profile.d/cchouse-ime.sh <<'EOF'
 export GTK_IM_MODULE=fcitx
 export QT_IM_MODULE=fcitx
 export XMODIFIERS=@im=fcitx
 export SDL_IM_MODULE=fcitx
 EOF
+chmod 644 /etc/profile.d/cchouse-ime.sh
+cat >/home/claude/.config/openbox/environment <<'EOF'
+[ -f /etc/profile.d/cchouse-ime.sh ] && . /etc/profile.d/cchouse-ime.sh
+EOF
+# 统一通过 /etc/chromium.d/cchouse 注入启动参数，避免 autostart / 右键菜单 / BROWSER 三处漂移
+cat >/etc/chromium.d/cchouse <<'EOF'
+export CHROMIUM_FLAGS="${CHROMIUM_FLAGS:-} --start-maximized --no-first-run --hide-crash-restore-bubble"
+EOF
+chmod 644 /etc/chromium.d/cchouse
+# 移除 Openbox 默认 A-space (Alt+Space / macOS Option+Space) 窗口菜单热键，避免拦截 fcitx5 切换
+cp /etc/xdg/openbox/rc.xml /home/claude/.config/openbox/rc.xml
+perl -0777 -i -pe 's|<keybind\s+key="A-space">.*?</keybind>\s*||gsi' /home/claude/.config/openbox/rc.xml
+if grep -qi 'key="A-space"' /home/claude/.config/openbox/rc.xml; then
+  echo "错误：未能从 /home/claude/.config/openbox/rc.xml 移除 A-space 快捷键绑定" >&2
+  exit 1
+fi
+# 仅放行图形右键菜单的关机与重启（无通配符，免 polkitd 且兼容存在 SSH 会话场景）
+cat >/etc/sudoers.d/cchouse-power <<'EOF'
+claude ALL=(root) NOPASSWD: /usr/bin/systemctl poweroff
+claude ALL=(root) NOPASSWD: /usr/bin/systemctl reboot
+EOF
+chmod 440 /etc/sudoers.d/cchouse-power
+visudo -cf /etc/sudoers.d/cchouse-power
 cat >/home/claude/.config/openbox/menu.xml <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <openbox_menu xmlns="http://openbox.org/3.4/menu">
   <menu id="root-menu" label="cchouse">
     <item label="Chromium Browser">
-      <action name="Execute"><command>chromium --start-maximized --no-first-run --disable-session-crashed-bubble</command></action>
+      <action name="Execute"><command>chromium</command></action>
     </item>
     <item label="Terminal (Claude Code)">
       <action name="Execute"><command>lxterminal</command></action>
@@ -68,31 +92,15 @@ cat >/home/claude/.config/openbox/menu.xml <<'EOF'
     </item>
     <separator />
     <item label="Power Off (Safe Shutdown)">
-      <action name="Execute"><command>systemctl poweroff</command></action>
+      <action name="Execute"><command>sudo -n /usr/bin/systemctl poweroff</command></action>
     </item>
     <item label="Reboot">
-      <action name="Execute"><command>systemctl reboot</command></action>
+      <action name="Execute"><command>sudo -n /usr/bin/systemctl reboot</command></action>
     </item>
   </menu>
 </openbox_menu>
 EOF
-cat >/home/claude/.config/fcitx5/profile <<'EOF'
-[Groups/0]
-Name=Default
-Default Layout=us
-DefaultIM=keyboard-us
-
-[Groups/0/Items/0]
-Name=keyboard-us
-Layout=
-
-[Groups/0/Items/1]
-Name=pinyin
-Layout=
-
-[GroupOrder]
-0=Default
-EOF
+# 注：fcitx5/profile 不在黄金镜像写死 us 布局，由 firstboot.sh 按实例 GUEST_KEYBOARD 生成
 cat >/home/claude/.config/fcitx5/config <<'EOF'
 [Hotkey]
 EnumerateWithTriggerKeys=True
@@ -100,10 +108,15 @@ EnumerateSkipFirst=False
 
 [Hotkey/TriggerKeys]
 0=Control+space
-1=Shift_L
+1=Alt+space
+2=Shift_L
 
 [Hotkey/EnumerateForwardKeys]
 0=Control+Shift_L
+EOF
+# 显式关闭云拼音，避免误开后经出口请求第三方输入法云接口
+cat >/home/claude/.config/fcitx5/conf/pinyin.conf <<'EOF'
+CloudPinyinEnabled=False
 EOF
 cat >/home/claude/.config/tint2/tint2rc <<'EOF'
 rounded = 0
@@ -120,7 +133,7 @@ border_width = 1
 background_color = #3b82f6 100
 border_color = #60a5fa 100
 
-panel_items = TSBC
+panel_items = TSC
 panel_size = 100% 34
 panel_margin = 0 0
 panel_padding = 6 4 6
@@ -174,16 +187,10 @@ command -v spice-vdagent >/dev/null 2>&1 && spice-vdagent &
 tint2 &
 fcitx5 -d &
 [ -f /etc/issue.d/cchouse.issue ] && lxterminal -e sh -c 'cat /etc/issue.d/cchouse.issue /var/lib/cchouse/firstboot.log 2>/dev/null; exec bash' &
-chromium --start-maximized --no-first-run --disable-session-crashed-bubble &
-lxterminal &
+(sleep 1 && chromium) &
+(sleep 1 && lxterminal) &
 EOF
 chown -R claude:claude /home/claude/.config
-cat >/etc/profile.d/cchouse-ime.sh <<'EOF'
-export GTK_IM_MODULE=fcitx
-export QT_IM_MODULE=fcitx
-export XMODIFIERS=@im=fcitx
-EOF
-chmod 644 /etc/profile.d/cchouse-ime.sh
 
 echo "== [3/6] 安装 mihomo 二进制（必须显式提供 MIHOMO_SHA256 校验）"
 [ -n "$MIHOMO_SHA256" ] || { echo "错误：必须显式传入 MIHOMO_SHA256 以校验 mihomo 二进制" >&2; exit 1; }
@@ -259,8 +266,8 @@ truncate -s 0 /etc/machine-id /etc/hostname
 rm -f /var/lib/dbus/machine-id /var/lib/systemd/random-seed
 rm -f /etc/ssh/ssh_host_* /root/.ssh/authorized_keys /home/debian/.ssh/authorized_keys
 rm -rf /var/lib/dhcp/* /var/lib/NetworkManager/* /var/log/journal/*
-rm -rf /home/claude/.config/chromium /home/claude/.cache /home/claude/.claude* /home/claude/.npm /root/.npm /root/.bash_history /home/claude/.bash_history
-rm -f /var/lib/cchouse/firstboot.done
+rm -rf /home/claude/.config/chromium /home/claude/.cache /home/claude/.claude* /home/claude/.npm /home/claude/.local/share/fcitx5 /root/.npm /root/.bash_history /home/claude/.bash_history
+rm -f /home/claude/.config/fcitx5/profile /var/lib/cchouse/firstboot.done
 
 bash "${SCRIPT_DIR}/assert-empty-state.sh"
 echo "黄金镜像构建与空状态断言全部通过。"

@@ -414,6 +414,10 @@ def render_linux(env, out, exit_mode, stripe_mode, allow_resolve):
     env.setdefault("MIHOMO_USER", "mihomo")
     env.setdefault("GUEST_LOCALE", "en_US.UTF-8")
     env.setdefault("GUEST_KEYBOARD", "us")
+    kb = env["GUEST_KEYBOARD"].strip()
+    if not re.fullmatch(r"[a-z]{2,3}", kb):
+        sys.exit(f"INVALID_GUEST_KEYBOARD: GUEST_KEYBOARD={kb!r} 仅支持 2-3 位小写 XKB 布局代码（如 us/gb/de/jp）")
+    env["GUEST_KEYBOARD"] = kb
     env.setdefault("GUEST_HOSTNAME", "")
     env.setdefault("VMNET_CIDR", "192.168.180.0/24")
 

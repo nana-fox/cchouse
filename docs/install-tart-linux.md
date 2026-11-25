@@ -1,6 +1,6 @@
 # Apple Silicon Mac 轻量安装手册（Tart + Debian 13 arm64）
 
-本手册面向 **Apple Silicon Mac（M1/M2/M3/M4）**，采用 `tart` + 预装好的 **Debian 13 (`arm64`) 黄金镜像**（压缩包 ~725 MB，磁盘占用 ~3 GB），支持 `EXIT_MODE=single`（单节点）与 `chain`（链式），仅覆盖网页版与 Claude Code CLI（不含 Claude Desktop）。
+本手册面向 **Apple Silicon Mac（M1/M2/M3/M4）**，采用 `tart` + 预装好的 **Debian 13 (`arm64`) 黄金镜像**（含中文字体与拼音输入法，压缩包 ~1.1 GB，磁盘占用 ~3.5 GB），支持 `EXIT_MODE=single`（单节点）与 `chain`（链式），仅覆盖网页版与 Claude Code CLI（不含 Claude Desktop）。
 
 > 若需要 macOS 桌面与 Safari 高拟真环境，请改走 [build.md](build.md)（v1 `Tart + macOS`）。
 
@@ -59,8 +59,8 @@ tart clone cchouse-debian13-arm64 "<VM_NAME>"
 3. **正常开机并获取 IP**：
    ```bash
    tart run "<VM_NAME>" &
-   # 黄金镜像（preview.2 起）已配置 ClientIdentifier=mac，优先默认 DHCP 解析；若未命中可查看 /var/db/dhcpd_leases 顶部
-   tart ip "<VM_NAME>" --wait 30 || head -n 30 /var/db/dhcpd_leases
+   # 黄金镜像（preview.2 起）已配置 ClientIdentifier=mac，优先默认 DHCP 解析；兼容旧镜像时依次回退 ARP 与 /var/db/dhcpd_leases 顶部
+   tart ip "<VM_NAME>" --wait 30 || tart ip --resolver=arp "<VM_NAME>" --wait 30 || head -n 30 /var/db/dhcpd_leases
    ```
    将拿到的 IP 写入 `instance.env` 的 `GUEST_IP`，在客机桌面 `lxterminal` 执行 `cat /etc/ssh/ssh_host_ed25519_key.pub` 核对主机公钥并写入 `<PRIVATE_DIR>/known_hosts`。
 
@@ -80,4 +80,4 @@ tart clone "<VM_NAME>" "<VM_NAME>-clean-$(date +%Y%m%d)"
 
 随后打开客机桌面 → Chromium 打开 `file:///usr/local/<TAG>/check.html` 核对全绿，再登录 `claude.ai` 或客机终端执行 `claude`（**OAuth 链接只能在客机 Chromium 内打开，严禁复制到宿主浏览器**）。
 
-> **桌面操作提示（`v2.0.0-preview.2` 起）**：黄金镜像内置思源黑体与 `fcitx5` 简体拼音，默认英文键盘，**轻按左 `Shift`** 或 **`Ctrl + Space`** 一键切换中英文；底部 `tint2` 任务栏可还原最小化窗口并查看右下角输入法图标与出口时间；桌面右键菜单提供浏览器、终端与安全关机入口。
+> **桌面操作提示（`v2.0.0-preview.2` 起）**：黄金镜像内置思源黑体与 `fcitx5` 简体拼音（已关闭云拼音），默认按出口地区配置键盘布局，**轻按左 `Shift`**、**`Option + Space`**（`Alt + Space`）或 **`Ctrl + Space`** 一键切换中英文；底部 `tint2` 任务栏可还原最小化窗口并查看右下角输入法图标与出口时间；桌面右键菜单提供浏览器、终端与安全关机入口。

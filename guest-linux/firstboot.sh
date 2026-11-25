@@ -69,15 +69,34 @@ if [ -f /etc/locale.gen ]; then
   locale-gen || true
 fi
 printf 'LANG=%s\nLC_ALL=%s\n' "$GUEST_LOCALE" "$GUEST_LOCALE" >/etc/default/locale
+GUEST_KEYBOARD="${GUEST_KEYBOARD:-us}"
 cat >/etc/default/keyboard <<EOF
 XKBMODEL="pc105"
 XKBLAYOUT="${GUEST_KEYBOARD}"
 XKBVARIANT=""
 XKBOPTIONS=""
 EOF
-if [ -f /home/claude/.config/fcitx5/profile ] && [ -n "$GUEST_KEYBOARD" ]; then
-  sed -i "s/^Default Layout=us$/Default Layout=${GUEST_KEYBOARD}/; s/^Name=keyboard-us$/Name=keyboard-${GUEST_KEYBOARD}/" /home/claude/.config/fcitx5/profile
+if id -u claude >/dev/null 2>&1; then
+  install -d -m 755 -o claude -g claude /home/claude/.config /home/claude/.config/fcitx5
+  cat >/home/claude/.config/fcitx5/profile <<EOF
+[Groups/0]
+Name=Default
+Default Layout=${GUEST_KEYBOARD}
+DefaultIM=pinyin
+
+[Groups/0/Items/0]
+Name=keyboard-${GUEST_KEYBOARD}
+Layout=
+
+[Groups/0/Items/1]
+Name=pinyin
+Layout=
+
+[GroupOrder]
+0=Default
+EOF
   chown claude:claude /home/claude/.config/fcitx5/profile
+  chmod 644 /home/claude/.config/fcitx5/profile
 fi
 
 # 5. 锁定静态 resolv.conf，防止 VMware NAT DHCP 下发 vmnet .2 绕过 TUN dns-hijack

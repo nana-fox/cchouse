@@ -102,5 +102,5 @@ scripts/verify-linux.sh "<PRIVATE_DIR>/instance.env" --fail-closed
 
 ## 桌面操作提示（`v2.0.0-preview.2` 起）
 
-- 黄金镜像内置思源黑体、`fcitx5` 简体拼音、`tint2` 底部任务栏、`lxterminal` 与 `vmware-user-suid-wrapper`（双向剪贴板 + 窗口自适应分辨率）。
-- 默认英文键盘，按 **`Ctrl + Space`** 或 **轻按左 `Shift`** 一键切换中英文；桌面右键菜单提供 Chromium、终端、切换输入法与安全关机入口。
+- 黄金镜像内置思源黑体、`fcitx5` 简体拼音（已关闭云拼音）、`tint2` 底部任务栏、`lxterminal` 与 `vmware-user-suid-wrapper`（双向剪贴板 + 窗口自适应分辨率）。
+- 默认按出口地区配置键盘布局，按 **`Ctrl + Space`**、**轻按左 `Shift`** 或 **`Alt + Space`** 一键切换中英文；底部 `tint2` 任务栏可还原最小化窗口，桌面右键菜单提供 Chromium、终端、切换输入法与安全关机入口。
