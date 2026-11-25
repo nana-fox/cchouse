@@ -1162,6 +1162,49 @@ class TestCchouseV2(unittest.TestCase):
         finally:
             mod.compress_apple_lz4_bv4 = orig_comp
 
+    def test_attach_release_assets_workflow(self):
+        import re
+
+        wf = (ROOT / ".github" / "workflows" / "attach-release-assets.yml").read_text(encoding="utf-8")
+        self.assertIn("workflow_dispatch:", wf)
+        self.assertNotIn("\n  pull_request:", wf)
+        self.assertNotIn("\n  push:", wf)
+        self.assertNotIn("\n  schedule:", wf)
+        self.assertEqual(len(re.findall(r"(?m)^permissions:", wf)), 1)
+        perm = re.search(r"(?m)^permissions:\n((?:  \S.*\n)+)", wf)
+        self.assertIsNotNone(perm)
+        found = {}
+        for line in perm.group(1).splitlines():
+            key, _, val = line.strip().partition(":")
+            found[key] = val.strip()
+        self.assertEqual(found, {"contents": "write", "packages": "read", "actions": "read"})
+        self.assertNotIn("packages: write", wf)
+        for marker in (
+            "runs-on: ubuntu-latest",
+            "runs-on: macos-latest",
+            "actions/download-artifact@v4",
+            "github-token:",
+            "run-id:",
+            "cchouse-debian13-amd64-ova",
+            "cchouse-debian13-amd64.ova.sha256",
+            "guest-linux/image-manifest.json",
+            "ova_sha256",
+            "refusing to upload: manifest does not publish this tag and ova_sha256 input is empty",
+            "gh release upload",
+            "--clobber",
+            "brew install cirruslabs/cli/tart",
+            "tart login ghcr.io",
+            "tart clone",
+            "tart export",
+            "cchouse-debian13-arm64.tvm",
+            'uname -m',
+            "arm64",
+            "GITHUB_STEP_SUMMARY",
+            "TVM_SHA256=",
+            "TVM_BYTES=",
+        ):
+            self.assertIn(marker, wf)
+
     def test_shell_vars_braced_before_non_ascii(self):
         # macOS /bin/bash 3.2 在 UTF-8 locale 下会把紧跟的多字节字符首字节并入变量名（"$x）" -> 变量 x\xef），
         # set -u 时直接报 unbound variable；凡变量后紧跟非 ASCII 字符必须写成 ${x}

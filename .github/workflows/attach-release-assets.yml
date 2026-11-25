@@ -1,0 +1,198 @@
+name: Attach release assets
+
+# Manual only. Downloads the cloud OVA artifact and exports the arm64 .tvm
+# from GHCR on a GitHub-hosted runner, then attaches both to an existing
+# release tag (draft prerelease included). Nothing is published here.
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to attach assets to (draft prerelease is fine)"
+        required: true
+        type: string
+      ova_run_id:
+        description: "Successful build-ova.yml run id (artifact cchouse-debian13-amd64-ova)"
+        required: true
+        type: string
+      oci_digest:
+        description: "GHCR manifest digest sha256:<64 hex> of cchouse-debian13-arm64"
+        required: true
+        type: string
+      ova_sha256:
+        description: "Expected amd64 OVA sha256. Required when this commit's image-manifest.json does not publish release_tag."
+        required: false
+        type: string
+        default: ""
+
+concurrency:
+  group: attach-release-assets-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  packages: read
+  actions: read
+
+jobs:
+  attach-ova:
+    name: Attach amd64 OVA from build-ova artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      OVA_RUN_ID: ${{ inputs.ova_run_id }}
+      OCI_DIGEST: ${{ inputs.oci_digest }}
+      OVA_SHA256_INPUT: ${{ inputs.ova_sha256 }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9A-Za-z][0-9A-Za-z._+-]*$ ]]
+          [[ "$OVA_RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$OCI_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          if [ -n "$OVA_SHA256_INPUT" ]; then
+            [[ "$OVA_SHA256_INPUT" =~ ^[0-9a-f]{64}$ ]]
+          fi
+
+      - name: Download OVA artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: cchouse-debian13-amd64-ova
+          run-id: ${{ inputs.ova_run_id }}
+          github-token: ${{ github.token }}
+          path: ova-artifact
+
+      - name: Check sha256 against sidecar and manifest or input
+        shell: bash
+        run: |
+          set -euo pipefail
+          ova="ova-artifact/cchouse-debian13-amd64.ova"
+          side="ova-artifact/cchouse-debian13-amd64.ova.sha256"
+          [ -f "$ova" ]
+          [ -f "$side" ]
+          actual="$(sha256sum "$ova" | awk '{print $1}')"
+          recorded="$(awk '{print $1}' "$side")"
+          [ "$actual" = "$recorded" ]
+          echo "sidecar sha256 matches"
+          bytes="$(stat -c %s "$ova")"
+          [ "$bytes" -gt 0 ]
+          export OVA_SHA256="$actual"
+          python3 -I - <<'PY'
+          import json, os, sys
+          from pathlib import Path
+
+          actual = os.environ["OVA_SHA256"]
+          tag = os.environ["RELEASE_TAG"]
+          pinned = os.environ.get("OVA_SHA256_INPUT", "").strip()
+          man = json.loads(Path("guest-linux/image-manifest.json").read_text(encoding="utf-8"))
+          hits = [
+              a for a in man["artifacts"]
+              if a.get("arch") == "amd64"
+              and a.get("format") == "ova"
+              and a.get("filename") == "cchouse-debian13-amd64.ova"
+          ]
+          if len(hits) != 1:
+              sys.exit("manifest amd64 ova entry missing")
+          amd = hits[0]
+          urls = amd.get("urls") or []
+          listed = man.get("image_version") == tag and any(
+              ("/" + tag + "/") in u and u.endswith("/" + amd["filename"]) for u in urls
+          )
+          if listed:
+              if amd.get("sha256") != actual:
+                  sys.exit("manifest sha256 does not match artifact")
+              print("manifest sha256 matches artifact")
+          else:
+              print(
+                  "manifest image_version=%s does not publish %s; not comparing its sha256"
+                  % (man.get("image_version"), tag)
+              )
+          if pinned:
+              if pinned != actual:
+                  sys.exit("input ova_sha256 does not match artifact")
+              print("input ova_sha256 matches artifact")
+          elif not listed:
+              sys.exit(
+                  "refusing to upload: manifest does not publish this tag and ova_sha256 input is empty"
+              )
+          PY
+          {
+            echo "## amd64 OVA"
+            echo "- bytes: ${bytes}"
+            echo "- sha256: ${actual}"
+            echo "- source run: ${OVA_RUN_ID}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload OVA to the release
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release upload "$RELEASE_TAG" ova-artifact/cchouse-debian13-amd64.ova --clobber
+
+  attach-tvm:
+    name: Export arm64 TVM from GHCR and attach
+    runs-on: macos-latest
+    timeout-minutes: 45
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      OCI_DIGEST: ${{ inputs.oci_digest }}
+      GH_TOKEN: ${{ github.token }}
+      GITHUB_TOKEN: ${{ github.token }}
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+    steps:
+      - name: Validate inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9A-Za-z][0-9A-Za-z._+-]*$ ]]
+          [[ "$OCI_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          arch="$(uname -m)"
+          [ "$arch" = "arm64" ]
+
+      - name: Install tart
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install cirruslabs/cli/tart
+          command -v tart
+          tart --version || tart version
+
+      - name: Clone digest, export tvm, record sha256 and size
+        shell: bash
+        run: |
+          set -euo pipefail
+          owner="$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
+          ref="ghcr.io/${owner}/cchouse-debian13-arm64@${OCI_DIGEST}"
+          out="cchouse-debian13-arm64.tvm"
+          cleanup() { tart delete tmp >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          printf '%s' "$GITHUB_TOKEN" | tart login ghcr.io --username "$owner" --password-stdin
+          tart clone "$ref" tmp
+          tart export tmp "$out"
+          tart delete tmp
+          trap - EXIT
+          bytes="$(stat -f %z "$out")"
+          sha="$(shasum -a 256 "$out" | awk '{print $1}')"
+          [ "$bytes" -gt 0 ]
+          [[ "$sha" =~ ^[0-9a-f]{64}$ ]]
+          echo "TVM_BYTES=${bytes}"
+          echo "TVM_SHA256=${sha}"
+          {
+            echo "## arm64 .tvm"
+            echo "- bytes: ${bytes}"
+            echo "- sha256: ${sha}"
+            echo "- oci: ${ref}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload TVM to the release
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release upload "$RELEASE_TAG" cchouse-debian13-arm64.tvm --clobber
