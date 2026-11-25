@@ -59,7 +59,9 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils xorriso
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-x86 qemu-utils xorriso \
+            build-essential libglib2.0-dev libzstd-dev ninja-build pkg-config python3-venv zlib1g-dev
 
       - name: Download and verify Debian 13 cloud image & mihomo
         shell: bash
@@ -213,6 +215,29 @@ jobs:
           rm -rf "$CI_DIR" "$CI_ISO" "$SSH_KEY" "${SSH_KEY}.pub"
           echo "  OK  Guest powered off cleanly."
 
+      - name: Build qemu-img with the upstream streamOptimized VMDK fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Ubuntu's QEMU 10.2 leaves padding after the last compressed grain.
+          # VMware excludes that padding from its digest. QEMU 11.2 includes
+          # the grain alignment and EOS fixes (qemu/qemu@6e641f2440aa).
+          QEMU_VERSION=11.2.0-rc1
+          QEMU_SHA256=afa61391ade2f05f0b93a7510d736d22e54f74b91fd2c47d286640d595343870
+          QEMU_ARCHIVE="${WORK_DIR}/qemu-${QEMU_VERSION}.tar.xz"
+          QEMU_BUILD="${WORK_DIR}/qemu-img-build"
+          curl -fL --retry 3 "https://download.qemu.org/qemu-${QEMU_VERSION}.tar.xz" -o "$QEMU_ARCHIVE"
+          echo "${QEMU_SHA256}  ${QEMU_ARCHIVE}" | sha256sum -c -
+          tar -xJf "$QEMU_ARCHIVE" -C "$WORK_DIR"
+          mkdir -p "$QEMU_BUILD"
+          cd "$QEMU_BUILD"
+          "${WORK_DIR}/qemu-${QEMU_VERSION}/configure" \
+            --disable-system --disable-user --enable-tools --disable-docs \
+            --disable-guest-agent --disable-rust --disable-download
+          ninja -j "$(nproc)" qemu-img
+          ./qemu-img --version
+          echo "OVA_QEMU_IMG=${QEMU_BUILD}/qemu-img" >> "$GITHUB_ENV"
+
       - name: Convert to streamOptimized VMDK and package OVA (.ovf + .mf + tar)
         shell: bash
         run: |
@@ -229,11 +254,11 @@ jobs:
           OVA_NAME="cchouse-debian13-amd64.ova"
 
           echo "== [4/4] Converting qcow2 -> streamOptimized VMDK..."
-          qemu-img convert -p -f qcow2 -O vmdk \
+          "$OVA_QEMU_IMG" convert -p -f qcow2 -O vmdk \
             -o subformat=streamOptimized,adapter_type=lsilogic,compat6 \
             "$WORK_QCOW2" "${STAGE_DIR}/${VMDK_NAME}"
 
-          qemu-img info --output=json "${STAGE_DIR}/${VMDK_NAME}" | tee "${WORK_DIR}/vmdk-info.json"
+          "$OVA_QEMU_IMG" info --output=json "${STAGE_DIR}/${VMDK_NAME}" | tee "${WORK_DIR}/vmdk-info.json"
 
           python3 -I - \
             guest-linux/image-builder/cchouse-debian13-amd64.ovf.tmpl \
@@ -268,6 +293,7 @@ jobs:
             cd "$STAGE_DIR"
             tar --format=ustar -cf "${OUT_DIR}/${OVA_NAME}" "$OVF_NAME" "$MF_NAME" "$VMDK_NAME"
           )
+          python3 -I guest-linux/image-builder/verify-ova.py "${OUT_DIR}/${OVA_NAME}"
 
           (
             cd "$OUT_DIR"
