@@ -46,7 +46,7 @@ The VM can only reach your one node. Your computer keeps using the internet as u
 1. **Install the VM software** (one-time)
    - Apple Silicon Mac: `brew install cirruslabs/cli/tart`
    - Windows / Intel Mac: free VMware Workstation Pro / Fusion Pro (requires a Broadcom account to download).
-2. **Run one command and paste your node link** (about 3 minutes in our tests, plus the first image download)
+2. **Run one command and paste your node link** (first install takes about `<COLD_TOTAL>` including the image download; cold-start measurement pending)
    ```bash
    git clone https://github.com/nana-fox/cchouse.git && cd cchouse
    python3 scripts/cchouse.py up
@@ -65,7 +65,9 @@ The VM can only reach your one node. Your computer keeps using the internet as u
 
 The guest is always Debian 13 + Chromium + Claude Code. Linux hosts are not supported.
 
-On 2026-11-25, two real machines ran the one-command check: Mac mini (Tart) in 2m35s and Windows (VMware) in 2m55s, with all 26 automated checks passing.
+On 2026-11-25, two real machines (Mac mini with Tart, Windows with VMware) passed all 26 automated checks.
+
+First-install time (cold start: nothing downloaded yet): Mac `<COLD_MAC>`, Windows `<COLD_WIN>`. Measurement pending.
 
 ---
 

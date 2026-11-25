@@ -49,14 +49,14 @@ flowchart LR
 - Apple Silicon Mac（M 系列芯片）：`brew install cirruslabs/cli/tart`
 - Windows / Intel Mac：安装免费版 VMware（Windows 用 Workstation Pro，Intel Mac 用 Fusion Pro），需要先在 Broadcom 官网注册账号才能下载。
 
-**第 2 步：一条命令，粘贴节点链接**（实测约 3 分钟）
+**第 2 步：一条命令，粘贴节点链接**（首次安装约 `<COLD_TOTAL>`，含下载镜像，待冷启动实测）
 
 ```bash
 git clone https://github.com/nana-fox/cchouse.git && cd cchouse
 python3 scripts/cchouse.py up
 ```
 
-提示时粘贴你的节点链接（输入不会显示在屏幕上）。脚本会自动选择适合你电脑的虚拟机，下载镜像、配置好网络并自动验收。首次下载镜像的时间取决于你的网速，另计。
+提示时粘贴你的节点链接（输入不会显示在屏幕上）。脚本会自动选择适合你电脑的虚拟机，下载镜像、配置好网络并自动验收。下载那一步快慢取决于你的网速。
 
 **第 3 步：打开虚拟机桌面，看全绿后登录**
 
@@ -78,7 +78,9 @@ python3 scripts/cchouse.py up
 
 虚拟机里统一是 Debian 13 + Chromium + Claude Code。不支持 Linux 电脑作为宿主机。
 
-2026-11-25 两台真机一键验证：Mac mini（Tart）2 分 35 秒、Windows（VMware）2 分 55 秒，26 项自动验收全部通过。
+2026-11-25 两台真机验证：Mac mini（Tart）和 Windows（VMware）26 项自动验收全部通过。
+
+首次安装耗时（冷启动：镜像和 Claude Code 都没下载过）：Mac `<COLD_MAC>`、Windows `<COLD_WIN>`，待实测。
 
 ---
 
