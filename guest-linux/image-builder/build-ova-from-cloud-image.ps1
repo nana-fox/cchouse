@@ -19,6 +19,17 @@ $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $GuestLinuxDir = Split-Path -Parent $ScriptDir
+$RepoRoot = Split-Path -Parent $GuestLinuxDir
+$sourceCommit = "unknown"
+try {
+  $gitHead = (& git -C $RepoRoot rev-parse HEAD 2>$null)
+  if ($LASTEXITCODE -eq 0 -and $gitHead) {
+    $sourceCommit = $gitHead.Trim()
+    $gitStatus = (& git -C $RepoRoot status --porcelain --untracked-files=no 2>$null)
+    if ($gitStatus) { $sourceCommit = "$sourceCommit-dirty" }
+  }
+} catch {}
+$buildTime = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
 
 function Find-Exe($candidates, $name) {
   foreach ($c in $candidates) {
@@ -272,7 +283,7 @@ $mirrorCmd = ""
 if ($UseUstcMirror) {
   $mirrorCmd = "sed -i 's|deb\.debian\.org|mirrors.ustc.edu.cn|g; s|security\.debian\.org|mirrors.ustc.edu.cn|g' /etc/apt/sources.list /etc/apt/sources.list.d/* /etc/apt/mirrors/* 2>/dev/null || true; "
 }
-$buildCmd = "${mirrorCmd}MIHOMO_VERSION=$MihomoVersion MIHOMO_SHA256=$MihomoSha256 MIHOMO_LOCAL_GZ=/tmp/mihomo.gz bash /tmp/cchouse-guest-linux/image-builder/build-debian13-golden.sh && rm -rf /tmp/cchouse-guest-linux /tmp/mihomo.gz && sync && nohup sh -c 'sleep 2 && systemctl poweroff' >/dev/null 2>&1 &"
+$buildCmd = "${mirrorCmd}MIHOMO_VERSION=$MihomoVersion MIHOMO_SHA256=$MihomoSha256 MIHOMO_LOCAL_GZ=/tmp/mihomo.gz SOURCE_COMMIT=$sourceCommit BUILD_TIME=$buildTime bash /tmp/cchouse-guest-linux/image-builder/build-debian13-golden.sh && rm -rf /tmp/cchouse-guest-linux /tmp/mihomo.gz && sync && { nohup sh -c 'sleep 2 && systemctl poweroff' </dev/null >/dev/null 2>&1 & }"
 & ssh.exe @sshOpts "root@$guestIp" $buildCmd
 $rc = $LASTEXITCODE
 $ErrorActionPreference = $prevEap
@@ -331,3 +342,4 @@ Write-Host "=== 黄金镜像构建完成 ==="
 Write-Host "OVA:    $ovaOut"
 Write-Host "SIZE:   $ovaMb MB"
 Write-Host "SHA256: $ovaSha"
+Write-Host "COMMIT: $sourceCommit"

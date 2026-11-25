@@ -1,6 +1,6 @@
 # Apple Silicon Mac 轻量安装手册（Tart + Debian 13 arm64）
 
-本手册面向 **Apple Silicon Mac（M1/M2/M3/M4）**，采用 `tart` + 预装好的 **Debian 13 (`arm64`) 黄金镜像**（含中文字体与拼音输入法，压缩包 ~1.1 GB，磁盘占用 ~3.5 GB），支持 `EXIT_MODE=single`（单节点）与 `chain`（链式），仅覆盖网页版与 Claude Code CLI（不含 Claude Desktop）。
+本手册面向 **Apple Silicon Mac（M1/M2/M3/M4）**，采用 `tart` + 预装好的 **Debian 13 (`arm64`) 黄金镜像**（具体版本、体积与 `sha256` 以 `guest-linux/image-manifest.json` 为准；中文字体、`fcitx5` 简体拼音、`tint2` 任务栏与右键关机 `cchouse-power` sudoers 自 `v2.0.0-preview.2` 起内置），支持 `EXIT_MODE=single`（单节点）与 `chain`（链式），仅覆盖网页版与 Claude Code CLI（不含 Claude Desktop）。
 
 > 若需要 macOS 桌面与 Safari 高拟真环境，请改走 [build.md](build.md)（v1 `Tart + macOS`）。
 
@@ -23,6 +23,7 @@ python3 -I scripts/preflight.py --route tart-linux
 
 - `GUEST_OS=linux`
 - `VMNET_CIDR=192.168.64.0/24`（Tart 默认共享 NAT 网段）
+- `GUEST_KEYBOARD=us`（可选，默认 `us`；如需其他键盘布局可填 2–3 位小写 XKB 代码如 `gb`/`de`/`jp`）
 - `SSH_PUBKEY` 填入刚生成的 `id_ed25519.pub` 单行内容
 
 拉取校验后的 Claude Code 原生 `linux-arm64` 包并渲染：
@@ -80,4 +81,4 @@ tart clone "<VM_NAME>" "<VM_NAME>-clean-$(date +%Y%m%d)"
 
 随后打开客机桌面 → Chromium 打开 `file:///usr/local/<TAG>/check.html` 核对全绿，再登录 `claude.ai` 或客机终端执行 `claude`（**OAuth 链接只能在客机 Chromium 内打开，严禁复制到宿主浏览器**）。
 
-> **桌面操作提示（`v2.0.0-preview.2` 起）**：黄金镜像内置思源黑体与 `fcitx5` 简体拼音（已关闭云拼音），默认按出口地区配置键盘布局，**轻按左 `Shift`**、**`Option + Space`**（`Alt + Space`）或 **`Ctrl + Space`** 一键切换中英文；底部 `tint2` 任务栏可还原最小化窗口并查看右下角输入法图标与出口时间；桌面右键菜单提供浏览器、终端与安全关机入口。
+> **桌面操作提示（`v2.0.0-preview.2` 起；`v2.0.0-preview.1` 镜像尚未预装以下桌面增强项，实际镜像版本见 `guest-linux/image-manifest.json` 的 `image_version`）**：黄金镜像内置思源黑体与 `fcitx5` 简体拼音（已关闭云拼音），键盘布局由 `instance.env` 的 `GUEST_KEYBOARD` 指定（默认 `us`），**轻按左 `Shift`**、**`Option + Space`**（`Alt + Space`）或 **`Ctrl + Space`** 一键切换中英文；底部 `tint2` 任务栏可还原最小化窗口并查看右下角输入法图标与出口时间；桌面右键菜单提供浏览器、终端与安全关机入口。

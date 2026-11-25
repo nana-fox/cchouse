@@ -246,7 +246,8 @@ class TestCchouseV2(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as td:
             th = Path(td)
-            img_dir = th / "cache" / "OCIs" / "ghcr.io" / "cirruslabs" / "macos-tahoe-vanilla" / "sha256:abc"
+            digest_dir = "sha256-abc" if os.name == "nt" else "sha256:abc"
+            img_dir = th / "cache" / "OCIs" / "ghcr.io" / "cirruslabs" / "macos-tahoe-vanilla" / digest_dir
             img_dir.mkdir(parents=True)
             (img_dir / "disk.img").write_bytes(b"x")
             self.assertTrue(preflight_mod.has_tart_cached_image(th))
@@ -277,6 +278,13 @@ class TestCchouseV2(unittest.TestCase):
             (th / "vms" / "cchouse-debian13-arm64-test").mkdir(parents=True)
             (th / "vms" / "cchouse-debian13-arm64-test" / "disk.img").write_bytes(b"x")
             self.assertEqual(preflight_mod.find_tart_linux_golden_images(th), [])
+            # 临时构建机（-building 后缀）不得被识别为黄金镜像
+            (th / "vms" / "cchouse-debian13-arm64-building").mkdir(parents=True)
+            (th / "vms" / "cchouse-debian13-arm64-building" / "disk.img").write_bytes(b"x")
+            (th / "vms" / "cchouse-debian13-arm64-v2.0.0-preview.2-building").mkdir(parents=True)
+            (th / "vms" / "cchouse-debian13-arm64-v2.0.0-preview.2-building" / "disk.img").write_bytes(b"x")
+            self.assertEqual(preflight_mod.find_tart_linux_golden_images(th), [])
+            # 正式命名（含 tart import 导入的黄金镜像，无需额外标记文件）应被正常识别
             (th / "vms" / "cchouse-debian13-arm64").mkdir(parents=True)
             (th / "vms" / "cchouse-debian13-arm64" / "disk.img").write_bytes(b"x")
             (th / "vms" / "cchouse-debian13-arm64-v2.0.0-preview.2").mkdir(parents=True)
@@ -552,6 +560,159 @@ class TestCchouseV2(unittest.TestCase):
         vl_sh = (ROOT / "scripts" / "verify-linux.sh").read_text(encoding="utf-8")
         self.assertIn("sudo -n -l", vl_sh)
         self.assertIn("cchouse-verify/cchouse-power", vl_sh)
+
+    def test_builders_do_not_background_golden_chain_and_write_release_meta(self):
+        import re
+
+        tart_sh = (ROOT / "guest-linux" / "image-builder" / "build-tart-linux-from-cloud-image.sh").read_text(encoding="utf-8")
+        ova_ps1 = (ROOT / "guest-linux" / "image-builder" / "build-ova-from-cloud-image.ps1").read_text(encoding="utf-8")
+        golden_sh = (ROOT / "guest-linux" / "image-builder" / "build-debian13-golden.sh").read_text(encoding="utf-8")
+
+        tart_cmd_m = re.search(r'^BUILD_CMD="(.+)"$', tart_sh, re.MULTILINE)
+        ova_cmd_m = re.search(r'^\$buildCmd\s*=\s*"(.+)"$', ova_ps1, re.MULTILINE)
+        self.assertIsNotNone(tart_cmd_m, "未找到 tart 构建器 BUILD_CMD")
+        self.assertIsNotNone(ova_cmd_m, "未找到 ova 构建器 $buildCmd")
+
+        for name, cmd in (("tart", tart_cmd_m.group(1)), ("ova", ova_cmd_m.group(1))):
+            self.assertIn("build-debian13-golden.sh", cmd, name)
+            self.assertIn("SOURCE_COMMIT=", cmd, name)
+            self.assertIn("BUILD_TIME=", cmd, name)
+            # poweroff 之前的 && 链不得放在后台，只有关机动作被花括号包在后台
+            self.assertNotRegex(cmd, r"&&\s*nohup\b", f"{name}: 整条构建链被放进后台")
+            self.assertRegex(
+                cmd,
+                r"&&\s*\{\s*nohup\s+sh\s+-c\s+'sleep 2 && systemctl poweroff'[^}]*&\s*\}\s*$",
+                f"{name}: 未将关机单独隔离在后台花括号块中",
+            )
+
+        # 验证 golden.sh 写入 /etc/cchouse-image-release
+        self.assertIn("/etc/cchouse-image-release", golden_sh)
+        for field in ("SOURCE_COMMIT=", "BUILD_TIME=", "ARCH=", "HYPERVISOR="):
+            self.assertIn(field, golden_sh)
+
+        # 验证 tart 构建器在临时名上构建、成功后 rename 成正式名、失败只删临时名
+        self.assertIn('BUILD_VM_NAME="${VM_NAME}-building"', tart_sh)
+        self.assertIn('"$TART_BIN" rename "$BUILD_VM_NAME" "$VM_NAME"', tart_sh)
+        self.assertIn('"$TART_BIN" delete "$BUILD_VM_NAME"', tart_sh)
+        self.assertNotIn(".cchouse-golden-ok", tart_sh)
+
+        # 验证两个构建器的 -dirty 判定均忽略未跟踪文件
+        self.assertIn("status --porcelain --untracked-files=no", tart_sh)
+        self.assertIn("status --porcelain --untracked-files=no", ova_ps1)
+
+        # 动态验证：golden 失败时前置链退出码不会被后台关机吞掉
+        bash_exe = find_bash()
+        if bash_exe:
+            cp = subprocess.run(
+                [bash_exe, "-c", "false && sync && { nohup sh -c 'sleep 1 && true' </dev/null >/dev/null 2>&1 & }"],
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(cp.returncode, 0)
+
+    def test_manifest_schema_v2_and_preflight_alignment(self):
+        import re
+
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import preflight as preflight_mod
+
+        manifest = json.loads((ROOT / "guest-linux" / "image-manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest.get("schema_version"), 2)
+        self.assertTrue(isinstance(manifest.get("guest_os"), str) and manifest["guest_os"])
+        img_ver = manifest.get("image_version")
+        self.assertTrue(isinstance(img_ver, str) and img_ver.startswith("v"))
+
+        artifacts = manifest.get("artifacts")
+        self.assertIsInstance(artifacts, list)
+        routes = [a.get("route") for a in artifacts]
+        self.assertEqual(sorted(routes), ["tart-linux", "vmware-linux"])
+
+        required_fields = (
+            "arch",
+            "route",
+            "format",
+            "filename",
+            "size_bytes",
+            "urls",
+            "sha256",
+            "source_commit",
+            "included_components",
+        )
+        for art in artifacts:
+            for key in required_fields:
+                self.assertIn(key, art, f"artifact 缺少必填字段 {key}")
+            self.assertIsInstance(art["size_bytes"], int)
+            self.assertGreater(art["size_bytes"], 0)
+            self.assertRegex(art["sha256"], r"^[0-9a-f]{64}$")
+            self.assertRegex(art["source_commit"], r"^[0-9a-f]{7,40}$")
+            self.assertIsInstance(art["urls"], list)
+            self.assertGreater(len(art["urls"]), 0)
+            for u in art["urls"]:
+                self.assertTrue(u.endswith("/" + art["filename"]), f"URL 文件名与 filename 不一致: {u}")
+                self.assertIn(f"/{img_ver}/", u, f"URL 版本标签与 image_version 不一致: {u}")
+            self.assertIsInstance(art["included_components"], list)
+            self.assertGreater(len(art["included_components"]), 0)
+
+            exp = preflight_mod.expected_image_for_route(art["route"])
+            self.assertIsNotNone(exp)
+            self.assertEqual(exp["image_version"], img_ver)
+            self.assertEqual(exp["filename"], art["filename"])
+            self.assertEqual(exp["sha256"], art["sha256"])
+            self.assertEqual(exp["source_commit"], art["source_commit"])
+            self.assertEqual(exp["url"], art["urls"][0])
+
+        self.assertIsNone(preflight_mod.expected_image_for_route("macos-tart"))
+
+    def test_p2_empty_keyboard_and_sudo_power_audit(self):
+        with tempfile.TemporaryDirectory() as td:
+            # 1) 空 GUEST_KEYBOARD 在 preflight 阶段即报错
+            empty_kb_env = base_single_linux_env()
+            empty_kb_env["GUEST_KEYBOARD"] = ""
+            env_p = Path(td) / "empty_kb.env"
+            write_env(env_p, empty_kb_env)
+            cp = subprocess.run(
+                [sys.executable, "-I", str(PREFLIGHT), "--route", "tart-linux", "--env", str(env_p)],
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(cp.returncode, 0)
+            self.assertIn("INVALID_GUEST_KEYBOARD", cp.stdout)
+
+        # 2) verify-linux.sh 的 sudo 审计在缺少 cchouse-power 规则时判 FAIL
+        vl_sh = (ROOT / "scripts" / "verify-linux.sh").read_text(encoding="utf-8")
+        awk_prog = vl_sh.split("sudo -n -l 2>/dev/null | awk '", 1)[1].split("'\" 2>/dev/null", 1)[0]
+        awk_prog = awk_prog.replace('\\"', '"').replace("\\$", "$")
+        awk_exe = shutil.which("awk")
+        if awk_exe:
+            verify_only = (
+                "User claude may run the following commands on host:\n"
+                "    (root) NOPASSWD: /usr/local/sbin/cchouse-probe nft-loaded\n"
+                "    (root) NOPASSWD: /usr/local/sbin/cchouse-probe nft-live-sha\n"
+                "    (root) NOPASSWD: /usr/local/sbin/cchouse-probe direct-count\n"
+                "    (root) NOPASSWD: /usr/local/sbin/cchouse-probe mihomo-stop\n"
+                "    (root) NOPASSWD: /usr/local/sbin/cchouse-probe mihomo-start\n"
+                "    (root) NOPASSWD: /usr/local/sbin/cchouse-probe root-egress\n"
+            )
+            with_power = verify_only + (
+                "    (root) NOPASSWD: /usr/bin/systemctl poweroff\n"
+                "    (root) NOPASSWD: /usr/bin/systemctl reboot\n"
+            )
+            with_wildcard = with_power + "    (root) NOPASSWD: /usr/bin/systemctl *\n"
+
+            for sample, expect_ok in ((verify_only, False), (with_power, True), (with_wildcard, False)):
+                r = subprocess.run([awk_exe, awk_prog], input=sample, capture_output=True, text=True)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                if expect_ok:
+                    self.assertEqual(r.stdout.strip(), "ok")
+                else:
+                    self.assertNotEqual(r.stdout.strip(), "ok")
+
+    def test_docs_keyboard_and_version_consistency(self):
+        for doc_name in ("install-tart-linux.md", "install-vmware-linux.md"):
+            text = (ROOT / "docs" / doc_name).read_text(encoding="utf-8")
+            self.assertNotIn("按出口地区配置键盘布局", text, doc_name)
+            self.assertIn("GUEST_KEYBOARD", text, doc_name)
+            self.assertIn("v2.0.0-preview.2", text, doc_name)
 
 
 if __name__ == "__main__":

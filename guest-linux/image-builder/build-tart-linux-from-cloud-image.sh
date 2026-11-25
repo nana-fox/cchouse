@@ -4,6 +4,7 @@
 set -euo pipefail
 
 VM_NAME="${VM_NAME:-cchouse-debian13-arm64}"
+BUILD_VM_NAME="${VM_NAME}-building"
 WORK_DIR="${WORK_DIR:-$HOME/.cache/cchouse-tart-linux-build}"
 DEFAULT_CLOUD_IMAGE_VERSION="20261123-2671"
 DEFAULT_CLOUD_IMAGE_SHA512="800e63be2901b32689ea00a4a6eaab0df5b7ef43eb543cf59627b575cd9c279d93d791be96ba9306617d28e1973f9222d3ab490138117ee41eb7432f61e5f55f"
@@ -27,6 +28,14 @@ USE_USTC_MIRROR="${USE_USTC_MIRROR:-0}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 GUEST_LINUX_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+REPO_ROOT="$(cd "${GUEST_LINUX_DIR}/.." && pwd)"
+if [ -z "${SOURCE_COMMIT:-}" ]; then
+  SOURCE_COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
+  if [ "$SOURCE_COMMIT" != "unknown" ] && [ -n "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=no 2>/dev/null || true)" ]; then
+    SOURCE_COMMIT="${SOURCE_COMMIT}-dirty"
+  fi
+fi
+BUILD_TIME="${BUILD_TIME:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
 
 [ -x "$TART_BIN" ] || { echo "错误：未找到 tart：$TART_BIN" >&2; exit 1; }
 [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ] || {
@@ -87,13 +96,13 @@ else
 fi
 echo "  OK  mihomo arm64 SHA-256 校验通过"
 
-echo "== [3/7] 创建 Tart Linux VM (${VM_NAME}, ${DISK_SIZE_GB} GB) 并写入基础盘..."
-"$TART_BIN" stop "$VM_NAME" 2>/dev/null || true
-"$TART_BIN" delete "$VM_NAME" 2>/dev/null || true
-"$TART_BIN" create "$VM_NAME" --linux --disk-size "$DISK_SIZE_GB"
-"$TART_BIN" set "$VM_NAME" --cpu 4 --memory 4096 --display 1440x900
+echo "== [3/7] 创建临时 Tart Linux 构建 VM (${BUILD_VM_NAME}, ${DISK_SIZE_GB} GB) 并写入基础盘..."
+"$TART_BIN" stop "$BUILD_VM_NAME" 2>/dev/null || true
+"$TART_BIN" delete "$BUILD_VM_NAME" 2>/dev/null || true
+"$TART_BIN" create "$BUILD_VM_NAME" --linux --disk-size "$DISK_SIZE_GB"
+"$TART_BIN" set "$BUILD_VM_NAME" --cpu 4 --memory 4096 --display 1440x900
 
-DISK_IMG="${TART_HOME_DIR}/vms/${VM_NAME}/disk.img"
+DISK_IMG="${TART_HOME_DIR}/vms/${BUILD_VM_NAME}/disk.img"
 [ -f "$DISK_IMG" ] || { echo "错误：未找到 Tart 磁盘文件：$DISK_IMG" >&2; exit 1; }
 if [[ "$CLOUD_IMG" == *.tar.xz ]]; then
   EXTRACT_DIR="$(mktemp -d "$(dirname "$DISK_IMG")/.extract.XXXXXX")"
@@ -113,10 +122,14 @@ python3 -c "import os; os.truncate('${DISK_IMG}', ${DISK_SIZE_GB} * 1024 * 1024 
 echo "== [4/7] 生成一次性 cidata ISO 与临时 SSH 密钥..."
 RUN_DIR="$(mktemp -d "${WORK_DIR}/run.XXXXXX")"
 TART_PID=""
+BUILD_OK=0
 cleanup() {
   if [ -n "$TART_PID" ] && kill -0 "$TART_PID" 2>/dev/null; then
-    "$TART_BIN" stop "$VM_NAME" 2>/dev/null || true
+    "$TART_BIN" stop "$BUILD_VM_NAME" 2>/dev/null || true
     wait "$TART_PID" 2>/dev/null || true
+  fi
+  if [ "$BUILD_OK" -ne 1 ]; then
+    "$TART_BIN" delete "$BUILD_VM_NAME" 2>/dev/null || true
   fi
   rm -rf "$RUN_DIR"
 }
@@ -147,7 +160,7 @@ CI_ISO="${RUN_DIR}/cidata.iso"
 hdiutil makehybrid -o "$CI_ISO" -joliet -iso -default-volume-name cidata "$CI_DIR" >/dev/null
 
 echo "== [5/7] 启动临时 Tart 构建机并等待 SSH..."
-"$TART_BIN" run "$VM_NAME" --no-graphics --disk="${CI_ISO}:ro" >"${RUN_DIR}/tart.log" 2>&1 &
+"$TART_BIN" run "$BUILD_VM_NAME" --no-graphics --disk="${CI_ISO}:ro" >"${RUN_DIR}/tart.log" 2>&1 &
 TART_PID=$!
 
 SSH_OPTS=(-i "$SSH_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=5 -o BatchMode=yes)
@@ -159,7 +172,7 @@ for _ in $(seq 1 60); do
     cat "${RUN_DIR}/tart.log" >&2
     exit 1
   fi
-  ip="$("$TART_BIN" ip --resolver=arp "$VM_NAME" --wait 2 2>/dev/null || "$TART_BIN" ip "$VM_NAME" --wait 2 2>/dev/null || true)"
+  ip="$("$TART_BIN" ip --resolver=arp "$BUILD_VM_NAME" --wait 2 2>/dev/null || "$TART_BIN" ip "$BUILD_VM_NAME" --wait 2 2>/dev/null || true)"
   if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     GUEST_IP="$ip"
     if ssh "${SSH_OPTS[@]}" "root@${GUEST_IP}" true 2>/dev/null; then
@@ -189,7 +202,7 @@ MIRROR_CMD=""
 if [ "$USE_USTC_MIRROR" = "1" ]; then
   MIRROR_CMD="sed -i 's|deb\\.debian\\.org|mirrors.ustc.edu.cn|g; s|security\\.debian\\.org|mirrors.ustc.edu.cn|g' /etc/apt/sources.list /etc/apt/sources.list.d/* /etc/apt/mirrors/* 2>/dev/null || true; "
 fi
-BUILD_CMD="${MIRROR_CMD}TARGET_HYPERVISOR=tart MIHOMO_ARCH=arm64 MIHOMO_VERSION=${MIHOMO_VERSION} MIHOMO_SHA256=${MIHOMO_SHA256} MIHOMO_LOCAL_GZ=/tmp/mihomo.gz bash /tmp/cchouse-guest-linux/image-builder/build-debian13-golden.sh && rm -rf /tmp/cchouse-guest-linux /tmp/mihomo.gz && sync && nohup sh -c 'sleep 2 && systemctl poweroff' >/dev/null 2>&1 &"
+BUILD_CMD="${MIRROR_CMD}TARGET_HYPERVISOR=tart MIHOMO_ARCH=arm64 MIHOMO_VERSION=${MIHOMO_VERSION} MIHOMO_SHA256=${MIHOMO_SHA256} MIHOMO_LOCAL_GZ=/tmp/mihomo.gz SOURCE_COMMIT=${SOURCE_COMMIT} BUILD_TIME=${BUILD_TIME} bash /tmp/cchouse-guest-linux/image-builder/build-debian13-golden.sh && rm -rf /tmp/cchouse-guest-linux /tmp/mihomo.gz && sync && { nohup sh -c 'sleep 2 && systemctl poweroff' </dev/null >/dev/null 2>&1 & }"
 ssh "${SSH_OPTS[@]}" "root@${GUEST_IP}" "$BUILD_CMD"
 
 echo "== [7/7] 等待正常关机与 Tart 落盘..."
@@ -200,11 +213,17 @@ for _ in $(seq 1 30); do
   sleep 2
 done
 if kill -0 "$TART_PID" 2>/dev/null; then
-  "$TART_BIN" stop "$VM_NAME" || true
+  "$TART_BIN" stop "$BUILD_VM_NAME" || true
   wait "$TART_PID" 2>/dev/null || true
 fi
 TART_PID=""
 
+"$TART_BIN" stop "$VM_NAME" 2>/dev/null || true
+"$TART_BIN" delete "$VM_NAME" 2>/dev/null || true
+"$TART_BIN" rename "$BUILD_VM_NAME" "$VM_NAME"
+BUILD_OK=1
+
 echo ""
 echo "=== Tart Linux (Debian 13 arm64) 黄金镜像构建完成 ==="
+echo "COMMIT: ${SOURCE_COMMIT}"
 "$TART_BIN" list | grep -E "Source|${VM_NAME}" || true
