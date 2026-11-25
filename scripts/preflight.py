@@ -255,7 +255,10 @@ def _validate_node_fields(env, prefix, errors, warnings):
 
 
 def _probe_socks5_connect(proxy_host, proxy_port, user, pwd, target_host, target_port=443, timeout=8):
-    s = socket.create_connection((proxy_host, proxy_port), timeout=timeout)
+    try:
+        s = socket.create_connection((proxy_host, proxy_port), timeout=timeout)
+    except OSError as exc:
+        return False, f"proxy_connect_error({type(exc).__name__})"
     try:
         s.settimeout(timeout)
         if user or pwd:
@@ -290,7 +293,10 @@ def _probe_socks5_connect(proxy_host, proxy_port, user, pwd, target_host, target
 
 
 def _probe_http_connect(proxy_host, proxy_port, user, pwd, target_host, target_port=443, timeout=8):
-    s = socket.create_connection((proxy_host, proxy_port), timeout=timeout)
+    try:
+        s = socket.create_connection((proxy_host, proxy_port), timeout=timeout)
+    except OSError as exc:
+        return False, f"proxy_connect_error({type(exc).__name__})"
     try:
         s.settimeout(timeout)
         headers = [f"CONNECT {target_host}:{target_port} HTTP/1.1", f"Host: {target_host}:{target_port}"]

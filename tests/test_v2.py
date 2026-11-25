@@ -798,7 +798,7 @@ class TestCchouseV2(unittest.TestCase):
             env_f = Path(td) / "stripe_node.env"
             out = Path(td) / "out_stripe"
             write_env(env_f, data)
-            cp = subprocess.run([sys.executable, "-I", str(RENDER), str(env_f), str(out)], capture_output=True, text=True)
+            cp = subprocess.run([sys.executable, "-I", str(RENDER), str(env_f), str(out)], capture_output=True, text=True, encoding="utf-8", errors="replace")
             self.assertEqual(cp.returncode, 0, cp.stderr)
             cfg = (out / "config.yaml").read_text(encoding="utf-8")
             nft = (out / "nftables.conf").read_text(encoding="utf-8")
@@ -824,7 +824,7 @@ class TestCchouseV2(unittest.TestCase):
             env_imp = Path(td) / "implicit.env"
             out_imp = Path(td) / "out_imp"
             write_env(env_imp, implicit_data)
-            cp_imp = subprocess.run([sys.executable, "-I", str(RENDER), str(env_imp), str(out_imp)], capture_output=True, text=True)
+            cp_imp = subprocess.run([sys.executable, "-I", str(RENDER), str(env_imp), str(out_imp)], capture_output=True, text=True, encoding="utf-8", errors="replace")
             self.assertEqual(cp_imp.returncode, 0, cp_imp.stderr)
             self.assertEqual((out_imp / "config.yaml").read_text(encoding="utf-8"), cfg)
 
@@ -833,7 +833,7 @@ class TestCchouseV2(unittest.TestCase):
             udp_data["STRIPE_NODE_TYPE"] = "hysteria2"
             env_udp = Path(td) / "stripe_udp.env"
             write_env(env_udp, udp_data)
-            cp_udp = subprocess.run([sys.executable, "-I", str(RENDER), str(env_udp), str(Path(td) / "out_udp")], capture_output=True, text=True)
+            cp_udp = subprocess.run([sys.executable, "-I", str(RENDER), str(env_udp), str(Path(td) / "out_udp")], capture_output=True, text=True, encoding="utf-8", errors="replace")
             self.assertNotEqual(cp_udp.returncode, 0)
             self.assertIn("UDP", cp_udp.stderr)
 
@@ -842,9 +842,9 @@ class TestCchouseV2(unittest.TestCase):
             front_data["STRIPE_EXIT_MODE"] = "front"
             env_fr = Path(td) / "front.env"
             write_env(env_fr, front_data)
-            cp_fr = subprocess.run([sys.executable, "-I", str(RENDER), str(env_fr), str(Path(td) / "out_fr")], capture_output=True, text=True)
+            cp_fr = subprocess.run([sys.executable, "-I", str(RENDER), str(env_fr), str(Path(td) / "out_fr")], capture_output=True, text=True, encoding="utf-8", errors="replace")
             self.assertNotEqual(cp_fr.returncode, 0)
-            cp_pf = subprocess.run([sys.executable, "-I", str(PREFLIGHT), "--route", "tart-linux", "--env", str(env_fr)], capture_output=True, text=True)
+            cp_pf = subprocess.run([sys.executable, "-I", str(PREFLIGHT), "--route", "tart-linux", "--env", str(env_fr)], capture_output=True, text=True, encoding="utf-8", errors="replace")
             self.assertNotEqual(cp_pf.returncode, 0)
             self.assertIn("INVALID_STRIPE_MODE", cp_pf.stdout)
 
@@ -853,9 +853,21 @@ class TestCchouseV2(unittest.TestCase):
             ign_data["STRIPE_EXIT_MODE"] = "off"
             env_ign = Path(td) / "ign.env"
             write_env(env_ign, ign_data)
-            cp_ign = subprocess.run([sys.executable, "-I", str(PREFLIGHT), "--route", "tart-linux", "--env", str(env_ign)], capture_output=True, text=True)
+            cp_ign = subprocess.run([sys.executable, "-I", str(PREFLIGHT), "--route", "tart-linux", "--env", str(env_ign)], capture_output=True, text=True, encoding="utf-8", errors="replace")
             payload_ign = json.loads(cp_ign.stdout)
             self.assertTrue(any("STRIPE_NODE_IGNORED" in w for w in payload_ign["warnings"]))
+
+    def test_stripe_probe_unreachable_proxy_does_not_crash(self):
+        import socket as _socket
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import preflight as preflight_mod
+        with _socket.socket() as srv:
+            srv.bind(("127.0.0.1", 0))
+            dead_port = srv.getsockname()[1]
+        for fn in (preflight_mod._probe_socks5_connect, preflight_mod._probe_http_connect):
+            ok_flag, detail = fn("127.0.0.1", dead_port, "u", "p", "js.stripe.com", timeout=2)
+            self.assertFalse(ok_flag)
+            self.assertTrue(detail.startswith("proxy_connect_error("), detail)
 
     def test_preflight_check_stripe_and_verify_linux_markers(self):
         import socket
@@ -918,7 +930,7 @@ class TestCchouseV2(unittest.TestCase):
                 cp1 = subprocess.run(
                     [sys.executable, "-I", str(PREFLIGHT), "--route", "tart-linux", "--env", str(e1), "--check-stripe"],
                     capture_output=True,
-                    text=True,
+                    text=True, encoding="utf-8", errors="replace",
                 )
                 self.assertNotIn("SECRET_STRIPE_TEST_PASS", cp1.stdout + cp1.stderr)
                 p1 = json.loads(cp1.stdout)
@@ -941,7 +953,7 @@ class TestCchouseV2(unittest.TestCase):
                 cp2 = subprocess.run(
                     [sys.executable, "-I", str(PREFLIGHT), "--route", "tart-linux", "--env", str(e2), "--check-stripe"],
                     capture_output=True,
-                    text=True,
+                    text=True, encoding="utf-8", errors="replace",
                 )
                 self.assertNotEqual(cp2.returncode, 0)
                 p2 = json.loads(cp2.stdout)
@@ -955,7 +967,7 @@ class TestCchouseV2(unittest.TestCase):
                 cp3 = subprocess.run(
                     [sys.executable, "-I", str(PREFLIGHT), "--route", "tart-linux", "--env", str(e3), "--check-stripe"],
                     capture_output=True,
-                    text=True,
+                    text=True, encoding="utf-8", errors="replace",
                 )
                 p3 = json.loads(cp3.stdout)
                 self.assertTrue(p3["stripe_check"]["reachable"])
@@ -973,7 +985,7 @@ class TestCchouseV2(unittest.TestCase):
             self.assertIn(marker, vl_sh)
         bash_exe = find_bash()
         if bash_exe:
-            chk = subprocess.run([bash_exe, "-n", str(ROOT / "scripts" / "verify-linux.sh")], capture_output=True, text=True)
+            chk = subprocess.run([bash_exe, "-n", str(ROOT / "scripts" / "verify-linux.sh")], capture_output=True, text=True, encoding="utf-8", errors="replace")
             self.assertEqual(chk.returncode, 0, chk.stderr)
 
 
