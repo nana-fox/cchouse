@@ -16,6 +16,11 @@
   tar -xzf tart-guest-agent-darwin-all.tar.gz tart-guest-agent
   shasum -a 256 mihomo tart-guest-agent
   ```
+- 准备好 **Claude Code 原生二进制包**（v2.x 平台原生包内为独立可执行文件，无需在客机安装 Node.js）：
+  ```bash
+  python3 -I scripts/fetch-claude-code.py --platform darwin-arm64 --out "$D/claude-code.tgz"
+  ```
+  客机部署完网络后，在宿主 `scp` 进客机解压 `package/claude` 至 `/usr/local/bin/claude`（`chmod 755`），并在 `/etc/zshenv` 写入 `export DISABLE_AUTOUPDATER=1`，用 `claude --version` 验证（不触发登录）。
 - 复制旧实例参数后，逐项核对本机实际的 `TART_BIN`、`VM_STORAGE`、`RUN_LOG`、SSH 路径和 `NETWORK_MODE`。不要把另一台机器的外置盘等待路径带进来；ex02 曾因此在已有虚拟机文件的情况下等错目录。远程只部署运行所需文件，源码和操作手册留控制端。
 - Git 中的脚本带可执行位，临时上传后仍可能变为普通文件。先检查权限；需要时用 `/bin/bash <脚本> <参数>` 执行，不能把 `Permission denied` 当成脚本已运行。桌面 `.command` 入口本身须可执行，并指向最终保留的运行文件。
 

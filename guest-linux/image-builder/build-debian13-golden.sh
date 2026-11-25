@@ -11,12 +11,11 @@ GUEST_LINUX_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 export DEBIAN_FRONTEND=noninteractive
 
-echo "== [1/6] 安装基础桌面、Chromium、Node.js、nftables 与 VMware 工具"
+echo "== [1/6] 安装基础桌面、Chromium、nftables 与 VMware 工具（Claude Code 为独立二进制，无需 Node.js）"
 apt-get update
 apt-get install -y --no-install-recommends \
   openbox xorg lightdm xterm \
   chromium \
-  nodejs npm \
   nftables curl ca-certificates dnsutils openssh-server sudo \
   open-vm-tools open-vm-tools-desktop \
   locales tzdata iproute2 procps gzip
@@ -73,10 +72,13 @@ EOF
 systemctl daemon-reload
 systemctl enable cchouse-default-drop.service cchouse-firstboot.service
 
-echo "== [5/6] 清理局域网广播、联网探针与自动更新"
+echo "== [5/6] 清理局域网广播、联网探针与自动更新，恢复官方 apt 源"
 apt-get purge -y avahi-daemon cups-browsed unattended-upgrades 2>/dev/null || true
 apt-get autoremove -y
 apt-get clean
+if [ -f /etc/apt/sources.list ]; then
+  sed -i 's|mirrors\.ustc\.edu\.cn|deb.debian.org|g' /etc/apt/sources.list || true
+fi
 mkdir -p /etc/NetworkManager/conf.d
 cat >/etc/NetworkManager/conf.d/99-cchouse-no-connectivity-check.conf <<'EOF'
 [connectivity]

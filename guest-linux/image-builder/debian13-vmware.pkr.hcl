@@ -32,24 +32,38 @@ variable "output_dir" {
   default = "output-debian13-amd64"
 }
 
+variable "http_bind_address" {
+  type        = string
+  default     = ""
+  description = "Optional host IP to bind Packer HTTP server (e.g. VMnet8 host IP on Windows)"
+}
+
+variable "headless" {
+  type    = bool
+  default = true
+}
+
 source "vmware-iso" "debian13" {
-  iso_url          = var.debian_iso_url
-  iso_checksum     = var.debian_iso_checksum
+  iso_url              = var.debian_iso_url
+  iso_checksum         = var.debian_iso_checksum
   guest_os_type        = "debian12-64"
   network_adapter_type = "vmxnet3"
   cpus                 = 2
-  memory           = 2048
-  disk_size        = 24576
-  disk_type_id     = "0"
-  headless         = true
-  http_directory   = "http"
-  boot_wait        = "5s"
+  memory               = 2048
+  disk_size            = 24576
+  disk_type_id         = "0"
+  headless             = var.headless
+  http_directory       = "http"
+  http_bind_address    = var.http_bind_address
+  http_port_min        = 8800
+  http_port_max        = 8810
+  boot_wait            = "8s"
   boot_command = [
     "<esc><wait>",
     "auto url=http://{{ .HTTPIP }}:{{ .HTTPPort }}/preseed.cfg ",
+    "priority=critical locale=en_US.UTF-8 keymap=us ",
     "hostname=debian domain=local ",
-    "interface=auto ",
-    "DEBCONF_DEBUG=5 <enter>"
+    "interface=auto <enter>"
   ]
   ssh_username     = "root"
   ssh_password     = "cchouse-build-temp"

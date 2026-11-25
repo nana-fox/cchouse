@@ -116,9 +116,12 @@ systemctl start --no-block cchouse-mihomo.service cchouse-timesync.timer
 touch /var/lib/cchouse/firstboot.done
 systemctl disable cchouse-firstboot.service || true
 
-# 10. 离线安装 Claude Code CLI（置于 done 之后且非致命，避免 npm 异常拖垮整台客机）
+# 10. 离线安装 Claude Code 原生二进制（无需 Node.js，置于 done 之后且非致命）
 if [ -f "$MNT/claude-code.tgz" ]; then
-  if ! npm install -g --offline --no-audit --no-fund "$MNT/claude-code.tgz"; then
-    echo "警告：Claude Code 离线安装失败，请连网后按手册重试" >&2
+  if tar -xzf "$MNT/claude-code.tgz" -C /tmp package/claude && install -m 755 -o root -g root /tmp/package/claude /usr/local/bin/claude; then
+    rm -rf /tmp/package
+  else
+    rm -rf /tmp/package
+    echo "警告：Claude Code 离线安装失败，请按手册手动提取 package/claude 至 /usr/local/bin/claude" >&2
   fi
 fi

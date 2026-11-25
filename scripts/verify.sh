@@ -100,6 +100,9 @@ expect "SSH 禁止密码登录" "$(guest "awk '/^PasswordAuthentication/{print \
 expect "只有 claude 一个普通用户" "$(guest "dscl . -list /Users UniqueID" 2>/dev/null | awk '$2>=501{print $1}' | xargs)" "claude"
 expect "tart-guest-agent 在图形用户会话运行" "$(guest "launchctl print gui/\$(id -u)/org.cirruslabs.tart-guest-agent 2>/dev/null | awk '/^\tstate =/{print \$3}'")" "running"
 expect "tart exec 使用普通用户" "$("$TART_BIN" exec "$VM_NAME" id -un 2>/dev/null)" "claude"
+if guest "command -v claude >/dev/null 2>&1"; then
+  expect "Claude Code CLI 可执行（claude --version）" "$(guest "claude --version >/dev/null 2>&1 && echo ok || echo bad")" "ok"
+fi
 
 if [ $FAIL_CLOSED = 1 ]; then
   # 与实际网络调整共用 guard；只在即将停代理时开始 120 秒倒计时。
