@@ -36,7 +36,7 @@
       ],
       "sha256": "05d6951d79c9e9d5ce6cc8ea9133763b7c66aec1fc669ce0c6d89e2eb717c7df",
       "source_commit": "2cead1d2995cf27cd47723b04afc886f096e3072",
-      "import_command": "tart import <VM_NAME> cchouse-debian13-arm64.tvm",
+      "import_command": "tart import cchouse-debian13-arm64.tvm <VM_NAME>",
       "included_components": [
         "debian-13-base",
         "openbox",

@@ -39,7 +39,7 @@ cchouse_tart_import() {
   fi
   [ -f "$tvm" ] || { echo "TVM not found: $tvm"; return 1; }
   echo "Importing $tvm -> $vm..."
-  tart import "$vm" "$tvm"
+  tart import "$tvm" "$vm"  # tart import <path> <name>
 }
 
 cchouse_tart_clone() {

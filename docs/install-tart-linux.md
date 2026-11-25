@@ -60,7 +60,7 @@ python3 -I scripts/make-seed-iso.py "<PRIVATE_DIR>/rendered" "<PRIVATE_DIR>/seed
 
 ```bash
 shasum -a 256 cchouse-debian13-arm64.tvm
-tart import cchouse-debian13-arm64 cchouse-debian13-arm64.tvm
+tart import cchouse-debian13-arm64.tvm cchouse-debian13-arm64
 tart clone cchouse-debian13-arm64 "<VM_NAME>"
 ```
 
