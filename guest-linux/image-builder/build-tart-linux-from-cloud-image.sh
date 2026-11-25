@@ -139,11 +139,10 @@ MIRROR_CMD=""
 if [ "$USE_USTC_MIRROR" = "1" ]; then
   MIRROR_CMD="sed -i 's|deb\\.debian\\.org|mirrors.ustc.edu.cn|g; s|security\\.debian\\.org|mirrors.ustc.edu.cn|g' /etc/apt/sources.list /etc/apt/sources.list.d/* /etc/apt/mirrors/* 2>/dev/null || true; "
 fi
-BUILD_CMD="${MIRROR_CMD}TARGET_HYPERVISOR=tart MIHOMO_ARCH=arm64 MIHOMO_VERSION=${MIHOMO_VERSION} MIHOMO_SHA256=${MIHOMO_SHA256} MIHOMO_LOCAL_GZ=/tmp/mihomo.gz bash /tmp/cchouse-guest-linux/image-builder/build-debian13-golden.sh && rm -rf /tmp/cchouse-guest-linux /tmp/mihomo.gz"
+BUILD_CMD="${MIRROR_CMD}TARGET_HYPERVISOR=tart MIHOMO_ARCH=arm64 MIHOMO_VERSION=${MIHOMO_VERSION} MIHOMO_SHA256=${MIHOMO_SHA256} MIHOMO_LOCAL_GZ=/tmp/mihomo.gz bash /tmp/cchouse-guest-linux/image-builder/build-debian13-golden.sh && rm -rf /tmp/cchouse-guest-linux /tmp/mihomo.gz && sync && nohup sh -c 'sleep 2 && systemctl poweroff' >/dev/null 2>&1 &"
 ssh "${SSH_OPTS[@]}" "root@${GUEST_IP}" "$BUILD_CMD"
 
-echo "== [7/7] 正常关机并等待 Tart 落盘..."
-ssh "${SSH_OPTS[@]}" "root@${GUEST_IP}" "systemctl poweroff" 2>/dev/null || true
+echo "== [7/7] 等待正常关机与 Tart 落盘..."
 for _ in $(seq 1 30); do
   if ! kill -0 "$TART_PID" 2>/dev/null; then
     break

@@ -97,12 +97,21 @@ if [ -f "$MNT/authorized_keys" ] && id -u claude >/dev/null 2>&1; then
   install -m 600 -o claude -g claude "$MNT/authorized_keys" /home/claude/.ssh/authorized_keys
 fi
 
-# 7. Claude Code 环境变量与防自动更新
+# 7. Claude Code 环境变量与防自动更新（同时写 managed-settings.json 覆盖非登录 SSH shell）
 cat >/etc/profile.d/cchouse-claude.sh <<'EOF'
 export DISABLE_AUTOUPDATER=1
 export BROWSER=/usr/bin/chromium
 EOF
 chmod 644 /etc/profile.d/cchouse-claude.sh
+mkdir -p /etc/claude-code
+cat >/etc/claude-code/managed-settings.json <<'EOF'
+{
+  "env": {
+    "DISABLE_AUTOUPDATER": "1"
+  }
+}
+EOF
+chmod 644 /etc/claude-code/managed-settings.json
 
 # 8. 禁用局域网广播与自动更新（--no-block 防 sysinit 阶段死锁）
 systemctl disable --no-block avahi-daemon.service avahi-daemon.socket cups-browsed.service apt-daily.timer apt-daily-upgrade.timer 2>/dev/null || true

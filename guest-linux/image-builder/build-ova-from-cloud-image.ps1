@@ -270,21 +270,24 @@ if ($LASTEXITCODE -ne 0) { $ErrorActionPreference = $prevEap; throw "scp mihomo.
 
 $mirrorCmd = ""
 if ($UseUstcMirror) {
-  $mirrorCmd = "sed -i 's|deb\.debian\.org|mirrors.ustc.edu.cn|g; s|security\.debian\.org|mirrors.ustc.edu.cn|g' /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null || true; "
+  $mirrorCmd = "sed -i 's|deb\.debian\.org|mirrors.ustc.edu.cn|g; s|security\.debian\.org|mirrors.ustc.edu.cn|g' /etc/apt/sources.list /etc/apt/sources.list.d/* /etc/apt/mirrors/* 2>/dev/null || true; "
 }
-$buildCmd = "${mirrorCmd}MIHOMO_VERSION=$MihomoVersion MIHOMO_SHA256=$MihomoSha256 MIHOMO_LOCAL_GZ=/tmp/mihomo.gz bash /tmp/cchouse-guest-linux/image-builder/build-debian13-golden.sh && rm -rf /tmp/cchouse-guest-linux /tmp/mihomo.gz"
+$buildCmd = "${mirrorCmd}MIHOMO_VERSION=$MihomoVersion MIHOMO_SHA256=$MihomoSha256 MIHOMO_LOCAL_GZ=/tmp/mihomo.gz bash /tmp/cchouse-guest-linux/image-builder/build-debian13-golden.sh && rm -rf /tmp/cchouse-guest-linux /tmp/mihomo.gz && sync && nohup sh -c 'sleep 2 && systemctl poweroff' >/dev/null 2>&1 &"
 & ssh.exe @sshOpts "root@$guestIp" $buildCmd
 $rc = $LASTEXITCODE
 $ErrorActionPreference = $prevEap
 if ($rc -ne 0) { throw "build-debian13-golden.sh 执行失败" }
 
-Write-Host "== [7/7] 关机、清理临时光驱并导出黄金 .ova..."
+Write-Host "== [7/7] 等待关机、清理临时光驱并导出黄金 .ova..."
 $prevEap = $ErrorActionPreference; $ErrorActionPreference = "Continue"
-& ssh.exe @sshOpts "root@$guestIp" "systemctl poweroff" 2>$null
 for ($i = 0; $i -lt 30; $i++) {
   Start-Sleep 2
   $running = & $vmrun -T ws list
   if (-not ($running -match [regex]::Escape($vmx))) { break }
+}
+if ((& $vmrun -T ws list) -match [regex]::Escape($vmx)) {
+  & $vmrun -T ws stop $vmx hard 2>$null | Out-Null
+  Start-Sleep 2
 }
 $ErrorActionPreference = $prevEap
 

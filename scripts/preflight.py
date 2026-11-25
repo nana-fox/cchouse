@@ -2,14 +2,16 @@
 """cchouse 跨平台环境与配置自检（面向用户与外部 AI Agent，输出脱敏 JSON）。
 
 用法：
-  python3 -I scripts/preflight.py [--route auto|macos-tart|vmware-linux] [--env <instance.env>] [--state <state.json>]
+  python3 -I scripts/preflight.py [--route auto|macos-tart|tart-linux|vmware-linux] [--env <instance.env>] [--state <state.json>]
 """
 import argparse
 import ctypes
 import datetime
+import ipaddress
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -43,6 +45,35 @@ def find_vmrun():
     for p in VMRUN_CANDIDATES:
         if os.path.isfile(p):
             return p
+    return None
+
+
+def detect_vmnet8_cidr():
+    """在 Windows (Workstation) 或 macOS (Fusion) 上尽力探测 VMware NAT (vmnet8) 网段。"""
+    sys_name = platform.system()
+    try:
+        if sys_name == "Windows":
+            ps = (
+                "Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue "
+                "| Where-Object { $_.InterfaceAlias -like '*VMnet8*' } "
+                "| Select-Object -First 1 "
+                "| ForEach-Object { \"$($_.IPAddress)/$($_.PrefixLength)\" }"
+            )
+            out = subprocess.check_output(
+                ["powershell", "-NoProfile", "-Command", ps], text=True, timeout=5
+            ).strip()
+            if out and "/" in out:
+                return str(ipaddress.ip_network(out, strict=False))
+        elif sys_name == "Darwin":
+            net_cfg = Path("/Library/Preferences/VMware Fusion/networking")
+            if net_cfg.is_file():
+                text = net_cfg.read_text(encoding="utf-8", errors="ignore")
+                m_sub = re.search(r"VNET_8_HOSTONLY_SUBNET\s+(\d+\.\d+\.\d+\.\d+)", text)
+                m_mask = re.search(r"VNET_8_HOSTONLY_NETMASK\s+(\d+\.\d+\.\d+\.\d+)", text)
+                if m_sub and m_mask:
+                    return str(ipaddress.ip_network(f"{m_sub.group(1)}/{m_mask.group(1)}", strict=False))
+    except Exception:
+        return None
     return None
 
 
@@ -137,8 +168,8 @@ def validate_env_file(env_path, route):
     default_stripe = "off" if (guest_os == "linux" and exit_mode == "single") else "front"
     stripe_mode = env.get("STRIPE_EXIT_MODE", default_stripe).strip().lower()
 
-    if route == "vmware-linux" and guest_os != "linux":
-        errors.append(f"ROUTE_OS_MISMATCH: vmware-linux 路线要求 GUEST_OS=linux，当前为 {guest_os}")
+    if route in ("vmware-linux", "tart-linux") and guest_os != "linux":
+        errors.append(f"ROUTE_OS_MISMATCH: {route} 路线要求 GUEST_OS=linux，当前为 {guest_os}")
     if route == "macos-tart" and guest_os != "macos":
         errors.append(f"ROUTE_OS_MISMATCH: macos-tart 路线要求 GUEST_OS=macos，当前为 {guest_os}")
 
@@ -179,12 +210,22 @@ def validate_env_file(env_path, route):
         if not env.get(req):
             warnings.append(f"EMPTY_FIELD: {req} 为空（验收前必须填写）")
 
+    for cidr_key in ("HOME_LAN_CIDR", "VMNET_CIDR"):
+        val = env.get(cidr_key, "").strip()
+        if val:
+            try:
+                net = ipaddress.ip_network(val, strict=False)
+                if net.version != 4:
+                    errors.append(f"INVALID_CIDR: {cidr_key}={val} 仅支持 IPv4 CIDR")
+            except ValueError:
+                errors.append(f"INVALID_CIDR: {cidr_key}={val} 不是有效 CIDR")
+
     return errors, warnings
 
 
 def main():
     parser = argparse.ArgumentParser(description="cchouse preflight checker")
-    parser.add_argument("--route", choices=("auto", "macos-tart", "vmware-linux"), default="auto")
+    parser.add_argument("--route", choices=("auto", "macos-tart", "tart-linux", "vmware-linux"), default="auto")
     parser.add_argument("--env", dest="env_path", default=None)
     parser.add_argument("--state", dest="state_path", default=None)
     parser.add_argument("--set-step", dest="set_step", default=None)
@@ -200,13 +241,19 @@ def main():
 
     if args.route == "auto":
         if sys_name == "Darwin" and arch == "arm64":
-            route = "macos-tart"
+            env_guest_os = ""
+            if args.env_path and os.path.isfile(args.env_path):
+                try:
+                    env_guest_os = render_mod.load_env(args.env_path).get("GUEST_OS", "").strip().lower()
+                except SystemExit:
+                    env_guest_os = ""
+            route = "tart-linux" if env_guest_os == "linux" else "macos-tart"
         else:
             route = "vmware-linux"
     else:
         route = args.route
 
-    disk_probe_path = tart_home_dir() if (route == "macos-tart" and tart_home_dir().exists()) else ROOT
+    disk_probe_path = tart_home_dir() if (route in ("macos-tart", "tart-linux") and tart_home_dir().exists()) else ROOT
     disk_gb = round(shutil.disk_usage(disk_probe_path).free / (1024 ** 3), 1)
 
     errors = []
@@ -241,11 +288,20 @@ def main():
                 warnings.append(f"LOW_DISK: Tart 目标卷剩余 {disk_gb} GB，建议 ≥ 50 GB（检测到本地缓存底包，可基于 CoW 克隆继续）")
             else:
                 warnings.append(f"LOW_DISK: Tart 目标卷剩余 {disk_gb} GB，建议 ≥ 50 GB（首次拉取镜像空间较紧张，建议预留余量或使用外置 TART_HOME）")
+    elif route == "tart-linux":
+        if sys_name != "Darwin" or arch != "arm64":
+            errors.append("TART_REQUIRES_APPLE_SILICON: tart-linux 仅支持 Apple Silicon macOS")
+        if not tart_path:
+            status = "HUMAN_WAIT"
+            errors.append("MISSING_TART: 未检测到 tart，请先执行 brew install cirruslabs/cli/tart")
+            next_action = "install_tart"
+        if disk_gb < 15:
+            warnings.append(f"LOW_DISK: Tart 目标卷剩余 {disk_gb} GB，Debian 13 arm64 客机建议 ≥ 15 GB")
     elif route == "vmware-linux":
         if sys_name == "Darwin" and arch == "arm64":
             warnings.append(
-                "ARM64_VMWARE_NOTE: v2.0 黄金镜像优先提供 amd64（Windows/Intel Mac）；"
-                "Apple Silicon Mac 建议优先使用 macos-tart 路线"
+                "ARM64_VMWARE_NOTE: vmware-linux 黄金镜像为 amd64（Windows/Intel Mac）；"
+                "Apple Silicon Mac 建议使用 tart-linux（轻量）或 macos-tart（高拟真）路线"
             )
         if not vmrun_path:
             status = "HUMAN_WAIT"
@@ -273,6 +329,7 @@ def main():
     if args.set_next_action:
         next_action = args.set_next_action
 
+    detected_vmnet = detect_vmnet8_cidr() if route == "vmware-linux" else None
     result = {
         "ok": ok,
         "status": status,
@@ -284,6 +341,7 @@ def main():
             "python": platform.python_version(),
             "tart_found": bool(tart_path),
             "vmrun_found": bool(vmrun_path),
+            "detected_vmnet_cidr": detected_vmnet,
         },
         "route": route,
         "errors": errors,

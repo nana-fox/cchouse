@@ -2,7 +2,7 @@
 
 本手册面向 **Windows（x64，家庭版与专业版通用）** 与 **Intel Mac**，采用免费版 VMware + 预装好的 Debian 13 黄金镜像（`guest-linux/`），只覆盖网页版与 Claude Code CLI（不含 Claude Desktop）。
 
-> Apple Silicon Mac 优先走 [build.md](build.md)（Tart + macOS 客机）。
+> Apple Silicon Mac 优先走 [install-tart-linux.md](install-tart-linux.md)（Tart + Debian 13 arm64 轻量路线）或 [build.md](build.md)（Tart + macOS 客机）。
 
 ---
 
@@ -27,14 +27,15 @@
 python3 -I scripts/preflight.py --route vmware-linux
 ```
 
-确认输出 JSON 中 `ok: true`（已检测到 `vmrun` 路径与足够磁盘空间），再在**私有目录**准备 `instance.env`（不要放进仓库）：
+确认输出 JSON 中 `ok: true`（已检测到 `vmrun` 路径、足够磁盘空间，并记录 `host.detected_vmnet_cidr` 作为实际 VMware NAT 网段），再在**私有目录**准备 `instance.env`（不要放进仓库）：
 
 - Windows 示例：`%LOCALAPPDATA%\cchouse\<TAG>\instance.env`
 - macOS 示例：`~/Library/Application Support/cchouse/<TAG>/instance.env`
 
-复制 `instance.env.linux.example` 并填写，随后校验与渲染：
+复制 `instance.env.linux.example` 并填写（**渲染前务必把 `VMNET_CIDR` 改成 `preflight.py` 探测到的实际 `vmnet8` 网段**，否则 `firstboot` 会把错误的 SSH 白名单写死进 `nftables`），同时拉取校验后的 Claude Code 原生二进制包（无需 Node.js），再校验与渲染：
 
 ```bash
+python3 -I scripts/fetch-claude-code.py --platform linux-x64 --out "<PRIVATE_DIR>/claude-code.tgz"
 python3 -I scripts/preflight.py --route vmware-linux --env "<PRIVATE_DIR>/instance.env"
 python3 -I scripts/render.py "<PRIVATE_DIR>/instance.env" "<PRIVATE_DIR>/rendered"
 ```
@@ -43,7 +44,7 @@ python3 -I scripts/render.py "<PRIVATE_DIR>/instance.env" "<PRIVATE_DIR>/rendere
 
 ## 阶段 2：获取黄金镜像（`.ova`）并导入
 
-黄金镜像为 **Debian 13 (`amd64`)**，预装 Openbox 极简桌面 + Chromium + Node.js + `mihomo` + `nftables` + `open-vm-tools`，**不含任何凭据，且不含 Claude Code（避免非开源包再分发风险）**。
+黄金镜像为 **Debian 13 (`amd64`)**，预装 Openbox 极简桌面 + LightDM 自动登录 + Chromium + `mihomo` + `nftables` + `open-vm-tools`（Claude Code 为独立原生二进制，**无需 Node.js**），**不含任何凭据，且不含 Claude Code（避免非开源包再分发风险）**。
 
 镜像出厂必须满足以下**空状态断言**（防止批量交付撞脸）：
 - `/etc/machine-id` 为空文件
@@ -69,18 +70,18 @@ python3 -I scripts/render.py "<PRIVATE_DIR>/instance.env" "<PRIVATE_DIR>/rendere
      ```
 2. **制作 `CCHOUSE` 卷标配置 ISO**：
    ```bash
-   python3 -I scripts/make-seed-iso.py "<PRIVATE_DIR>/rendered" "<PRIVATE_DIR>/seed.iso" [--claude-tarball "<PRIVATE_DIR>/claude-code.tgz"]
+   python3 -I scripts/make-seed-iso.py "<PRIVATE_DIR>/rendered" "<PRIVATE_DIR>/seed.iso" --claude-tarball "<PRIVATE_DIR>/claude-code.tgz"
    ```
    将 `seed.iso` 挂载到虚拟光驱（确保光驱设置为开机连接）。
    - **不采用 `cloud-init`**，**不采用 VMware `guestinfo.*`**。
 3. **首次开机并在控制台确认注入完成（不要用 `nogui` 盲等）**：
    - 启动虚拟机（Workstation 用 `-T ws`，Fusion 用 `-T fusion`），在 VMware 控制台确认：
-     - `/var/lib/cchouse/firstboot.done` 已生成；
+     - `/var/lib/cchouse/firstboot.done` 已生成（若失败，控制台登录页或 `systemctl status cchouse-firstboot`、`/var/lib/cchouse/firstboot.log` 会显示原因）；
      - 在控制台查看客机新生成的 SSH 主机公钥（`cat /etc/ssh/ssh_host_ed25519_key.pub`）。
 4. **销毁明文、接通网卡并录入 `known_hosts`**：
    - 关机或卸载虚拟光驱，**立即删除 `seed.iso` 与 `<PRIVATE_DIR>/rendered/`**；
    - 将 `.vmx` 改为 `ethernet0.startConnected = "TRUE"` 后启动（或实测 `vmrun -T ws|fusion connectNamedDevice "<VMX_PATH>" ethernet0`）；
-   - 在控制台 `ip -4 addr` 确认 NAT DHCP 分配的 `GUEST_IP` 与网段（回填 `instance.env` 的 `GUEST_IP` / `VMNET_CIDR`），并将步骤 3 核对过的 SSH 主机公钥写入 `<PRIVATE_DIR>/known_hosts`。
+   - 在控制台 `ip -4 addr` 确认 NAT DHCP 分配的 `GUEST_IP`（回填 `instance.env` 的 `GUEST_IP`），并将步骤 3 核对过的 SSH 主机公钥写入 `<PRIVATE_DIR>/known_hosts`。
 
 ---
 

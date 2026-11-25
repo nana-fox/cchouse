@@ -18,12 +18,26 @@ for _ in $(seq 1 30); do
   fi
   sleep 0.5
 done
-[ -n "$DEV" ] || { echo "未找到 LABEL=CCHOUSE 配置光盘，保持默认全断退出" >&2; exit 1; }
+LOG="/var/lib/cchouse/firstboot.log"
+ISSUE="/etc/issue.d/cchouse.issue"
+mkdir -p /var/lib/cchouse /etc/issue.d
+
+fail_visible() {
+  local msg="$1"
+  echo "$msg" | tee -a "$LOG" >&2
+  printf '\n[cchouse firstboot FAILED] %s\nSee /var/lib/cchouse/firstboot.log or: systemctl status cchouse-firstboot\n\n' "$msg" >"$ISSUE"
+  exit 1
+}
+
+[ -n "$DEV" ] || fail_visible "未找到 LABEL=CCHOUSE 配置光盘，保持默认全断退出"
 
 MNT="/run/cchouse-seed"
 mkdir -p "$MNT"
-mount -o ro "$DEV" "$MNT"
+mount -o ro "$DEV" "$MNT" || fail_visible "挂载 LABEL=CCHOUSE 失败"
 trap 'umount "$MNT" 2>/dev/null || true' EXIT
 
-[ -f "$MNT/firstboot.sh" ] || { echo "配置光盘缺少 firstboot.sh，保持断网退出" >&2; exit 1; }
-bash "$MNT/firstboot.sh" "$MNT"
+[ -f "$MNT/firstboot.sh" ] || fail_visible "配置光盘缺少 firstboot.sh，保持断网退出"
+if ! bash "$MNT/firstboot.sh" "$MNT" 2>&1 | tee -a "$LOG"; then
+  fail_visible "firstboot.sh 执行失败，已保持默认全断"
+fi
+rm -f "$ISSUE"

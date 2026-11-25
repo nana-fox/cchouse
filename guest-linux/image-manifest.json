@@ -1,29 +1,60 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "guest_os": "debian-13",
-  "arch": "amd64",
   "image_version": "unreleased-dev",
-  "format": "ova",
-  "urls": [],
-  "sha256": "",
-  "minisign_pubkey": "",
-  "included_components": [
-    "debian-13-base",
-    "openbox",
-    "chromium",
-    "nodejs-lts",
-    "mihomo",
-    "nftables",
-    "open-vm-tools"
+  "artifacts": [
+    {
+      "arch": "amd64",
+      "route": "vmware-linux",
+      "format": "ova",
+      "filename": "cchouse-debian13-amd64.ova",
+      "size_bytes": 0,
+      "urls": [],
+      "sha256": "",
+      "included_components": [
+        "debian-13-base",
+        "openbox",
+        "lightdm-autologin",
+        "chromium",
+        "mihomo-v1.19.19",
+        "nftables",
+        "systemd-networkd-dhcp",
+        "open-vm-tools"
+      ]
+    },
+    {
+      "arch": "arm64",
+      "route": "tart-linux",
+      "format": "tvm",
+      "filename": "cchouse-debian13-arm64.tvm",
+      "size_bytes": 0,
+      "urls": [],
+      "sha256": "",
+      "import_command": "tart import <VM_NAME> cchouse-debian13-arm64.tvm",
+      "included_components": [
+        "debian-13-base",
+        "openbox",
+        "lightdm-autologin",
+        "chromium",
+        "mihomo-v1.19.19",
+        "nftables",
+        "systemd-networkd-dhcp"
+      ]
+    }
   ],
   "excluded_components": [
-    "claude-code (installed offline at firstboot from host-verified npm tarball)"
+    "claude-code (standalone native binary installed offline at firstboot from host-verified npm tarball; no Node.js required)"
   ],
   "empty_state_assertions": [
     "/etc/machine-id must be empty (0 bytes)",
+    "/etc/hostname must be empty (0 bytes)",
     "/etc/ssh/ssh_host_* must not exist",
     "/home/claude/.config/chromium must not exist",
     "/home/claude/.claude* must not exist",
+    "cloud-init and 50-cloud-init/90-cloud-init-users leftovers must be purged",
+    "systemd-networkd IPv4 DHCP config (/etc/systemd/network/20-cchouse-dhcp.network) must be present and enabled",
+    "root password hash must be locked and /root/.ssh/authorized_keys must not exist",
+    "LightDM autologin for claude must be configured",
     "/etc/cchouse/nftables-default-drop.conf must be active before network-pre.target"
   ]
 }

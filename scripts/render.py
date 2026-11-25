@@ -430,6 +430,24 @@ def render_linux(env, out, exit_mode, stripe_mode, allow_resolve):
         sys.exit("EXIT_MODE 必须为 single 或 chain")
 
     env["NFT_EGRESS_RULES"] = format_nft_egress_rules(env["MIHOMO_USER"], targets)
+    raw_cidrs = [
+        env.get("VMNET_CIDR", "").strip(),
+        env.get("HOME_LAN_CIDR", "").strip(),
+        "192.168.64.0/24",
+    ]
+    parsed_nets = []
+    for cidr in raw_cidrs:
+        if not cidr:
+            continue
+        try:
+            net = ipaddress.ip_network(cidr, strict=False)
+        except ValueError:
+            sys.exit(f"SSH 白名单网段不是有效 CIDR：{cidr}")
+        if net.version != 4:
+            sys.exit(f"SSH 白名单仅支持 IPv4 CIDR：{cidr}")
+        parsed_nets.append(net)
+    collapsed = list(ipaddress.collapse_addresses(parsed_nets))
+    env["SSH_NETS"] = ", ".join(str(n) for n in collapsed)
 
     rendered = [("config.yaml", config_text)]
     for src in sorted(GUEST_LINUX.iterdir()):

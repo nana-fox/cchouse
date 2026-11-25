@@ -379,6 +379,33 @@ class TestCchouseV2(unittest.TestCase):
                 self.assertNotIn("缺 TAG", cp_v.stderr)
                 self.assertIn("期望出口 198.51.100.55", cp_v.stdout)
 
+    def test_ssh_nets_collapse_and_audit_fixes(self):
+        with tempfile.TemporaryDirectory() as td:
+            # 重复 + 重叠 + 带主机位 CIDR 均应自动折叠规范化
+            env = base_single_linux_env()
+            env["VMNET_CIDR"] = "192.168.64.5/24"
+            env["HOME_LAN_CIDR"] = "192.168.0.0/16"
+            env_p = Path(td) / "overlap.env"
+            out_d = Path(td) / "out_overlap"
+            write_env(env_p, env)
+            cp = subprocess.run(
+                [sys.executable, "-I", str(ROOT / "scripts" / "render.py"), str(env_p), str(out_d)],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            self.assertEqual(cp.returncode, 0, cp.stderr)
+            nft = (out_d / "nftables.conf").read_text(encoding="utf-8")
+            self.assertIn("elements = { 192.168.0.0/16 }", nft)
+
+            # firstboot 写入 managed-settings.json，assert-empty-state 校验持久化 DHCP
+            fb = (ROOT / "guest-linux" / "firstboot.sh").read_text(encoding="utf-8")
+            self.assertIn("/etc/claude-code/managed-settings.json", fb)
+            aes = (ROOT / "guest-linux" / "image-builder" / "assert-empty-state.sh").read_text(encoding="utf-8")
+            self.assertIn("20-cchouse-dhcp.network", aes)
+            self.assertIn("systemd-networkd.service", aes)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -82,9 +82,24 @@ EOF
 systemctl daemon-reload
 systemctl enable cchouse-default-drop.service cchouse-firstboot.service
 
-echo "== [5/6] 清理局域网广播、联网探针、cloud-init 与自动更新，恢复官方 apt 源"
+echo "== [5/6] 配置持久化 IPv4 DHCP（防移除 cloud-init 后断网），清理局域网广播与自动更新"
+mkdir -p /etc/systemd/network
+cat >/etc/systemd/network/20-cchouse-dhcp.network <<'EOF'
+[Match]
+Name=en* eth*
+
+[Network]
+DHCP=ipv4
+IPv6AcceptRA=no
+LinkLocalAddressing=no
+
+[DHCPv4]
+UseDNS=no
+EOF
+systemctl enable systemd-networkd.service
 apt-get purge -y avahi-daemon cups-browsed unattended-upgrades cloud-init cloud-guest-utils 2>/dev/null || true
 rm -rf /etc/cloud /var/lib/cloud
+rm -f /etc/netplan/50-cloud-init.yaml /etc/ssh/sshd_config.d/50-cloud-init.conf /etc/sudoers.d/90-cloud-init-users
 apt-get autoremove -y
 apt-get clean
 sed -i 's|mirrors\.ustc\.edu\.cn|deb.debian.org|g' /etc/apt/sources.list /etc/apt/sources.list.d/* /etc/apt/mirrors/* 2>/dev/null || true
