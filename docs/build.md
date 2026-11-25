@@ -6,8 +6,16 @@
 
 - 已测试的版本见 [architecture.md#已测试的版本](architecture.md#已测试的版本)。
 - Apple Silicon Mac，已装 tart（`brew install cirruslabs/cli/tart`，或官方 release 放外置盘 + `host/tart-wrapper.sh.example`）。
-- 磁盘：每台约 30 GB（APFS 克隆共享块，实际增量更小）。
-- 准备好 mihomo（darwin-arm64）和 tart-guest-agent 二进制，核对官方 sha256。
+- 磁盘：每台约 30 GB（APFS 克隆共享块，实际增量更小）；本机内置盘空间不足或需多机测试时，可将 `TART_HOME` 指到外置 SSD（见 `host/tart-wrapper.sh.example`）。
+- 准备好 `mihomo`（`darwin-arm64`）和 `tart-guest-agent` 二进制，并在宿主机解压后核对 [architecture.md#已测试的版本](architecture.md#已测试的版本) 中的官方 sha256：
+  ```bash
+  # 示例：下载已测版本并解压到临时目录，核对 sha256（以 architecture.md 为准）
+  curl -fLO https://github.com/MetaCubeX/mihomo/releases/download/v1.19.19/mihomo-darwin-arm64-v1.19.19.gz
+  gunzip -c mihomo-darwin-arm64-v1.19.19.gz > mihomo && chmod +x mihomo
+  curl -fLO https://github.com/cirruslabs/tart-guest-agent/releases/download/v0.15.0/tart-guest-agent-darwin-all.tar.gz
+  tar -xzf tart-guest-agent-darwin-all.tar.gz tart-guest-agent
+  shasum -a 256 mihomo tart-guest-agent
+  ```
 - 复制旧实例参数后，逐项核对本机实际的 `TART_BIN`、`VM_STORAGE`、`RUN_LOG`、SSH 路径和 `NETWORK_MODE`。不要把另一台机器的外置盘等待路径带进来；ex02 曾因此在已有虚拟机文件的情况下等错目录。远程只部署运行所需文件，源码和操作手册留控制端。
 - Git 中的脚本带可执行位，临时上传后仍可能变为普通文件。先检查权限；需要时用 `/bin/bash <脚本> <参数>` 执行，不能把 `Permission denied` 当成脚本已运行。桌面 `.command` 入口本身须可执行，并指向最终保留的运行文件。
 
@@ -15,7 +23,7 @@
 
 1. **出口**：一个没被别的账号用过的固定 ISP IP。先在客机外用 ipinfo / ip-api 查归属地、运营商、是否标为 proxy，把**归属地时区**记下来作为 `TIMEZONE`，ipinfo 的 `org` 第一段（如 `AS33659`）作为 `EXPECTED_EGRESS_ASN`。
    再多查几家地理库（ip-api、db-ip、ipapi.is、ip2location），**优先选各家结果都在同一时区的 IP**；有分歧的要记下来，见 [architecture.md#已知限制](architecture.md#已知限制)。
-2. **入口**：在自建前置上给这台环境加一个 UUID（`xray-front-client add <tag>`，REALITY 和经 Cloudflare 两个入口同时生效，见 [front.md](front.md)）；`FRONT_*` 与 `FRONT_CF_*`（服务器 IP、域名、WS 路径，从私有目录 `tmh-front/front.env` 抄）填进 `instance.env`，缺了 `render.py` 会直接报错；备用的两个机场入口（WS+TLS 一个、Reality 一个）。国内直连不通 FRONT 时，实际在用的是 `Front-CF`，部署后确认 `Fixed-ISP` 与 `Stripe` 两组选中的都是它。
+2. **入口**（v1 macOS 路线当前仅支持 `EXIT_MODE=chain`，`STRIPE_EXIT_MODE` 为 `front` 或 `tmh-chain`）：在自建前置上给这台环境加一个 UUID（`xray-front-client add <tag>`，REALITY 和经 Cloudflare 两个入口同时生效，见 [front.md](front.md)）；将 `FRONT_*` 与 `FRONT_CF_*`（服务器 IP、域名、WS 路径，取自部署前置时保存的私有配置记录，见 [front.md](front.md)）填进 `instance.env`，缺了 `render.py` 会直接报错；备用的两个机场入口（WS+TLS 一个、Reality 一个）。国内直连不通 FRONT 时，实际在用的是 `Front-CF`，部署后确认 `Fixed-ISP` 与 `Stripe` 两组选中的都是它。
 3. 按 [README 快速上手](../README.md#快速上手) 建私有目录，填 `instance.env`。`EXPECTED_EGRESS_IP` = 出口 IP。
 4. 生成宿主到客机的 SSH 密钥：`ssh-keygen -t ed25519 -N '' -f "$D/id_ed25519"`。
 5. 生成 claude 账户密码，存进私有目录（600）和密码管理器：
@@ -25,9 +33,13 @@
 
 ```bash
 . "$D/instance.env"
-"$TART_BIN" clone ghcr.io/cirruslabs/macos-tahoe-vanilla:<版本> "$VM_NAME"
+# 已测基础镜像版本见 architecture.md#已测试的版本
+"$TART_BIN" clone ghcr.io/cirruslabs/macos-tahoe-vanilla:26.6.2 "$VM_NAME"
 "$TART_BIN" set "$VM_NAME" --cpu 4 --memory 6144 --disk-size 80 --random-serial --random-mac
 ```
+
+> **多机 / 重复测试省空间建议**：首次可先拉一份未改动的原版基础镜像留作本地底包（例如 `"$TART_BIN" clone ghcr.io/cirruslabs/macos-tahoe-vanilla:26.6.2 macos-tahoe-vanilla-26.6.2`），后续新建实例直接从本地底包 `tart clone`，借助 APFS 写时复制（CoW）几乎不额外占磁盘空间。
+> **注意区分**：已配置完成并删除 `admin` 的成品快照（`CLEAN_SNAPSHOT`）以及已登录账号的恢复点（`RECOVERY_SNAPSHOT`）都**不能**当作新机原版底包来重跑本手册第 2–6 步。
 
 ## 3. 先用 NAT 模式做系统设置（不登录任何账号）
 
