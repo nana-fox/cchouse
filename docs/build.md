@@ -9,8 +9,9 @@
 - 磁盘：每台约 30 GB（APFS 克隆共享块，实际增量更小）；本机内置盘空间不足或需多机测试时，可将 `TART_HOME` 指到外置 SSD（见 `host/tart-wrapper.sh.example`）。
 - 准备好 `mihomo`（`darwin-arm64`）和 `tart-guest-agent` 二进制，并在宿主机解压后核对 [architecture.md#已测试的版本](architecture.md#已测试的版本) 中的官方 sha256：
   ```bash
-  # 示例：下载已测版本并解压到临时目录，核对 sha256（以 architecture.md 为准）
+  # 示例：下载已测版本并校验 .gz 与解压后二进制 sha256（以 architecture.md 为准）
   curl -fLO https://github.com/MetaCubeX/mihomo/releases/download/v1.19.19/mihomo-darwin-arm64-v1.19.19.gz
+  shasum -a 256 mihomo-darwin-arm64-v1.19.19.gz
   gunzip -c mihomo-darwin-arm64-v1.19.19.gz > mihomo && chmod +x mihomo
   curl -fLO https://github.com/cirruslabs/tart-guest-agent/releases/download/v0.15.0/tart-guest-agent-darwin-all.tar.gz
   tar -xzf tart-guest-agent-darwin-all.tar.gz tart-guest-agent

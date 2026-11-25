@@ -69,7 +69,7 @@ Stripe 默认从所选前置直出；链式模式从 FrontVPS 出站。因此使
 | xray-core（前置服务端） | 26.3.27 | 26.10.21 起与 mihomo 的 REALITY 握手失败，见 front.md |
 | tart | 2.41.1 | 宿主 |
 | 客机镜像 | `ghcr.io/cirruslabs/macos-tahoe-vanilla:26.6.2` | macOS 26.6.2 |
-| mihomo | Meta v1.19.19 darwin-arm64 | sha256 `bb188eef5a0a44eaf461b3b13cea7fcc04589d2df1d9dc781dab4721f180ede7` |
+| mihomo | Meta v1.19.19 darwin-arm64（官方 `mihomo-darwin-arm64-v1.19.19.gz`） | `.gz` sha256 `29fdde431e69e17f4e8e7cda2046402c4cba254a26ad66ce17e37ad946490dc0`；解压后二进制 sha256 `c6f6dab68c9ea54b754d3f1544aa1835f4d3913726aed96914bd23b182ecbb47`（官方哈希，待新机 `verify.sh --fail-closed` 复验） |
 | tart-guest-agent | 0.15.0 | sha256 `8bbbffe09d207164cbabc06a2b2f5085e041290e75247d28db0a0e1fa852646e` |
 
 换版本后要在实际环境跑一遍 `verify.sh --fail-closed` 再更新这张表。
