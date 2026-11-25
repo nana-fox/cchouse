@@ -96,7 +96,7 @@ const isPrivate = ip => /^(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[0
   const leaked = [...ips].filter(ip => !isPrivate(ip) && ip !== EXPECT_IP);
   row(leaked.length === 0, "WebRTC leak", leaked.length ? "Other public IP exposed: " + leaked.join(", ") : "No other public IP exposed");
   const v = document.getElementById("verdict");
-  if (results.every(Boolean)){ v.className = "ok"; v.textContent = "All good — you can sign in."; }
+  if (results.every(Boolean)){ v.className = "ok"; v.textContent = "All network checks passed."; }
   else { v.className = "bad"; v.textContent = "Do NOT sign in. 稍后刷新或运行 verify-linux.sh --fail-closed。"; }
 })();
 </script></body></html>

@@ -1,6 +1,6 @@
 # 手动安装与进阶说明
 
-> 一般用户请直接看 [README](../README.md) 的「快速开始」。本页给想手动控制每一步、要用链式代理、或在维护 v1 macOS 客机的人。
+> 本页给想手动控制每一步、要用链式代理、或在维护 v1 macOS 客机的人。一条命令安装见 [README](../README.md) 的「快速开始」。
 
 ---
 
@@ -49,10 +49,17 @@ python3 -I scripts/preflight.py
 D=~/Library/Application\ Support/cchouse/<TAG>; mkdir -p "$D"; chmod 700 "$D"
 cp instance.env.linux.example "$D/instance.env"; chmod 600 "$D/instance.env"
 
-# 3. 渲染客机文件（输出含明文凭据，注入后立即删除）
+# 3. 渲染前必须先填好 instance.env（渲染器缺 SSH_PUBKEY 会直接退出）：
+#    a) 生成专用 SSH 密钥，把 .pub 单行内容填入 SSH_PUBKEY
+ssh-keygen -t ed25519 -f "$D/id_ed25519" -N ""
+#    b) 填节点协议/地址/认证参数（SINGLE_*）与预期出口 EXPECTED_EGRESS_IP/LOC/ASN、TIMEZONE
+#    c) VMware 路线把 VMNET_CIDR 改成自检探测到的实际 NAT 网段
+python3 -I scripts/preflight.py --env "$D/instance.env"
+
+# 4. 渲染客机文件（输出含明文凭据，注入后立即删除）
 python3 -I scripts/render.py "$D/instance.env" "$D/rendered"
 
-# 4. 按对应路线文档部署并验收
+# 5. 按对应路线文档部署并验收（退出码为 0 后，再到虚拟机桌面打开检查页复核）
 #    v2 Linux:      scripts/verify-linux.sh "$D/instance.env" --fail-closed
 #    v1 macOS Tart: scripts/verify.sh "$D/instance.env" --fail-closed
 ```

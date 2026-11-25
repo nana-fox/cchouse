@@ -49,7 +49,11 @@ python3 -I scripts/preflight.py --route vmware-linux
 - Windows 示例：`%LOCALAPPDATA%\cchouse\<TAG>\instance.env`
 - macOS 示例：`~/Library/Application Support/cchouse/<TAG>/instance.env`
 
-复制 `instance.env.linux.example` 并填写（**渲染前务必把 `VMNET_CIDR` 改成 `preflight.py` 探测到的实际 `vmnet8` 网段**，否则 `firstboot` 会把错误的 SSH 白名单写死进 `nftables`；键盘布局由 `GUEST_KEYBOARD` 控制，默认 `us`，可按需改为 `gb`/`de`/`jp` 等 2–3 位小写 XKB 代码），同时拉取校验后的 Claude Code 原生二进制包（无需 Node.js），再校验与渲染：
+按下面顺序准备，**全部完成后再渲染**（渲染器缺 `SSH_PUBKEY` 会直接退出）：
+
+1. **生成专用 SSH 密钥**：`ssh-keygen -t ed25519 -f "<PRIVATE_DIR>/id_ed25519" -N ""`，将 `.pub` 单行内容填入 `instance.env` 的 `SSH_PUBKEY`（**必填**，firstboot 会关闭密码登录）。
+2. **填节点与预期出口**：节点协议、地址和认证参数（`SINGLE_TYPE`、`SINGLE_SERVER`、`SINGLE_PORT` 等），以及预期出口 `EXPECTED_EGRESS_IP` / `EXPECTED_EGRESS_LOC` / `EXPECTED_EGRESS_ASN` 和对应的 `TIMEZONE`。
+3. **其余参数**：复制 `instance.env.linux.example` 并填写（**渲染前务必把 `VMNET_CIDR` 改成 `preflight.py` 探测到的实际 `vmnet8` 网段**，否则 `firstboot` 会把错误的 SSH 白名单写死进 `nftables`；键盘布局由 `GUEST_KEYBOARD` 控制，默认 `us`，可按需改为 `gb`/`de`/`jp` 等 2–3 位小写 XKB 代码），同时拉取校验后的 Claude Code 原生二进制包（无需 Node.js），再校验与渲染：
 
 ```bash
 python3 -I scripts/fetch-claude-code.py --platform linux-x64 --out "<PRIVATE_DIR>/claude-code.tgz"
@@ -76,8 +80,7 @@ python3 -I scripts/render.py "<PRIVATE_DIR>/instance.env" "<PRIVATE_DIR>/rendere
 
 ## 阶段 3：首次开机零泄漏注入（三层硬锁）
 
-1. **准备 SSH 密钥并配置 `.vmx`**：
-   - 在私有目录生成专用密钥：`ssh-keygen -t ed25519 -f "<PRIVATE_DIR>/id_ed25519" -N ""`，将 `.pub` 单行内容填入 `instance.env` 的 `SSH_PUBKEY`（**必填**，firstboot 会关闭密码登录）。
+1. **配置 `.vmx`**（SSH 密钥已在阶段 1 生成并填入 `SSH_PUBKEY`）：
    - 编辑 `.vmx`，确保网络使用 NAT、首启物理断开、禁用共享文件夹与拖放：
      ```ini
      ethernet0.connectionType = "nat"
