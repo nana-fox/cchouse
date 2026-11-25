@@ -25,6 +25,7 @@ else
   TART_HOME_DIR="$HOME/.tart"
 fi
 USE_USTC_MIRROR="${USE_USTC_MIRROR:-0}"
+[ "$USE_USTC_MIRROR" = "1" ] || USE_USTC_MIRROR=0
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 GUEST_LINUX_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -212,11 +213,7 @@ scp "${SSH_OPTS[@]}" \
   "root@${GUEST_IP}:/tmp/cchouse-guest-linux/image-builder/"
 scp "${SSH_OPTS[@]}" "$MIHOMO_GZ" "root@${GUEST_IP}:/tmp/mihomo.gz"
 
-MIRROR_CMD=""
-if [ "$USE_USTC_MIRROR" = "1" ]; then
-  MIRROR_CMD="sed -i 's|deb\\.debian\\.org|mirrors.ustc.edu.cn|g; s|security\\.debian\\.org|mirrors.ustc.edu.cn|g' /etc/apt/sources.list /etc/apt/sources.list.d/* /etc/apt/mirrors/* 2>/dev/null || true; "
-fi
-BUILD_CMD="${MIRROR_CMD}TARGET_HYPERVISOR=tart MIHOMO_ARCH=arm64 MIHOMO_VERSION=${MIHOMO_VERSION} MIHOMO_SHA256=${MIHOMO_SHA256} MIHOMO_LOCAL_GZ=/tmp/mihomo.gz SOURCE_COMMIT=${SOURCE_COMMIT} BUILD_TIME=${BUILD_TIME} bash /tmp/cchouse-guest-linux/image-builder/build-debian13-golden.sh && rm -rf /tmp/cchouse-guest-linux /tmp/mihomo.gz && sync && { nohup sh -c 'sleep 2 && systemctl poweroff' </dev/null >/dev/null 2>&1 & }"
+BUILD_CMD="USE_USTC_MIRROR=${USE_USTC_MIRROR} TARGET_HYPERVISOR=tart MIHOMO_ARCH=arm64 MIHOMO_VERSION=${MIHOMO_VERSION} MIHOMO_SHA256=${MIHOMO_SHA256} MIHOMO_LOCAL_GZ=/tmp/mihomo.gz SOURCE_COMMIT=${SOURCE_COMMIT} BUILD_TIME=${BUILD_TIME} bash /tmp/cchouse-guest-linux/image-builder/build-debian13-golden.sh && rm -rf /tmp/cchouse-guest-linux /tmp/mihomo.gz && sync && { nohup sh -c 'sleep 2 && systemctl poweroff' </dev/null >/dev/null 2>&1 & }"
 ssh "${SSH_OPTS[@]}" "root@${GUEST_IP}" "$BUILD_CMD"
 
 echo "== [7/7] 等待正常关机与 Tart 落盘..."

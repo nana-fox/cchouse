@@ -15,6 +15,18 @@ GUEST_LINUX_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 export DEBIAN_FRONTEND=noninteractive
 
+rewrite_apt_sources() {
+  local apt_dir="$1" expression="$2" source
+  for source in "$apt_dir"/sources.list "$apt_dir"/sources.list.d/* "$apt_dir"/mirrors/*; do
+    [ -f "$source" ] || continue
+    perl -pi -e "$expression" -- "$source" || return
+  done
+}
+
+if [ "${USE_USTC_MIRROR:-0}" = "1" ]; then
+  rewrite_apt_sources /etc/apt 's|deb\.debian\.org|mirrors.ustc.edu.cn|g; s|security\.debian\.org|mirrors.ustc.edu.cn|g'
+fi
+
 echo "== [1/6] 安装基础桌面、Chromium、中文字体、fcitx5 拼音、tint2、nftables 与虚拟化工具（${TARGET_HYPERVISOR}/${MIHOMO_ARCH}，无需 Node.js）"
 HYPERVISOR_PKGS=()
 if [ "$TARGET_HYPERVISOR" = "vmware" ]; then
@@ -254,7 +266,8 @@ rm -rf /etc/cloud /var/lib/cloud
 rm -f /etc/netplan/50-cloud-init.yaml /etc/ssh/sshd_config.d/50-cloud-init.conf /etc/sudoers.d/90-cloud-init-users
 apt-get autoremove -y
 apt-get clean
-sed -i 's|mirrors\.ustc\.edu\.cn|deb.debian.org|g' /etc/apt/sources.list /etc/apt/sources.list.d/* /etc/apt/mirrors/* 2>/dev/null || true
+# 恢复普通仓库与安全更新各自的官方地址，再执行最终镜像断言。
+rewrite_apt_sources /etc/apt 's|mirrors\.ustc\.edu\.cn/debian-security|security.debian.org/debian-security|g; s|mirrors\.ustc\.edu\.cn|deb.debian.org|g'
 mkdir -p /etc/NetworkManager/conf.d
 cat >/etc/NetworkManager/conf.d/99-cchouse-no-connectivity-check.conf <<'EOF'
 [connectivity]
