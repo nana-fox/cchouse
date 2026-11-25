@@ -29,7 +29,10 @@ def main():
     prog = downloads.Progress(f"Claude Code {args.platform}")
     try:
         res = downloads.run_with_progress(
-            prog, lambda p: downloads.fetch_claude_code(args.platform, args.out, version=args.version, progress=p, mirror=args.npm_mirror)
+            prog, lambda p: downloads.fetch_claude_code(
+                args.platform, args.out, version=args.version, progress=p, mirror=args.npm_mirror,
+                log=lambda m: print(f"  [下载] {m}", file=sys.stderr, flush=True),
+            )
         )
     except downloads.DownloadError as exc:
         sys.exit(str(exc))

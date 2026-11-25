@@ -23,10 +23,10 @@ PAYLOAD_SRI = "sha512-" + base64.b64encode(hashlib.sha512(PAYLOAD).digest()).dec
 
 
 class FakeResp:
-    def __init__(self, body, status, fail_after=None):
-        self._buf = io.BytesIO(body)
+    def __init__(self, body, status, fail_after=None, truncate_to=None):
+        self._buf = io.BytesIO(body if truncate_to is None else body[:truncate_to])
         self.status = status
-        self.headers = {"Content-Length": str(len(body))}
+        self.headers = {"Content-Length": str(len(body))}  # 声明完整长度，实际可能提前 EOF
         self._reads = 0
         self._fail_after = fail_after
 
@@ -46,18 +46,24 @@ class FakeResp:
 class FakeServer:
     """记录每次请求的 Range 起点；可模拟中途断线、忽略 Range、返回坏数据。"""
 
-    def __init__(self, body=PAYLOAD, honor_range=True, fail_after=None):
+    def __init__(self, body=PAYLOAD, honor_range=True, fail_after=None, eof_after=None, eof_times=1):
         self.body = body
         self.honor_range = honor_range
         self.fail_after = fail_after
+        self.eof_after = eof_after  # 每次响应只给这么多字节就正常关闭（模拟代理提前 EOF）
+        self.eof_times = eof_times
         self.calls = []
 
     def __call__(self, url, start, timeout):
         self.calls.append((url, start))
         fail_after, self.fail_after = self.fail_after, None  # 只断一次
+        trunc = None
+        if self.eof_after is not None and self.eof_times > 0:
+            self.eof_times -= 1
+            trunc = self.eof_after
         if start and self.honor_range:
-            return FakeResp(self.body[start:], 206, fail_after)
-        return FakeResp(self.body, 200, fail_after)
+            return FakeResp(self.body[start:], 206, fail_after, trunc)
+        return FakeResp(self.body, 200, fail_after, trunc)
 
 
 class TestDownloads(unittest.TestCase):
@@ -66,7 +72,9 @@ class TestDownloads(unittest.TestCase):
             dest = Path(td) / "img.tvm"
             srv = FakeServer(fail_after=1)
             with self.assertRaises(downloads.DownloadError):
-                downloads.fetch_verified(["https://x/img.tvm"], dest, sha256=PAYLOAD_SHA256, size=len(PAYLOAD), opener=srv)
+                downloads.fetch_verified(
+                    ["https://x/img.tvm"], dest, sha256=PAYLOAD_SHA256, size=len(PAYLOAD), opener=srv, retries=0
+                )
             part = Path(str(dest) + ".part")
             self.assertEqual(part.stat().st_size, downloads.CHUNK)
             self.assertFalse(dest.exists())
@@ -91,16 +99,51 @@ class TestDownloads(unittest.TestCase):
             dest = Path(td) / "a.bin"
             Path(str(dest) + ".part").write_bytes(PAYLOAD[:1000])
             srv = FakeServer(honor_range=False)
-            downloads.fetch_verified(["u"], dest, sha256=PAYLOAD_SHA256, opener=srv)
+            logs = []
+            downloads.fetch_verified(["u"], dest, sha256=PAYLOAD_SHA256, opener=srv, log=logs.append)
             self.assertEqual(dest.read_bytes(), PAYLOAD)
+            self.assertTrue(any("不支持断点续传" in m for m in logs))
+
+    def test_clean_eof_midway_resumes_in_same_run(self):
+        with tempfile.TemporaryDirectory() as td:
+            dest = Path(td) / "img.tvm"
+            cut = downloads.CHUNK + 777
+            srv = FakeServer(eof_after=cut, eof_times=2)  # 连续两次提前 EOF，第三次正常
+            logs = []
+            with mock.patch.object(downloads.time, "sleep") as slp:
+                res = downloads.fetch_verified(
+                    ["u"], dest, sha256=PAYLOAD_SHA256, size=len(PAYLOAD), opener=srv, log=logs.append
+                )
+            self.assertEqual(res, "downloaded")
+            self.assertEqual(dest.read_bytes(), PAYLOAD)
+            self.assertEqual([c[1] for c in srv.calls], [0, cut, 2 * cut])  # 每次都从断点 Range 续传
+            self.assertEqual([c.args[0] for c in slp.call_args_list], [2.0, 4.0])  # 指数退避
+            self.assertTrue(logs[0].startswith("img.tvm 第 1/5 次续传"))
+            self.assertIn("第 2/5 次续传", logs[1])
+
+    def test_truncated_download_never_verified_or_deleted(self):
+        with tempfile.TemporaryDirectory() as td:
+            dest = Path(td) / "img.tvm"
+            srv = FakeServer(honor_range=False, eof_after=1000, eof_times=99)
+            with mock.patch.object(downloads.time, "sleep") as slp, \
+                    mock.patch.object(downloads, "_digest_matches", wraps=downloads._digest_matches) as dig:
+                with self.assertRaises(downloads.DownloadError) as cm:
+                    downloads.fetch_verified(["u"], dest, sha256=PAYLOAD_SHA256, size=len(PAYLOAD), opener=srv)
+            self.assertIn("连接提前结束", str(cm.exception))
+            self.assertEqual(len(srv.calls), 6)  # 首次 + 5 次续传
+            self.assertEqual([c.args[0] for c in slp.call_args_list], [2.0, 4.0, 8.0, 16.0, 32.0])
+            dig.assert_not_called()  # 未下完不校验
+            self.assertTrue(Path(str(dest) + ".part").is_file())  # 不删 .part
+            self.assertFalse(dest.exists())
 
     def test_corrupt_download_is_deleted_and_falls_back_to_next_url(self):
         with tempfile.TemporaryDirectory() as td:
             dest = Path(td) / "a.bin"
             bad = FakeServer(body=b"x" * len(PAYLOAD))
-            with self.assertRaises(downloads.DownloadError):
-                downloads.fetch_verified(["u"], dest, sha256=PAYLOAD_SHA256, opener=bad)
-            self.assertFalse(Path(str(dest) + ".part").exists())
+            with self.assertRaises(downloads.DownloadError) as cm:
+                downloads.fetch_verified(["u"], dest, sha256=PAYLOAD_SHA256, size=len(PAYLOAD), opener=bad)
+            self.assertIn("校验不通过", str(cm.exception))
+            self.assertFalse(Path(str(dest) + ".part").exists())  # 大小完整但 SHA 不符才删
             self.assertFalse(dest.exists())
 
             good = FakeServer()

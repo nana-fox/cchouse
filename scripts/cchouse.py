@@ -674,7 +674,7 @@ class Downloader:
         if tty:
             print()
         if rec["status"] == "failed":
-            raise StepError(f"{prog.label} 下载失败：{rec.get('error')}（已下载部分保留，再次运行会断点续传）")
+            raise StepError(f"{prog.label} 下载失败：{rec.get('error')}")
         return rec
 
     def records(self):
@@ -785,7 +785,8 @@ class UpContext:
                 "image",
                 f"镜像 {art['filename']}",
                 lambda prog: downloads.fetch_verified(
-                    downloads.image_urls(art, self.args.image_mirror), self.image_path, sha256=art["sha256"], size=art.get("size_bytes"), progress=prog
+                    downloads.image_urls(art, self.args.image_mirror), self.image_path, sha256=art["sha256"],
+                    size=art.get("size_bytes"), progress=prog, log=self.download_log,
                 ),
             )
         if need_claude:
@@ -793,9 +794,14 @@ class UpContext:
                 "claude",
                 f"Claude Code {self.claude_platform}",
                 lambda prog: downloads.fetch_claude_code(
-                    self.claude_platform, self.claude_path, progress=prog, mirror=self.args.npm_mirror
+                    self.claude_platform, self.claude_path, progress=prog, mirror=self.args.npm_mirror,
+                    log=self.download_log,
                 )["status"],
             )
+
+    @staticmethod
+    def download_log(msg):
+        print(f"\n  [下载] {msg}", flush=True)
 
     def wait_download(self, key):
         if self.dry_run:
@@ -1072,6 +1078,7 @@ def needs_redo(ctx, name):
 
 
 def print_timing_table(ctx, steps):
+    ctx.state["downloads"].update(ctx.downloader.records())  # 失败路径先打印后保存，先刷新下载记录
     print("\n== 耗时表 ==")
     print(f"{'步骤':<28}{'耗时':>10}  命中缓存")
     total = 0.0
@@ -1092,9 +1099,11 @@ def print_timing_table(ctx, steps):
         )
     img = ctx.state["downloads"].get("image", {})
     imp = ctx.state["timings"].get("import", {})
+    failed = any(t.get("result") == "failed" for t in ctx.state["timings"].values())
     cold = img.get("status") == "downloaded" and imp.get("result") == "fresh"
-    ctx.state["run_kind"] = "cold" if cold else "warm"
-    print(f"合计（本次各步）：{_fmt_secs(total)} | 本次属于：{'冷启动' if cold else '热缓存/续跑（不代表首次耗时）'}")
+    ctx.state["run_kind"] = "incomplete" if failed else ("cold" if cold else "warm")
+    kind = {"incomplete": "未完成（有失败步骤）", "cold": "冷启动", "warm": "热缓存/续跑（不代表首次耗时）"}[ctx.state["run_kind"]]
+    print(f"合计（本次各步）：{_fmt_secs(total)} | 本次属于：{kind}")
 
 
 def print_handoff(ctx):

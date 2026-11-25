@@ -183,8 +183,8 @@ def _open(url, start, timeout):
     return urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=timeout)
 
 
-def download_resumable(url, part_path, expected_size=None, progress=None, timeout=60, opener=None):
-    """下载到 part_path，已有部分则用 Range 续传；返回最终字节数。"""
+def download_resumable(url, part_path, expected_size=None, progress=None, timeout=60, opener=None, log=None):
+    """下载到 part_path，已有部分则用 Range 续传；返回最终字节数。连接提前结束（< 期望大小）抛 DownloadError 且保留 .part。"""
     opener = opener or _open
     part_path = Path(part_path)
     start = part_path.stat().st_size if part_path.is_file() else 0
@@ -199,13 +199,15 @@ def download_resumable(url, part_path, expected_size=None, progress=None, timeou
         if exc.code == 416 and start:
             # Range 不可满足：多半是 .part 已完整或损坏，交给校验决定；校验失败会删除重下
             return start
-        raise DownloadError(f"HTTP {exc.code}：{url}") from None
+        raise DownloadError(f"HTTP {exc.code}：{url}（已下载部分保留，再次运行会断点续传）") from None
     except (urllib.error.URLError, OSError) as exc:
-        raise DownloadError(f"网络错误（{type(exc).__name__}）：{url}") from None
+        raise DownloadError(f"网络错误（{type(exc).__name__}）：{url}（已下载部分保留，再次运行会断点续传）") from None
     with resp:
         status = getattr(resp, "status", None) or resp.getcode()
         if start and status != 206:
-            start = 0  # 服务器不支持 Range，从头下载
+            if log:
+                log(f"服务器不支持断点续传（HTTP {status}），从头重新下载")
+            start = 0
         mode = "ab" if start else "wb"
         length = resp.headers.get("Content-Length")
         total = expected_size or (start + int(length) if length and length.isdigit() else 0)
@@ -224,11 +226,20 @@ def download_resumable(url, part_path, expected_size=None, progress=None, timeou
                 done += len(chunk)
                 if progress:
                     progress.update(done=done)
+    if total and done < total:
+        # 代理/服务器提前正常关闭连接（EOF 无异常）：保留 .part，交给调用方续传，不能当作下载完成去校验
+        raise DownloadError(f"连接提前结束（{done}/{total} 字节），已下载部分保留，可从断点续传")
     return done
 
 
-def fetch_verified(urls, dest, sha256=None, integrity=None, size=None, progress=None, opener=None):
-    """按 URL 列表依次尝试，断点续传 + 校验后原子落盘；已校验通过则直接跳过。返回 'skipped' 或 'downloaded'。"""
+def fetch_verified(urls, dest, sha256=None, integrity=None, size=None, progress=None, opener=None,
+                   retries=5, backoff=2.0, log=None):
+    """按 URL 列表依次尝试，断点续传 + 校验后原子落盘；已校验通过则直接跳过。返回 'skipped' 或 'downloaded'。
+
+    - 断线或连接提前结束（已下载 < size）：视为中断，不校验、不删 .part，同轮用 Range 自动续传，
+      最多 retries 次、指数退避（backoff, 2*backoff, ...），每次打印第几次续传；仍失败再换下一个 URL。
+    - 只有大小完整但摘要不符才删除 .part。
+    """
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     if progress:
@@ -238,12 +249,24 @@ def fetch_verified(urls, dest, sha256=None, integrity=None, size=None, progress=
             progress.update(state="skipped", done=size or dest.stat().st_size)
         return "skipped"
     part = Path(str(dest) + ".part")
+    label = progress.label if progress else dest.name
     last_err = None
     for url in urls:
-        try:
-            download_resumable(url, part, expected_size=size, progress=progress, opener=opener)
-        except DownloadError as exc:
-            last_err = exc
+        completed = False
+        for attempt in range(retries + 1):
+            if attempt:
+                wait = backoff * (2 ** (attempt - 1))
+                have = part.stat().st_size if part.is_file() else 0
+                if log:
+                    log(f"{label} 第 {attempt}/{retries} 次续传（{wait:.0f}s 后，从 {have / 1048576:.0f} MB 处继续）：{last_err}")
+                time.sleep(wait)
+            try:
+                download_resumable(url, part, expected_size=size, progress=progress, opener=opener, log=log)
+                completed = True
+                break
+            except DownloadError as exc:
+                last_err = exc
+        if not completed:
             continue
         if progress:
             progress.update(state="verifying")
@@ -256,7 +279,7 @@ def fetch_verified(urls, dest, sha256=None, integrity=None, size=None, progress=
                 progress.update(state="ok")
             return "downloaded"
         part.unlink()
-        last_err = DownloadError("下载完成但校验不通过，已删除损坏文件；再次运行会重新下载")
+        last_err = DownloadError("下载大小完整但校验不通过，已删除损坏文件；再次运行会重新下载")
     if progress:
         progress.update(state="failed", error=str(last_err))
     raise last_err or DownloadError("没有可用的下载地址")
@@ -337,7 +360,7 @@ def run_with_progress(progress, fn, stream=None, interval=2.0):
     return box.get("result")
 
 
-def fetch_claude_code(platform_key, out, version="latest", progress=None, fetch=fetch_json, opener=None, mirror=None):
+def fetch_claude_code(platform_key, out, version="latest", progress=None, fetch=fetch_json, opener=None, mirror=None, log=None):
     """拉官方 npm 平台原生包并核对 SRI；元数据记入 `<out>.json`，离线时可复用已校验的缓存。"""
     out = Path(out)
     meta_file = Path(str(out) + ".json")
@@ -355,7 +378,8 @@ def fetch_claude_code(platform_key, out, version="latest", progress=None, fetch=
             progress.update(state="failed", error=f"npm 元数据获取失败（{type(exc).__name__}）")
         raise DownloadError(f"npm 元数据获取失败（{type(exc).__name__}）") from None
     status = fetch_verified(
-        claude_tarball_urls(meta["tarball"], mirror), out, integrity=meta["integrity"], progress=progress, opener=opener
+        claude_tarball_urls(meta["tarball"], mirror), out, integrity=meta["integrity"], progress=progress, opener=opener,
+        log=log,
     )
     meta_file.write_text(json.dumps(meta, ensure_ascii=False) + "\n", encoding="utf-8")
     return dict(meta, out=str(out), status=status, bytes=out.stat().st_size)
