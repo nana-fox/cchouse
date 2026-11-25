@@ -222,6 +222,34 @@ class TestCchouseV2(unittest.TestCase):
             self.assertEqual(state2["status"], "HUMAN_WAIT")
             self.assertEqual(state2["next_action"], "wait_user_proxy")
 
+    def test_tart_cached_image_ignores_deployed_vms(self):
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import preflight as preflight_mod
+        with tempfile.TemporaryDirectory() as td:
+            th = Path(td)
+            tag_dir = th / "cache" / "OCIs" / "ghcr.io" / "cirruslabs" / "macos-tahoe-vanilla"
+            tag_dir.mkdir(parents=True)
+            # 模拟 tart prune 残留的空壳目录与悬空 tag 软链（无实际 disk.img）
+            if os.name != "nt":
+                (tag_dir / "26.6.2").symlink_to(tag_dir / "sha256:missing")
+            (th / "vms" / "claude-us03").mkdir(parents=True)
+            (th / "vms" / "claude-us03" / "disk.img").write_bytes(b"x")
+            (th / "vms" / "claude-us03-clean-20261115").mkdir(parents=True)
+            (th / "vms" / "claude-us03-clean-20261115" / "disk.img").write_bytes(b"x")
+            self.assertFalse(preflight_mod.has_tart_cached_image(th))
+
+            base_vm = th / "vms" / "macos-tahoe-vanilla-26.6.2"
+            base_vm.mkdir(parents=True)
+            (base_vm / "disk.img").write_bytes(b"x")
+            self.assertTrue(preflight_mod.has_tart_cached_image(th))
+
+        with tempfile.TemporaryDirectory() as td:
+            th = Path(td)
+            img_dir = th / "cache" / "OCIs" / "ghcr.io" / "cirruslabs" / "macos-tahoe-vanilla" / "sha256:abc"
+            img_dir.mkdir(parents=True)
+            (img_dir / "disk.img").write_bytes(b"x")
+            self.assertTrue(preflight_mod.has_tart_cached_image(th))
+
     def test_image_builder_scripts_and_seed_iso(self):
         bash_exe = find_bash()
         if bash_exe:
