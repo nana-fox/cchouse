@@ -59,8 +59,8 @@ tart clone cchouse-debian13-arm64 "<VM_NAME>"
 3. **正常开机并获取 IP**：
    ```bash
    tart run "<VM_NAME>" &
-   # Debian 13 systemd-networkd 发送 RFC 4361 DUID，必须使用 --resolver=arp
-   tart ip --resolver=arp "<VM_NAME>" --wait 30
+   # 获取客机 IP（若 ARP 表尚未建立，可直接从 /var/db/dhcpd_leases 顶部按主机名读取）
+   tart ip --resolver=arp "<VM_NAME>" --wait 30 || head -n 30 /var/db/dhcpd_leases
    ```
    将拿到的 IP 写入 `instance.env` 的 `GUEST_IP`，并将客机 SSH 主机公钥写入 `<PRIVATE_DIR>/known_hosts`。
 

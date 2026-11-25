@@ -95,6 +95,7 @@ LinkLocalAddressing=no
 
 [DHCPv4]
 UseDNS=no
+ClientIdentifier=mac
 EOF
 systemctl enable systemd-networkd.service
 apt-get purge -y avahi-daemon cups-browsed unattended-upgrades cloud-init cloud-guest-utils 2>/dev/null || true
