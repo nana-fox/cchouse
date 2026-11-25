@@ -16,7 +16,7 @@
 ## 前提条件（所有路线通用）
 
 1. **必须自备外部 IP 代理**（`cchouse` 不提供代理）：
-   - **单节点模式（`EXIT_MODE=single`）**：1 个固定出口节点（SOCKS5 / HTTP / VLESS / Trojan / Shadowsocks / SSH；不支持 Hysteria2 / TUIC 等纯 UDP 协议）。**注：当前仅支持 v2 Linux（VMware）路线。**
+   - **单节点模式（`EXIT_MODE=single`）**：1 个固定出口节点（SOCKS5 / HTTP / VLESS / Trojan / Shadowsocks / SSH；不支持 Hysteria2 / TUIC 等纯 UDP 协议）。**注：当前仅支持 v2 Linux（VMware）路线。** 若该节点拦截 Stripe（如 Webshare），只影响在 claude.ai 网页上付款，安装验收会给出提示但不拦截；需要时可加一个 Stripe 备用节点。
    - **链式模式（`EXIT_MODE=chain`）**：前置节点（自建 VPS / CF 前置 / 机场）→ 固定 ISP 出口（**v1 macOS Tart 与 v2 Linux 均支持**）；若所用 ISP 屏蔽 Stripe（如 Webshare），可额外开启 `STRIPE_EXIT_MODE`（v1 macOS 必须为 `front` 或 `tmh-chain`）。
    - 详细配置见 [docs/proxy-modes.md](docs/proxy-modes.md)。
 2. **本机硬件建议**：内存 ≥ 16 GB；磁盘剩余空间（Tart macOS 客机 ≥ 50 GB，VMware Debian 13 客机 ≥ 25 GB）。

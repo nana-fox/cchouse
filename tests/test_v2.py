@@ -938,7 +938,7 @@ class TestCchouseV2(unittest.TestCase):
                 self.assertFalse(p1["stripe_check"]["reachable"])
                 self.assertTrue(any("STRIPE_UNREACHABLE" in w and "付款会失败" in w for w in p1["warnings"]))
 
-                # 2) single + node 指向屏蔽 Stripe 的节点 -> STRIPE_NODE_UNREACHABLE 报错
+                # 2) single + node 指向屏蔽 Stripe 的节点 -> STRIPE_NODE_UNREACHABLE 仅警告，不算错误
                 d2 = dict(d1)
                 d2.update({
                     "STRIPE_EXIT_MODE": "node",
@@ -955,9 +955,9 @@ class TestCchouseV2(unittest.TestCase):
                     capture_output=True,
                     text=True, encoding="utf-8", errors="replace",
                 )
-                self.assertNotEqual(cp2.returncode, 0)
                 p2 = json.loads(cp2.stdout)
-                self.assertTrue(any("STRIPE_NODE_UNREACHABLE" in e for e in p2["errors"]))
+                self.assertTrue(any("STRIPE_NODE_UNREACHABLE" in w for w in p2["warnings"]))
+                self.assertFalse(any("STRIPE" in e for e in p2["errors"]))
 
                 # 3) single + node 指向可达 Stripe 的节点 -> stripe_check.reachable=True，无 Stripe 错误/警告
                 d3 = dict(d2)

@@ -39,8 +39,9 @@
 
 - **部署前（宿主机，支持 `socks5`/`http` 单节点）**：运行 `python3 -I scripts/preflight.py --env <instance.env> --check-stripe`，在宿主机探测 `js.stripe.com` / `api.stripe.com` 连通性（不打印凭据）。
 - **部署后（客机内，全协议通用）**：`scripts/verify-linux.sh` 会自动探测客机内 `js.stripe.com` 与 `api.stripe.com` 可达性：
-  - `EXIT_MODE=single` 且 `STRIPE_EXIT_MODE=off` 时若不通，输出明确 `WARN` 提示“付款会失败，建议配置 Stripe 备用节点或改链式”（不静默）。
-  - 已配置 `STRIPE_EXIT_MODE=node` / `front` / `tmh-chain` 时若不通，直接判 `FAIL`。
+  - 任何模式下 Stripe 不通都只输出 `WARN` 提示，**不判失败、不阻止安装**：Stripe 只影响在 claude.ai 网页上付款，已订阅或在其他地方付款的用户不受影响。
+  - 单节点（`STRIPE_EXIT_MODE=off`）不通时提示会附解决办法：配置 Stripe 备用节点或改链式。
+  - `preflight.py --check-stripe` 同理只给警告，不计入错误。
 
 > **风控提示**：`STRIPE_NODE_*` 建议尽量选择与主出口或支付卡同地区、干净的独享节点（如自建 VPS），避免使用多人共享高风险出口叠加发卡行国家不一致触发 Stripe Radar 拒付。
 

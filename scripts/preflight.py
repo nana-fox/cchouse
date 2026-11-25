@@ -540,9 +540,10 @@ def main():
                 details = ", ".join(
                     f"{d}:{v['detail']}" for d, v in stripe_check.get("domains", {}).items() if not v.get("reachable")
                 )
+                # 只提示不拦截：Stripe 仅影响 claude.ai 网页付款，不影响已订阅用户正常使用
                 if stripe_check.get("stripe_mode") == "node":
-                    env_errors.append(
-                        f"STRIPE_NODE_UNREACHABLE: 配置的 STRIPE_NODE 无法连接 Stripe（{details}），请更换 Stripe 专用节点"
+                    env_warnings.append(
+                        f"STRIPE_NODE_UNREACHABLE: 配置的 STRIPE_NODE 无法连接 Stripe（{details}），claude.ai 网页付款会失败，可更换 Stripe 专用节点"
                     )
                 else:
                     env_warnings.append(
