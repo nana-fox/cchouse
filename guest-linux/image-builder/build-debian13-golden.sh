@@ -8,6 +8,8 @@ MIHOMO_ARCH="${MIHOMO_ARCH:-amd64}"
 MIHOMO_SHA256="${MIHOMO_SHA256:-}"
 MIHOMO_URL="${MIHOMO_URL:-https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VERSION}/mihomo-linux-${MIHOMO_ARCH}-${MIHOMO_VERSION}.gz}"
 TARGET_HYPERVISOR="${TARGET_HYPERVISOR:-vmware}"
+SOURCE_COMMIT="${SOURCE_COMMIT:-unknown}"
+BUILD_TIME="${BUILD_TIME:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 GUEST_LINUX_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
@@ -260,7 +262,14 @@ enabled=false
 EOF
 systemctl disable apt-daily.timer apt-daily-upgrade.timer 2>/dev/null || true
 
-echo "== [6/6] 清空机器身份、随机种子、临时 root 密码哈希并执行空状态断言"
+echo "== [6/6] 写入镜像版本元数据、清空机器身份并执行空状态断言"
+cat >/etc/cchouse-image-release <<EOF
+SOURCE_COMMIT=${SOURCE_COMMIT}
+BUILD_TIME=${BUILD_TIME}
+ARCH=${MIHOMO_ARCH}
+HYPERVISOR=${TARGET_HYPERVISOR}
+EOF
+chmod 644 /etc/cchouse-image-release
 usermod -p '*' root
 truncate -s 0 /etc/machine-id /etc/hostname
 rm -f /var/lib/dbus/machine-id /var/lib/systemd/random-seed

@@ -165,18 +165,53 @@ def has_tart_cached_image(th=None):
 
 
 TART_LINUX_GOLDEN_RE = re.compile(r"^cchouse-debian13-arm64(?:-v\d[0-9a-zA-Z._-]*)?$")
+TART_GOLDEN_OK_MARKER = ".cchouse-golden-ok"
 
 
 def find_tart_linux_golden_images(th=None):
-    """检测本地是否已有可复用的 Tart Debian 13 黄金镜像（仅精确匹配默认名或 -v* 发布标签，避免误匹配克隆测试机）。"""
+    """检测本地是否已有可复用的 Tart Debian 13 黄金镜像（需匹配命名、存在 disk.img 且含构建完成标记 .cchouse-golden-ok）。"""
     th = Path(th) if th is not None else tart_home_dir()
     vms_dir = th / "vms"
     found = []
     if vms_dir.is_dir():
         for entry in sorted(vms_dir.iterdir()):
-            if entry.is_dir() and TART_LINUX_GOLDEN_RE.match(entry.name) and (entry / "disk.img").is_file():
+            if (
+                entry.is_dir()
+                and TART_LINUX_GOLDEN_RE.match(entry.name)
+                and (entry / "disk.img").is_file()
+                and (entry / TART_GOLDEN_OK_MARKER).is_file()
+            ):
                 found.append(entry.name)
     return found
+
+
+def expected_image_for_route(route, manifest_path=None):
+    """从 guest-linux/image-manifest.json (schema 2) 解析当前路线期望的黄金镜像元数据。"""
+    if route not in ("vmware-linux", "tart-linux"):
+        return None
+    mpath = Path(manifest_path) if manifest_path is not None else (ROOT / "guest-linux" / "image-manifest.json")
+    if not mpath.is_file():
+        return None
+    try:
+        data = json.loads(mpath.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if data.get("schema_version") != 2:
+        return None
+    for art in data.get("artifacts", []):
+        if isinstance(art, dict) and art.get("route") == route:
+            urls = art.get("urls") or []
+            return {
+                "image_version": data.get("image_version"),
+                "arch": art.get("arch"),
+                "format": art.get("format"),
+                "filename": art.get("filename"),
+                "size_bytes": art.get("size_bytes"),
+                "sha256": art.get("sha256"),
+                "source_commit": art.get("source_commit"),
+                "url": urls[0] if urls else None,
+            }
+    return None
 
 
 def check_lf_endings(directory):
@@ -259,10 +294,12 @@ def validate_env_file(env_path, route):
             except ValueError:
                 errors.append(f"INVALID_CIDR: {cidr_key}={val} 不是有效 CIDR")
 
-    if guest_os == "linux":
+    if guest_os == "linux" and "GUEST_KEYBOARD" in env:
         kb = env.get("GUEST_KEYBOARD", "").strip()
-        if kb and not re.fullmatch(r"[a-z]{2,3}", kb):
-            errors.append(f"INVALID_GUEST_KEYBOARD: GUEST_KEYBOARD={kb} 仅支持 2-3 位小写 XKB 布局代码（如 us/gb/de/jp）")
+        if not re.fullmatch(r"[a-z]{2,3}", kb):
+            errors.append(
+                f"INVALID_GUEST_KEYBOARD: GUEST_KEYBOARD={kb or '<空>'} 仅支持 2-3 位小写 XKB 布局代码（如 us/gb/de/jp）"
+            )
 
     return errors, warnings
 
@@ -391,6 +428,7 @@ def main():
         next_action = args.set_next_action
 
     tart_linux_golden = find_tart_linux_golden_images(resolved_tart_home) if route == "tart-linux" else []
+    expected_image = expected_image_for_route(route)
     result = {
         "ok": ok,
         "status": status,
@@ -405,6 +443,7 @@ def main():
             "vmrun_found": bool(vmrun_path),
             "detected_vmnet_cidr": detected_vmnet,
             "tart_linux_golden_images": tart_linux_golden,
+            "expected_image": expected_image,
         },
         "route": route,
         "errors": errors,

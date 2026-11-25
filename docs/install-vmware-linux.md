@@ -32,7 +32,7 @@ python3 -I scripts/preflight.py --route vmware-linux
 - Windows 示例：`%LOCALAPPDATA%\cchouse\<TAG>\instance.env`
 - macOS 示例：`~/Library/Application Support/cchouse/<TAG>/instance.env`
 
-复制 `instance.env.linux.example` 并填写（**渲染前务必把 `VMNET_CIDR` 改成 `preflight.py` 探测到的实际 `vmnet8` 网段**，否则 `firstboot` 会把错误的 SSH 白名单写死进 `nftables`），同时拉取校验后的 Claude Code 原生二进制包（无需 Node.js），再校验与渲染：
+复制 `instance.env.linux.example` 并填写（**渲染前务必把 `VMNET_CIDR` 改成 `preflight.py` 探测到的实际 `vmnet8` 网段**，否则 `firstboot` 会把错误的 SSH 白名单写死进 `nftables`；键盘布局由 `GUEST_KEYBOARD` 控制，默认 `us`，可按需改为 `gb`/`de`/`jp` 等 2–3 位小写 XKB 代码），同时拉取校验后的 Claude Code 原生二进制包（无需 Node.js），再校验与渲染：
 
 ```bash
 python3 -I scripts/fetch-claude-code.py --platform linux-x64 --out "<PRIVATE_DIR>/claude-code.tgz"
@@ -102,5 +102,7 @@ scripts/verify-linux.sh "<PRIVATE_DIR>/instance.env" --fail-closed
 
 ## 桌面操作提示（`v2.0.0-preview.2` 起）
 
+> 注：以下桌面增强项自 `v2.0.0-preview.2` 镜像起内置，`v2.0.0-preview.1` 镜像暂不含 `fcitx5`/`tint2`/`cchouse-power` sudoers；当前可下载版本见 `guest-linux/image-manifest.json` 的 `image_version`。
+
 - 黄金镜像内置思源黑体、`fcitx5` 简体拼音（已关闭云拼音）、`tint2` 底部任务栏、`lxterminal` 与 `vmware-user-suid-wrapper`（双向剪贴板 + 窗口自适应分辨率）。
-- 默认按出口地区配置键盘布局，按 **`Ctrl + Space`**、**轻按左 `Shift`** 或 **`Alt + Space`** 一键切换中英文；底部 `tint2` 任务栏可还原最小化窗口，桌面右键菜单提供 Chromium、终端、切换输入法与安全关机入口。
+- 键盘布局由 `instance.env` 的 `GUEST_KEYBOARD` 指定（默认 `us`），按 **`Ctrl + Space`**、**轻按左 `Shift`** 或 **`Alt + Space`** 一键切换中英文；底部 `tint2` 任务栏可还原最小化窗口，桌面右键菜单提供 Chromium、终端、切换输入法与安全关机入口。

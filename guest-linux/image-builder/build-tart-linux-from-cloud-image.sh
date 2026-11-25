@@ -27,6 +27,14 @@ USE_USTC_MIRROR="${USE_USTC_MIRROR:-0}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 GUEST_LINUX_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+REPO_ROOT="$(cd "${GUEST_LINUX_DIR}/.." && pwd)"
+if [ -z "${SOURCE_COMMIT:-}" ]; then
+  SOURCE_COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
+  if [ "$SOURCE_COMMIT" != "unknown" ] && [ -n "$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null || true)" ]; then
+    SOURCE_COMMIT="${SOURCE_COMMIT}-dirty"
+  fi
+fi
+BUILD_TIME="${BUILD_TIME:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
 
 [ -x "$TART_BIN" ] || { echo "错误：未找到 tart：$TART_BIN" >&2; exit 1; }
 [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ] || {
@@ -113,10 +121,15 @@ python3 -c "import os; os.truncate('${DISK_IMG}', ${DISK_SIZE_GB} * 1024 * 1024 
 echo "== [4/7] 生成一次性 cidata ISO 与临时 SSH 密钥..."
 RUN_DIR="$(mktemp -d "${WORK_DIR}/run.XXXXXX")"
 TART_PID=""
+BUILD_OK=0
 cleanup() {
   if [ -n "$TART_PID" ] && kill -0 "$TART_PID" 2>/dev/null; then
     "$TART_BIN" stop "$VM_NAME" 2>/dev/null || true
     wait "$TART_PID" 2>/dev/null || true
+  fi
+  if [ "$BUILD_OK" -ne 1 ]; then
+    rm -f "${TART_HOME_DIR}/vms/${VM_NAME}/.cchouse-golden-ok" 2>/dev/null || true
+    "$TART_BIN" delete "$VM_NAME" 2>/dev/null || true
   fi
   rm -rf "$RUN_DIR"
 }
@@ -189,7 +202,7 @@ MIRROR_CMD=""
 if [ "$USE_USTC_MIRROR" = "1" ]; then
   MIRROR_CMD="sed -i 's|deb\\.debian\\.org|mirrors.ustc.edu.cn|g; s|security\\.debian\\.org|mirrors.ustc.edu.cn|g' /etc/apt/sources.list /etc/apt/sources.list.d/* /etc/apt/mirrors/* 2>/dev/null || true; "
 fi
-BUILD_CMD="${MIRROR_CMD}TARGET_HYPERVISOR=tart MIHOMO_ARCH=arm64 MIHOMO_VERSION=${MIHOMO_VERSION} MIHOMO_SHA256=${MIHOMO_SHA256} MIHOMO_LOCAL_GZ=/tmp/mihomo.gz bash /tmp/cchouse-guest-linux/image-builder/build-debian13-golden.sh && rm -rf /tmp/cchouse-guest-linux /tmp/mihomo.gz && sync && nohup sh -c 'sleep 2 && systemctl poweroff' >/dev/null 2>&1 &"
+BUILD_CMD="${MIRROR_CMD}TARGET_HYPERVISOR=tart MIHOMO_ARCH=arm64 MIHOMO_VERSION=${MIHOMO_VERSION} MIHOMO_SHA256=${MIHOMO_SHA256} MIHOMO_LOCAL_GZ=/tmp/mihomo.gz SOURCE_COMMIT=${SOURCE_COMMIT} BUILD_TIME=${BUILD_TIME} bash /tmp/cchouse-guest-linux/image-builder/build-debian13-golden.sh && rm -rf /tmp/cchouse-guest-linux /tmp/mihomo.gz && sync && { nohup sh -c 'sleep 2 && systemctl poweroff' </dev/null >/dev/null 2>&1 & }"
 ssh "${SSH_OPTS[@]}" "root@${GUEST_IP}" "$BUILD_CMD"
 
 echo "== [7/7] 等待正常关机与 Tart 落盘..."
@@ -205,6 +218,15 @@ if kill -0 "$TART_PID" 2>/dev/null; then
 fi
 TART_PID=""
 
+cat >"${TART_HOME_DIR}/vms/${VM_NAME}/.cchouse-golden-ok" <<EOF
+SOURCE_COMMIT=${SOURCE_COMMIT}
+BUILD_TIME=${BUILD_TIME}
+ARCH=arm64
+HYPERVISOR=tart
+EOF
+BUILD_OK=1
+
 echo ""
 echo "=== Tart Linux (Debian 13 arm64) 黄金镜像构建完成 ==="
+echo "COMMIT: ${SOURCE_COMMIT}"
 "$TART_BIN" list | grep -E "Source|${VM_NAME}" || true

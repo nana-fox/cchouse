@@ -117,6 +117,8 @@ if ! guest true; then
   fi
   exit 1
 fi
+img_rel=$(guest "tr '\n' ' ' </etc/cchouse-image-release 2>/dev/null || true")
+[ -n "$img_rel" ] && log "  INFO  镜像来源：$img_rel"
 
 log "-- 出口"
 got_c="$(egress_claude) $(egress_claude) $(egress_claude)"
@@ -172,9 +174,11 @@ sudo_audit=$(guest "sudo -n -l 2>/dev/null | awk '
     gsub(/^[[:space:]]+|[[:space:]]+$/, \"\")
     n++
     if (\$0 ~ /\*/) { bad=1 }
-    if (\$0 !~ /^\(root\) NOPASSWD: (\/usr\/local\/sbin\/cchouse-probe (nft-loaded|nft-live-sha|direct-count|mihomo-stop|mihomo-start|root-egress)|\/usr\/bin\/systemctl (poweroff|reboot))\$/) { bad=1 }
+    if (\$0 ~ /^\(root\) NOPASSWD: \/usr\/bin\/systemctl poweroff\$/) { poweroff=1 }
+    else if (\$0 ~ /^\(root\) NOPASSWD: \/usr\/bin\/systemctl reboot\$/) { reboot=1 }
+    else if (\$0 !~ /^\(root\) NOPASSWD: \/usr\/local\/sbin\/cchouse-probe (nft-loaded|nft-live-sha|direct-count|mihomo-stop|mihomo-start|root-egress)\$/) { bad=1 }
   }
-  END { if (n >= 6 && !bad) print \"ok\"; else print \"bad(\" n \")\" }
+  END { if (n >= 8 && poweroff && reboot && !bad) print \"ok\"; else print \"bad(\" n \",power=\" (poweroff+reboot) \")\" }
 '" 2>/dev/null || echo "err")
 expect "sudoers 仅放行固定无通配符白名单（cchouse-verify/cchouse-power）" "$sudo_audit" "ok"
 expect "Claude Code CLI 可执行（claude --version）" "$(guest "claude --version >/dev/null 2>&1 && echo ok || echo missing")" "ok"
