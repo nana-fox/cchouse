@@ -23,12 +23,12 @@ tools/e2e/run.sh --target gtr --mode release --ova 'C:\path\to\cchouse-debian13-
 MAC_GOLDEN_VM="cchouse-debian13-arm64"
 MAC_ENV_FILE="$HOME/Library/Application Support/cchouse/e2e/mac.env"
 GTR_ENV_FILE="$HOME/Library/Application Support/cchouse/e2e/gtr.env"
-GTR_SSH_HOST="192.168.124.21"
-GTR_SSH_USER="ddnio"
-GTR_SSH_KEY="$HOME/.ssh/cchouse_gtr_ed25519"
-GTR_GOLDEN_OVA="C:\\Users\\ddnio\\cchouse-ova-build\\cchouse-debian13-amd64.ova"
-GTR_GOLDEN_VMX="C:\\Users\\ddnio\\cchouse-e2e-base\\cchouse-debian13-amd64\\cchouse-debian13-amd64.vmx"
-GTR_WORK_DIR="C:\\Users\\ddnio\\AppData\\Local\\cchouse\\e2e"
+GTR_SSH_HOST="<GTR_IP>"
+GTR_SSH_USER="<WIN_USER>"
+GTR_SSH_KEY="$HOME/.ssh/<GTR_SSH_KEY>"
+GTR_GOLDEN_OVA="C:\\Users\\<WIN_USER>\\cchouse-ova-build\\cchouse-debian13-amd64.ova"
+GTR_GOLDEN_VMX="C:\\Users\\<WIN_USER>\\cchouse-e2e-base\\cchouse-debian13-amd64\\cchouse-debian13-amd64.vmx"
+GTR_WORK_DIR="C:\\Users\\<WIN_USER>\\AppData\\Local\\cchouse\\e2e"
 ```
 
 ## 验证覆盖项
