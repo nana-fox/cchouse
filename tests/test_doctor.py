@@ -364,6 +364,50 @@ class TestDoctorBundle(unittest.TestCase):
                 self.assertIn("host-info.json", names)
                 self.assertIn("preflight.json", names)
 
+    def test_redacts_host_home_paths_and_username(self):
+        import getpass
+
+        real_user = getpass.getuser()
+        home_str = str(Path.home())
+        with tempfile.TemporaryDirectory() as td:
+            out_zip = Path(td) / "home-redact.zip"
+            fake_preflight = {
+                "exit_code": 0,
+                "error": None,
+                "json": {
+                    "ok": True,
+                    "status": "PREFLIGHT_OK",
+                    "host": {
+                        "tart_home": f"{home_str}/Library/Application Support/cchouse/tart",
+                    },
+                    "warnings": [
+                        f"mac path: /Users/alice_secret/Library/Application Support/cchouse",
+                        r"win path: C:\Users\bob_secret\AppData\Local\cchouse",
+                        "win slash path: C:/Users/dave_secret/AppData/Local/cchouse",
+                        "linux path: /home/carol_secret/.cchouse/win01",
+                        f"current user mention: owner={real_user}",
+                    ],
+                },
+                "raw_stdout": None,
+                "stderr": None,
+            }
+            with mock.patch.object(doctor_mod, "run_preflight", return_value=fake_preflight):
+                summary = doctor_mod.build_doctor_bundle(env_path=None, vm_ssh=False, out_path=str(out_zip))
+
+            self.assertTrue(summary["ok"])
+            with zipfile.ZipFile(out_zip, "r") as zf:
+                for name in zf.namelist():
+                    content = zf.read(name).decode("utf-8")
+                    if len(real_user) >= 3:
+                        self.assertNotIn(real_user, content, f"真实用户名泄漏到 {name}")
+                    for fake_u in ("alice_secret", "bob_secret", "carol_secret", "dave_secret"):
+                        self.assertNotIn(fake_u, content, f"路径用户名 {fake_u} 泄漏到 {name}")
+                preflight_txt = zf.read("preflight.json").decode("utf-8")
+                self.assertIn("~/", preflight_txt)
+                self.assertIn("/Users/<user>/", preflight_txt)
+                self.assertIn("/home/<user>/", preflight_txt)
+                self.assertIn("<user>", preflight_txt)
+
 
 if __name__ == "__main__":
     unittest.main()

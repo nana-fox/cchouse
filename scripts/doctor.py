@@ -12,6 +12,7 @@
 import argparse
 import base64
 import datetime
+import getpass
 import json
 import os
 import platform
@@ -125,6 +126,46 @@ KV_SECRET_QUOTED_RE = re.compile(
 KV_SECRET_UNQUOTED_RE = re.compile(
     r"""(?im)(["']?(?:[a-z0-9_]*?(?:password|passwd|pwd|secret|token|api[_-]?key|private[_-]?key|public[_-]?key|short[_-]?id|uuid|username|auth|credential)|[a-z0-9_]+_pass)["']?\s*[:=]\s*)(?!["'])([^\s,}\]\r\n]+)"""
 )
+HOME_PATH_MAC_RE = re.compile(r"(/Users/)([^/\s'\"\\]+)(?=/|\\|\s|'|$|\")")
+HOME_PATH_LINUX_RE = re.compile(r"(/home/)([^/\s'\"\\]+)(?=/|\\|\s|'|$|\")")
+HOME_PATH_WIN_BS_RE = re.compile(r"(?i)([A-Z]:\\+Users\\+)([^\\\s'\"]+)(?=\\|\s|'|$|\")")
+HOME_PATH_WIN_FS_RE = re.compile(r"(?i)([A-Z]:/Users/)([^/\s'\"]+)(?=/|\s|'|$|\")")
+
+
+def _get_host_username():
+    try:
+        user = getpass.getuser().strip()
+        if len(user) >= 3:
+            return user
+    except Exception:
+        pass
+    return None
+
+
+def _redact_host_home_and_user(text):
+    """把本机家目录替换为 ~，把 macOS/Linux/Windows 路径中的用户名段兜底替换为 <user>，并清除当前宿主用户名。"""
+    out = text
+    try:
+        home = Path.home()
+        home_variants = []
+        for variant in (str(home), home.as_posix(), str(home).replace("\\", "\\\\")):
+            if variant and len(variant) >= 3 and variant not in home_variants:
+                home_variants.append(variant)
+        for variant in sorted(home_variants, key=len, reverse=True):
+            if variant in out:
+                out = out.replace(variant, "~")
+    except Exception:
+        pass
+
+    out = HOME_PATH_MAC_RE.sub(r"\1<user>", out)
+    out = HOME_PATH_LINUX_RE.sub(r"\1<user>", out)
+    out = HOME_PATH_WIN_BS_RE.sub(r"\1<user>", out)
+    out = HOME_PATH_WIN_FS_RE.sub(r"\1<user>", out)
+
+    host_user = _get_host_username()
+    if host_user and host_user in out:
+        out = out.replace(host_user, "<user>")
+    return out
 
 
 def is_sensitive_env_key(key):
@@ -186,6 +227,10 @@ def extract_sensitive_values(env):
         if quoted != s and len(quoted) >= 3:
             derived.add(quoted)
 
+    host_user = _get_host_username()
+    if host_user:
+        derived.add(host_user)
+
     # 按长度降序排列，避免短子串抢先替换导致长串残留
     return sorted(derived, key=len, reverse=True)
 
@@ -209,6 +254,9 @@ def redact_text(text, secrets=()):
     for secret in secrets:
         if secret and secret in out:
             out = out.replace(secret, "[REDACTED]")
+
+    # 3. 宿主机家目录与本机用户名脱敏（避免对外发 Issue 暴露本机用户名）
+    out = _redact_host_home_and_user(out)
     return out
 
 
