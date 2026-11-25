@@ -278,14 +278,17 @@ class TestCchouseV2(unittest.TestCase):
             (th / "vms" / "cchouse-debian13-arm64-test").mkdir(parents=True)
             (th / "vms" / "cchouse-debian13-arm64-test" / "disk.img").write_bytes(b"x")
             self.assertEqual(preflight_mod.find_tart_linux_golden_images(th), [])
+            # 临时构建机（-building 后缀）不得被识别为黄金镜像
+            (th / "vms" / "cchouse-debian13-arm64-building").mkdir(parents=True)
+            (th / "vms" / "cchouse-debian13-arm64-building" / "disk.img").write_bytes(b"x")
+            (th / "vms" / "cchouse-debian13-arm64-v2.0.0-preview.2-building").mkdir(parents=True)
+            (th / "vms" / "cchouse-debian13-arm64-v2.0.0-preview.2-building" / "disk.img").write_bytes(b"x")
+            self.assertEqual(preflight_mod.find_tart_linux_golden_images(th), [])
+            # 正式命名（含 tart import 导入的黄金镜像，无需额外标记文件）应被正常识别
             (th / "vms" / "cchouse-debian13-arm64").mkdir(parents=True)
             (th / "vms" / "cchouse-debian13-arm64" / "disk.img").write_bytes(b"x")
-            # 仅含 disk.img 但缺 .cchouse-golden-ok 的半成品 VM 不得被识别为黄金镜像
-            self.assertEqual(preflight_mod.find_tart_linux_golden_images(th), [])
-            (th / "vms" / "cchouse-debian13-arm64" / ".cchouse-golden-ok").write_text("SOURCE_COMMIT=test\n", encoding="utf-8")
             (th / "vms" / "cchouse-debian13-arm64-v2.0.0-preview.2").mkdir(parents=True)
             (th / "vms" / "cchouse-debian13-arm64-v2.0.0-preview.2" / "disk.img").write_bytes(b"x")
-            (th / "vms" / "cchouse-debian13-arm64-v2.0.0-preview.2" / ".cchouse-golden-ok").write_text("SOURCE_COMMIT=test\n", encoding="utf-8")
             self.assertEqual(
                 preflight_mod.find_tart_linux_golden_images(th),
                 ["cchouse-debian13-arm64", "cchouse-debian13-arm64-v2.0.0-preview.2"],
@@ -587,9 +590,15 @@ class TestCchouseV2(unittest.TestCase):
         for field in ("SOURCE_COMMIT=", "BUILD_TIME=", "ARCH=", "HYPERVISOR="):
             self.assertIn(field, golden_sh)
 
-        # 验证 tart 构建器成功写 .cchouse-golden-ok、失败清理半成品 VM
-        self.assertIn(".cchouse-golden-ok", tart_sh)
-        self.assertIn('"$TART_BIN" delete "$VM_NAME"', tart_sh)
+        # 验证 tart 构建器在临时名上构建、成功后 rename 成正式名、失败只删临时名
+        self.assertIn('BUILD_VM_NAME="${VM_NAME}-building"', tart_sh)
+        self.assertIn('"$TART_BIN" rename "$BUILD_VM_NAME" "$VM_NAME"', tart_sh)
+        self.assertIn('"$TART_BIN" delete "$BUILD_VM_NAME"', tart_sh)
+        self.assertNotIn(".cchouse-golden-ok", tart_sh)
+
+        # 验证两个构建器的 -dirty 判定均忽略未跟踪文件
+        self.assertIn("status --porcelain --untracked-files=no", tart_sh)
+        self.assertIn("status --porcelain --untracked-files=no", ova_ps1)
 
         # 动态验证：golden 失败时前置链退出码不会被后台关机吞掉
         bash_exe = find_bash()

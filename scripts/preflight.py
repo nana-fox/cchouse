@@ -165,11 +165,10 @@ def has_tart_cached_image(th=None):
 
 
 TART_LINUX_GOLDEN_RE = re.compile(r"^cchouse-debian13-arm64(?:-v\d[0-9a-zA-Z._-]*)?$")
-TART_GOLDEN_OK_MARKER = ".cchouse-golden-ok"
 
 
 def find_tart_linux_golden_images(th=None):
-    """检测本地是否已有可复用的 Tart Debian 13 黄金镜像（需匹配命名、存在 disk.img 且含构建完成标记 .cchouse-golden-ok）。"""
+    """检测本地是否已有可复用的 Tart Debian 13 黄金镜像（匹配正式命名且排除 -building 临时构建机，兼容 tart import）。"""
     th = Path(th) if th is not None else tart_home_dir()
     vms_dir = th / "vms"
     found = []
@@ -178,8 +177,8 @@ def find_tart_linux_golden_images(th=None):
             if (
                 entry.is_dir()
                 and TART_LINUX_GOLDEN_RE.match(entry.name)
+                and not entry.name.endswith("-building")
                 and (entry / "disk.img").is_file()
-                and (entry / TART_GOLDEN_OK_MARKER).is_file()
             ):
                 found.append(entry.name)
     return found

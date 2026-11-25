@@ -25,7 +25,7 @@ try {
   $gitHead = (& git -C $RepoRoot rev-parse HEAD 2>$null)
   if ($LASTEXITCODE -eq 0 -and $gitHead) {
     $sourceCommit = $gitHead.Trim()
-    $gitStatus = (& git -C $RepoRoot status --porcelain 2>$null)
+    $gitStatus = (& git -C $RepoRoot status --porcelain --untracked-files=no 2>$null)
     if ($gitStatus) { $sourceCommit = "$sourceCommit-dirty" }
   }
 } catch {}
