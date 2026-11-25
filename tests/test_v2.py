@@ -203,6 +203,8 @@ class TestCchouseV2(unittest.TestCase):
                 [sys.executable, "-I", str(PREFLIGHT), "--route", "vmware-linux", "--env", str(env_f), "--state", str(state_f)],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
             )
             self.assertNotIn("SUPER_SECRET_NEVER_PRINT_999", cp.stdout + cp.stderr)
             payload = json.loads(cp.stdout)
@@ -217,6 +219,8 @@ class TestCchouseV2(unittest.TestCase):
                  "--set-step", "step1_route", "--set-status", "HUMAN_WAIT", "--next-action", "wait_user_proxy"],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
             )
             state2 = json.loads(state_f.read_text(encoding="utf-8"))
             self.assertEqual(state2["step"], "step1_route")
@@ -552,7 +556,13 @@ class TestCchouseV2(unittest.TestCase):
                 cp_r = subprocess.run([sys.executable, "-I", str(RENDER), str(bad_p), str(Path(td) / "out_bad_kb")], capture_output=True, text=True)
                 self.assertNotEqual(cp_r.returncode, 0)
                 self.assertIn("INVALID_GUEST_KEYBOARD", cp_r.stderr)
-                cp_p = subprocess.run([sys.executable, "-I", str(PREFLIGHT), "--route", "tart-linux", "--env", str(bad_p)], capture_output=True, text=True)
+                cp_p = subprocess.run(
+                    [sys.executable, "-I", str(PREFLIGHT), "--route", "tart-linux", "--env", str(bad_p)],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                )
                 self.assertNotEqual(cp_p.returncode, 0)
                 self.assertIn("INVALID_GUEST_KEYBOARD", cp_p.stdout)
 
@@ -674,6 +684,8 @@ class TestCchouseV2(unittest.TestCase):
                 [sys.executable, "-I", str(PREFLIGHT), "--route", "tart-linux", "--env", str(env_p)],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
             )
             self.assertNotEqual(cp.returncode, 0)
             self.assertIn("INVALID_GUEST_KEYBOARD", cp.stdout)

@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: unittest (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install xorriso (Ubuntu)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends xorriso
+      - name: Run unit tests (POSIX)
+        if: runner.os != 'Windows'
+        run: python3 -I -m unittest discover -s tests -v
+      - name: Run unit tests (Windows)
+        if: runner.os == 'Windows'
+        run: python -I -m unittest discover -s tests -v
+
+  lint:
+    name: shell & powershell lint (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bash syntax check (bash -n)
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          scripts=(scripts/*.sh host/*.sh guest-linux/image-builder/*.sh)
+          for f in "${scripts[@]}"; do
+            bash -n "$f"
+            echo "OK bash -n: $f"
+          done
+
+      - name: ShellCheck (error severity)
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          scripts=(scripts/*.sh host/*.sh guest-linux/image-builder/*.sh)
+          shellcheck -S error "${scripts[@]}"
+          echo "OK shellcheck -S error (${#scripts[@]} files)"
+
+      - name: PSScriptAnalyzer (Error severity)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (-not (Get-Module -ListAvailable -Name PSScriptAnalyzer)) {
+            Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser -Confirm:$false
+          }
+          $files = Get-ChildItem -Recurse -Include *.ps1 | Select-Object -ExpandProperty FullName
+          $findings = @()
+          foreach ($f in $files) {
+            Write-Host "Checking $f"
+            $res = Invoke-ScriptAnalyzer -Path $f -Severity Error
+            if ($res) {
+              $res | Format-Table -AutoSize
+              $findings += $res
+            }
+          }
+          if ($findings.Count -gt 0) {
+            Write-Error "PSScriptAnalyzer found $($findings.Count) Error-level issue(s)."
+            exit 1
+          }
+          Write-Host "OK PSScriptAnalyzer ($($files.Count) files)"

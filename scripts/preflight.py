@@ -304,6 +304,10 @@ def validate_env_file(env_path, route):
 
 
 def main():
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(description="cchouse preflight checker")
     parser.add_argument("--route", choices=("auto", "macos-tart", "tart-linux", "vmware-linux"), default="auto")
     parser.add_argument("--env", dest="env_path", default=None)
