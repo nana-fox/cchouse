@@ -22,3 +22,4 @@
 - 修复 macOS 宿主 `/bin/bash` 3.2 在 UTF-8 locale 下把紧跟变量的全角字符首字节并入变量名的问题：`scripts/verify-linux.sh` 的 Stripe 可达性一行 `$stripe_api_code）` 在 `set -u` 下报 `unbound variable` 并中止整个 `--fail-closed` 验收（PR #17 引入，所有 Mac 宿主必现）；同类写法在 `verify-linux.sh`、`verify.sh`、`host/run-vm.sh`、`host/watch-egress.sh` 共 7 处统一改为 `${var}`，新增单测 `test_shell_vars_braced_before_non_ascii` 扫描全仓 `*.sh` 防回归；`tools/e2e/report.py` 写 `status.json`/`report.html` 时对 `--detail` 等参数中的非法 UTF-8 字节改为替换（此前直接 `UnicodeEncodeError` 崩溃，失败步骤与原因丢失）。
 - 修复 `scripts/downloads.py` 在代理/服务器提前正常关闭连接（EOF、已下载 < 期望大小）时误当作下载完成去校验并删除 `.part` 的问题（Mac 冷跑实测 722 MB 镜像下到 189 MB 时触发）：未下完视为中断、保留 `.part`，同轮用 Range 自动续传最多 5 次（指数退避 2/4/8/16/32s，打印第几次续传）；只有大小完整但 SHA 不符才删除；服务器不支持 Range 时从头下载并提示；`cchouse up` 失败时耗时表先刷新下载记录，并把有失败步骤的运行标为「未完成」。
 - 修复云构建的 amd64 OVA 被 VMware OVF Tool 拒绝导入的问题。VMDK 转换使用包含压缩数据块对齐与结束标记修复的 QEMU，上载前重新读取归档，检查 OVF 的磁盘引用和 SHA-256 清单。
+- 修复 Tart 联网重启后的 mihomo 预热探针未引用 `known_hosts` 路径的问题。macOS 默认私有目录含空格，旧写法导致 SSH 主机密钥校验失败。
