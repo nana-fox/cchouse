@@ -81,6 +81,33 @@ python3 -I scripts/import-existing.py "$D/live" <TAG>
 `guard.sh` 会清掉上次的确认标记，完成旧配置备份后才写 `ready`。同一实例只运行一个 guard。
 如果强制终止进程或重启后留下 `guard.lock`，先确认没有 guard 在运行，再手工移除空锁目录；不要跳过备份直接改网络。
 
+## 出错怎么导诊断包
+
+部署失败、断网、验收不通过或需要把现场发给维护者 / AI 协助排错时，在宿主机仓库根目录一键导出脱敏诊断包（Windows / macOS / Linux 通用）：
+
+```bash
+# 仅采集宿主信息 + preflight 自检（客机尚未启动或 SSH 不可达时可用）
+python3 -I scripts/doctor.py --env "$D/instance.env"
+
+# 同时尝试通过 SSH 拉取客机 firstboot.log、verify-linux.sh --json、mihomo 状态与 nftables 规则
+python3 -I scripts/doctor.py --env "$D/instance.env" --vm-ssh
+
+# 可选：指定输出路径
+python3 -I scripts/doctor.py --env "$D/instance.env" --vm-ssh --out "$HOME/Desktop/cchouse-doctor.zip"
+```
+
+Windows PowerShell 示例：
+
+```powershell
+python -I scripts/doctor.py --env "$env:LOCALAPPDATA\cchouse\<TAG>\instance.env" --vm-ssh
+```
+
+**包内内容与安全说明**：
+
+- 诊断包默认包含 `manifest.json`（采集清单与缺失原因）、`host-info.json`（系统版本、CPU 架构、`tart`/`vmrun`/SSH 版本）、`preflight.json` 与仅含非敏感结构字段的 `env-summary.json`。
+- 加 `--vm-ssh` 时会额外尝试采集 `guest/firstboot.log`、`guest/verify-linux.json`、`guest/mihomo-status.txt` 与 `guest/nft-ruleset.txt`；若客机不可达或某项无权限读取，脚本依然正常生成 zip，并在 `manifest.json` 的 `missing` 字段写明缺哪一项及原因。
+- **不会打包 `instance.env` 原文或私钥文件**：所有写入 zip 的文本与 JSON 都会经过统一脱敏，自动抹除 `instance.env` 中的密码、UUID、密钥、节点地址、用户名/密码 URL、Authorization 头与 PEM 私钥块。即便如此，发给外部前仍建议先粗略扫一眼包内文件确认无额外个人备注。
+
 ## 远程部署排障与交接
 
 以下来自 [ex02 实测记录](records/2026-11-16-ex02.md)，适用于控制端经 UU 维护其他用户宿主、再由宿主 SSH 进入客机的流程。
