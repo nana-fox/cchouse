@@ -172,10 +172,11 @@ if stripe_code_ok "$stripe_js_code" && stripe_code_ok "$stripe_api_code"; then
   ok "Stripe 可达（js.stripe.com=$stripe_js_code, api.stripe.com=$stripe_api_code）"
 else
   stripe_ok="false"
+  # 只提示不判失败：Stripe 仅影响 claude.ai 网页付款，已订阅或别处付款的用户不受影响
   if [ "$EXIT_MODE" = "single" ] && [ "$STRIPE_EXIT_MODE" = "off" ]; then
-    warn "Stripe 不可达（js.stripe.com=$stripe_js_code, api.stripe.com=$stripe_api_code）：单节点出口可能屏蔽 Stripe，claude.ai 付款会失败；建议配置 Stripe 备用节点（STRIPE_EXIT_MODE=node + STRIPE_NODE_*）或改链式（EXIT_MODE=chain）"
+    warn "Stripe 不可达（js.stripe.com=$stripe_js_code, api.stripe.com=$stripe_api_code）：单节点出口可能屏蔽 Stripe，claude.ai 网页付款会失败（不影响已订阅账号使用）；如需在此付款，可配置 Stripe 备用节点（STRIPE_EXIT_MODE=node + STRIPE_NODE_*）或改链式（EXIT_MODE=chain）"
   else
-    bad "Stripe 不可达（js.stripe.com=$stripe_js_code, api.stripe.com=$stripe_api_code，当前 STRIPE_EXIT_MODE=$STRIPE_EXIT_MODE）"
+    warn "Stripe 不可达（js.stripe.com=$stripe_js_code, api.stripe.com=$stripe_api_code，当前 STRIPE_EXIT_MODE=$STRIPE_EXIT_MODE）：claude.ai 网页付款会失败（不影响已订阅账号使用）"
   fi
 fi
 
