@@ -300,7 +300,22 @@ Remove-Item -Recurse -Force $ciDir -ErrorAction SilentlyContinue
 
 $ovaOut = Join-Path $WorkDir "cchouse-debian13-amd64.ova"
 if (Test-Path $ovaOut) { Remove-Item -Force $ovaOut }
+# 等待 VMware 释放磁盘锁并用 vmware-vdiskmanager 重写原生 VMDK 描述符（避开 qemu-img VMDK 导致 ovftool Failed to open disk）
+for ($i = 0; $i -lt 15; $i++) {
+  if (-not (Get-ChildItem -Path $vmDir -Filter "*.lck" -ErrorAction SilentlyContinue)) { break }
+  Start-Sleep 1
+}
+$vdiskMgr = Find-Exe @(
+  "C:\Program Files\VMware\VMware Workstation\vmware-vdiskmanager.exe",
+  "C:\Program Files (x86)\VMware\VMware Workstation\vmware-vdiskmanager.exe"
+) "vmware-vdiskmanager"
 $prevEap = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+if ($vdiskMgr) {
+  $cleanVmdk = Join-Path $vmDir "cchouse-debian13-clean.vmdk"
+  & $vdiskMgr -r $vmdk -t 0 $cleanVmdk
+  if ($LASTEXITCODE -ne 0) { $ErrorActionPreference = $prevEap; throw "vmware-vdiskmanager 转换 VMDK 失败" }
+  Move-Item -Force $cleanVmdk $vmdk
+}
 & $ovftool --compress=9 $vmx $ovaOut
 $rc = $LASTEXITCODE
 $ErrorActionPreference = $prevEap

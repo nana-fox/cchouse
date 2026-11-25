@@ -90,6 +90,12 @@ ssh ... claude@<NAT IP> 'sudo -n cat /tmp/<TAG>/setup-user.sh | bash'
 ssh ... claude@<NAT IP> 'sudo -n install -d -m 755 /usr/local/bin &&
   sudo -n install -m 755 /tmp/<TAG>/tart-guest-agent /usr/local/bin/ &&
   sudo -n install -m 644 /tmp/<TAG>/org.cirruslabs.tart-guest-agent.plist /Library/LaunchAgents/'
+# 装 Claude Code 独立原生二进制（先确认宿主已按第 0 节生成 $D/claude-code.tgz，无需 Node.js）
+scp -i "$D/id_ed25519" "$D/claude-code.tgz" claude@<NAT IP>:/tmp/<TAG>/claude-code.tgz
+ssh ... claude@<NAT IP> 'sudo -n tar -xzf /tmp/<TAG>/claude-code.tgz -C /tmp/<TAG> package/claude &&
+  sudo -n install -m 755 /tmp/<TAG>/package/claude /usr/local/bin/claude &&
+  grep -qxF "export DISABLE_AUTOUPDATER=1" /etc/zshenv 2>/dev/null || echo "export DISABLE_AUTOUPDATER=1" | sudo -n tee -a /etc/zshenv >/dev/null &&
+  claude --version'
 # 必须在图形用户会话运行才能共享剪贴板；首次自动登录会加载这个 LaunchAgent。
 # 如用户已经登录桌面，再通过 root 在对应 gui/<UID> 域 bootstrap；不要装到 system 域。
 ```
@@ -113,7 +119,7 @@ ssh ... claude@<NAT IP> 'sudo -n install -d -m 755 /usr/local/bin &&
 
 ```bash
 ssh ... claude@$GUEST_IP 'PW=$(cat); sudo -n bash /tmp/<TAG>/remove-admin.sh "$PW"' < "$D/claude-password.txt"
-ssh ... claude@$GUEST_IP 'sudo -n rm -rf /tmp/<TAG>; sync'   # 客机里的渲染文件含凭据
+ssh ... claude@$GUEST_IP 'sudo -n rm -rf /tmp/<TAG>; sync'   # 客机里的渲染文件与临时安装包
 rm -rf "$D/rendered"
 ```
 

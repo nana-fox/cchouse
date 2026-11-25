@@ -4,20 +4,26 @@
 set -euo pipefail
 
 MIHOMO_VERSION="${MIHOMO_VERSION:-v1.19.19}"
+MIHOMO_ARCH="${MIHOMO_ARCH:-amd64}"
 MIHOMO_SHA256="${MIHOMO_SHA256:-}"
-MIHOMO_URL="${MIHOMO_URL:-https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VERSION}/mihomo-linux-amd64-${MIHOMO_VERSION}.gz}"
+MIHOMO_URL="${MIHOMO_URL:-https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VERSION}/mihomo-linux-${MIHOMO_ARCH}-${MIHOMO_VERSION}.gz}"
+TARGET_HYPERVISOR="${TARGET_HYPERVISOR:-vmware}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 GUEST_LINUX_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 export DEBIAN_FRONTEND=noninteractive
 
-echo "== [1/6] 安装基础桌面、Chromium、nftables 与 VMware 工具（Claude Code 为独立二进制，无需 Node.js）"
+echo "== [1/6] 安装基础桌面、Chromium、nftables 与虚拟化工具（${TARGET_HYPERVISOR}/${MIHOMO_ARCH}，无需 Node.js）"
+HYPERVISOR_PKGS=()
+if [ "$TARGET_HYPERVISOR" = "vmware" ]; then
+  HYPERVISOR_PKGS=(open-vm-tools open-vm-tools-desktop)
+fi
 apt-get update
 apt-get install -y --no-install-recommends \
   openbox xorg lightdm xterm \
   chromium \
   nftables curl ca-certificates dnsutils openssh-server sudo \
-  open-vm-tools open-vm-tools-desktop \
+  "${HYPERVISOR_PKGS[@]}" \
   locales tzdata iproute2 procps gzip
 
 echo "== [2/6] 创建普通用户 claude 与 LightDM 自动登录（Openbox 会话）"
@@ -81,7 +87,7 @@ apt-get purge -y avahi-daemon cups-browsed unattended-upgrades cloud-init cloud-
 rm -rf /etc/cloud /var/lib/cloud
 apt-get autoremove -y
 apt-get clean
-sed -i 's|mirrors\.ustc\.edu\.cn|deb.debian.org|g' /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null || true
+sed -i 's|mirrors\.ustc\.edu\.cn|deb.debian.org|g' /etc/apt/sources.list /etc/apt/sources.list.d/* /etc/apt/mirrors/* 2>/dev/null || true
 mkdir -p /etc/NetworkManager/conf.d
 cat >/etc/NetworkManager/conf.d/99-cchouse-no-connectivity-check.conf <<'EOF'
 [connectivity]
