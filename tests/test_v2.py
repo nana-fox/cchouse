@@ -312,7 +312,6 @@ class TestCchouseV2(unittest.TestCase):
             self.assertNotIn("ConditionPathExists=!/var/lib/cchouse/firstboot.done", builder_sh)
             for marker in ("fonts-noto-cjk", "fcitx5-chinese-addons", "dbus-user-session", "vmware-user-suid-wrapper", "tint2", "lxterminal", "spice-vdagent", "xclip", "xset s off -dpms", "ClientIdentifier=mac"):
                 self.assertIn(marker, builder_sh)
-            self.assertNotIn("1=Alt+space", builder_sh)
             # 5) firstboot sudoers 不得含通配符 *
             fb_sh = (ROOT / "guest-linux" / "firstboot.sh").read_text(encoding="utf-8")
             sudo_block = fb_sh.split("/etc/sudoers.d/cchouse-verify")[1].split("EOF")[1]
@@ -408,6 +407,102 @@ class TestCchouseV2(unittest.TestCase):
             aes = (ROOT / "guest-linux" / "image-builder" / "assert-empty-state.sh").read_text(encoding="utf-8")
             self.assertIn("20-cchouse-dhcp.network", aes)
             self.assertIn("systemd-networkd.service", aes)
+
+    def test_linux_desktop_ux_and_review_hardening(self):
+        import configparser
+
+        # 1) chromium-policy.json 可正常 JSON 解析且关闭书签栏
+        policy = json.loads((ROOT / "guest-linux" / "chromium-policy.json").read_text(encoding="utf-8"))
+        self.assertIs(policy.get("BookmarkBarEnabled"), False)
+
+        # 2) build-debian13-golden.sh 满足所有桌面、输入法、安全与 DHCPv4 约束
+        builder_sh = (ROOT / "guest-linux" / "image-builder" / "build-debian13-golden.sh").read_text(encoding="utf-8")
+        self.assertNotIn("--disable-session-crashed-bubble", builder_sh)
+        self.assertNotIn("fcitx5-module-xorg", builder_sh)
+        self.assertNotIn("panel_items = TSBC", builder_sh)
+        self.assertNotIn("Name=keyboard-us", builder_sh)
+        self.assertNotIn("Default Layout=us", builder_sh)
+        for marker in (
+            "dbus-user-session",
+            "/etc/chromium.d/cchouse",
+            "${CHROMIUM_FLAGS:-}",
+            "--hide-crash-restore-bubble",
+            "CloudPinyinEnabled=False",
+            "panel_items = TSC",
+            "1=Alt+space",
+            'key="A-space"',
+            "vmware-user-suid-wrapper",
+            "/etc/issue.d/cchouse.issue",
+            "(sleep 1 && chromium) &",
+            "(sleep 1 && lxterminal) &",
+            "/home/claude/.local/share/fcitx5",
+            "sudo -n /usr/bin/systemctl poweroff",
+            "sudo -n /usr/bin/systemctl reboot",
+        ):
+            self.assertIn(marker, builder_sh)
+
+        # cchouse-power sudoers 不得含通配符 *
+        power_block = builder_sh.split("/etc/sudoers.d/cchouse-power")[1].split("EOF")[1]
+        self.assertNotIn("*", power_block)
+        self.assertIn("/usr/bin/systemctl poweroff", power_block)
+        self.assertIn("/usr/bin/systemctl reboot", power_block)
+
+        # 20-cchouse-dhcp.network 的 [DHCPv4] 段内精确校验
+        dhcp_block = builder_sh.split("20-cchouse-dhcp.network <<'EOF'\n", 1)[1].split("\nEOF", 1)[0]
+        cp_ini = configparser.ConfigParser()
+        cp_ini.read_string(dhcp_block)
+        self.assertTrue(cp_ini.has_section("DHCPv4"))
+        self.assertEqual(cp_ini.get("DHCPv4", "ClientIdentifier"), "mac")
+        self.assertEqual(cp_ini.get("DHCPv4", "UseDNS"), "no")
+        self.assertEqual(cp_ini.get("DHCPv4", "UseNTP"), "no")
+
+        # 3) assert-empty-state.sh 校验无 fcitx5 词库残留与无硬编码 profile
+        aes = (ROOT / "guest-linux" / "image-builder" / "assert-empty-state.sh").read_text(encoding="utf-8")
+        self.assertIn("/home/claude/.local/share/fcitx5", aes)
+        self.assertIn("/home/claude/.config/fcitx5/profile", aes)
+
+        # 4) 非 us 的 GUEST_KEYBOARD 渲染到 firstboot.sh 后动态生成对应 fcitx5 profile
+        with tempfile.TemporaryDirectory() as td:
+            env = base_single_linux_env()
+            env["GUEST_KEYBOARD"] = "gb"
+            env_p = Path(td) / "gb.env"
+            out_d = Path(td) / "out_gb"
+            write_env(env_p, env)
+            cp = subprocess.run(
+                [sys.executable, "-I", str(RENDER), str(env_p), str(out_d)],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            self.assertEqual(cp.returncode, 0, cp.stderr)
+            fb_rendered = (out_d / "firstboot.sh").read_text(encoding="utf-8")
+            self.assertIn('GUEST_KEYBOARD="gb"', fb_rendered)
+            self.assertIn("Default Layout=${GUEST_KEYBOARD}", fb_rendered)
+            self.assertIn("DefaultIM=pinyin", fb_rendered)
+            self.assertIn("Name=keyboard-${GUEST_KEYBOARD}", fb_rendered)
+            bash_exe = find_bash()
+            if bash_exe:
+                chk = subprocess.run([bash_exe, "-n", str(out_d / "firstboot.sh")], capture_output=True, text=True)
+                self.assertEqual(chk.returncode, 0, chk.stderr)
+
+            # 5) 非法 GUEST_KEYBOARD（多布局/变体）被 render.py 与 preflight.py 拒收
+            for bad_kb in ("us,de", "us(intl)", "US"):
+                bad_env = base_single_linux_env()
+                bad_env["GUEST_KEYBOARD"] = bad_kb
+                bad_p = Path(td) / f"bad_kb_{bad_kb.replace(',', '_').replace('(', '_').replace(')', '_')}.env"
+                write_env(bad_p, bad_env)
+                cp_r = subprocess.run([sys.executable, "-I", str(RENDER), str(bad_p), str(Path(td) / "out_bad_kb")], capture_output=True, text=True)
+                self.assertNotEqual(cp_r.returncode, 0)
+                self.assertIn("INVALID_GUEST_KEYBOARD", cp_r.stderr)
+                cp_p = subprocess.run([sys.executable, "-I", str(PREFLIGHT), "--route", "tart-linux", "--env", str(bad_p)], capture_output=True, text=True)
+                self.assertNotEqual(cp_p.returncode, 0)
+                self.assertIn("INVALID_GUEST_KEYBOARD", cp_p.stdout)
+
+        # 6) verify-linux.sh 含 sudo -n -l 白名单校验
+        vl_sh = (ROOT / "scripts" / "verify-linux.sh").read_text(encoding="utf-8")
+        self.assertIn("sudo -n -l", vl_sh)
+        self.assertIn("cchouse-verify/cchouse-power", vl_sh)
 
 
 if __name__ == "__main__":

@@ -19,6 +19,8 @@ check "无 /var/lib/dbus/machine-id" test ! -e /var/lib/dbus/machine-id
 check "无 /var/lib/systemd/random-seed" test ! -e /var/lib/systemd/random-seed
 check "无 SSH 主机密钥" bash -c '! ls /etc/ssh/ssh_host_* >/dev/null 2>&1'
 check "无 Chromium 用户目录" test ! -d /home/claude/.config/chromium
+check "无 fcitx5 用户词库/输入历史残留" test ! -d /home/claude/.local/share/fcitx5
+check "无硬编码 fcitx5 键盘 profile" test ! -e /home/claude/.config/fcitx5/profile
 check "无 ~/.claude* 目录或文件" bash -c '! ls -d /home/claude/.claude* >/dev/null 2>&1'
 check "未预装 Claude Code（合规：首次开机由宿主注入）" bash -c '! command -v claude >/dev/null 2>&1'
 check "无 npm 缓存" bash -c 'test ! -d /home/claude/.npm && test ! -d /root/.npm'

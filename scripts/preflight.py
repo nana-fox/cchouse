@@ -220,6 +220,11 @@ def validate_env_file(env_path, route):
             except ValueError:
                 errors.append(f"INVALID_CIDR: {cidr_key}={val} 不是有效 CIDR")
 
+    if guest_os == "linux":
+        kb = env.get("GUEST_KEYBOARD", "").strip()
+        if kb and not re.fullmatch(r"[a-z]{2,3}", kb):
+            errors.append(f"INVALID_GUEST_KEYBOARD: GUEST_KEYBOARD={kb} 仅支持 2-3 位小写 XKB 布局代码（如 us/gb/de/jp）")
+
     return errors, warnings
 
 

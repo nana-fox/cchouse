@@ -166,6 +166,17 @@ for svc in cchouse-default-drop cchouse-nftables cchouse-mihomo; do
 done
 expect "mihomo 以专用用户 $MIHOMO_USER 运行" "$(guest "ps -eo user=,comm= | awk '\$2==\"mihomo\"{print \$1; exit}'")" "$MIHOMO_USER"
 expect "SSH 禁止密码登录" "$(guest "awk '/^PasswordAuthentication/{print \$2}' /etc/ssh/sshd_config.d/100-$TAG.conf 2>/dev/null")" "no"
+sudo_audit=$(guest "sudo -n -l 2>/dev/null | awk '
+  /User .* may run/ { p=1; next }
+  p && /^[[:space:]]*\(/ {
+    gsub(/^[[:space:]]+|[[:space:]]+$/, \"\")
+    n++
+    if (\$0 ~ /\*/) { bad=1 }
+    if (\$0 !~ /^\(root\) NOPASSWD: (\/usr\/local\/sbin\/cchouse-probe (nft-loaded|nft-live-sha|direct-count|mihomo-stop|mihomo-start|root-egress)|\/usr\/bin\/systemctl (poweroff|reboot))\$/) { bad=1 }
+  }
+  END { if (n >= 6 && !bad) print \"ok\"; else print \"bad(\" n \")\" }
+'" 2>/dev/null || echo "err")
+expect "sudoers 仅放行固定无通配符白名单（cchouse-verify/cchouse-power）" "$sudo_audit" "ok"
 expect "Claude Code CLI 可执行（claude --version）" "$(guest "claude --version >/dev/null 2>&1 && echo ok || echo missing")" "ok"
 expect "Claude Code 自动更新已禁用（profile.d + managed-settings.json）" "$(guest "grep -q 'DISABLE_AUTOUPDATER=1' /etc/profile.d/cchouse-claude.sh 2>/dev/null && grep -q 'DISABLE_AUTOUPDATER' /etc/claude-code/managed-settings.json 2>/dev/null && echo ok || echo missing")" "ok"
 
