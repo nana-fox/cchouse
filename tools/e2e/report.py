@@ -45,12 +45,13 @@ def save_and_render(run_dir: Path, data: dict) -> None:
         data["duration_sec"] = round(end_ep - data["started_epoch"], 2)
 
     tmp_json = run_dir / ".status.json.tmp"
-    tmp_json.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    # argv text (e.g. --detail from a log's last line) may carry undecodable bytes as lone surrogates
+    tmp_json.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", errors="replace")
     os.replace(tmp_json, run_dir / "status.json")
 
     html_text = render_html(data)
     tmp_html = run_dir / ".report.html.tmp"
-    tmp_html.write_text(html_text, encoding="utf-8")
+    tmp_html.write_text(html_text, encoding="utf-8", errors="replace")
     os.replace(tmp_html, run_dir / "report.html")
 
 

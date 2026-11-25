@@ -74,7 +74,7 @@ expect_blocked() {
   case $rc in
     42) ok "$1" ;;
     0) bad "$1（仍可连接）" ;;
-    *) bad "$1（无法确认阻断，远程状态 $rc）" ;;
+    *) bad "$1（无法确认阻断，远程状态 ${rc}）" ;;
   esac
 }
 
@@ -89,6 +89,31 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 trace_field() { awk -F= -v k="$1" '$1==k{print $2}'; }
+# Cloudflare trace 偶发超时/空响应：最多重试 2 次（间隔 3 秒），只在取不到 loc 时重试；
+# 取到即交给 expect 严格比对（国家不符不重试）。三次都取不到时 CF_LOC_REASON 记录每次是超时、空响应还是 SSH 无返回
+cf_trace_loc() {
+  local i out rc loc reasons=""
+  CF_LOC=""
+  CF_LOC_REASON=""
+  for i in 1 2 3; do
+    out="$(guest "curl -s --max-time 15 $TRACE; echo __curl_rc=\$?" 2>/dev/null)"
+    rc="$(printf '%s\n' "$out" | sed -n 's/^__curl_rc=//p' | tail -n 1)"
+    loc="$(printf '%s\n' "$out" | trace_field loc)"
+    if [ -n "$loc" ]; then
+      CF_LOC="$loc"
+      return 0
+    fi
+    case "$rc" in
+      28) reasons="${reasons}第${i}次超时；" ;;
+      0)  reasons="${reasons}第${i}次空响应；" ;;
+      "") reasons="${reasons}第${i}次 SSH 无返回；" ;;
+      *)  reasons="${reasons}第${i}次 curl 退出码 ${rc}；" ;;
+    esac
+    if [ "$i" -lt 3 ]; then sleep "${CF_TRACE_RETRY_SLEEP:-3}"; fi
+  done
+  CF_LOC_REASON="${reasons%；}"
+  return 1
+}
 egress_claude() {
   local ip="" i
   for i in 1 2 3; do
@@ -139,7 +164,11 @@ expect "claude 出口连测 3 次一致" "$got_c" "$EXPECTED_EGRESS_IP $EXPECTED
 got_r="$(egress_root) $(egress_root) $(egress_root)"
 expect "root 出口连测 3 次一致" "$got_r" "$EXPECTED_EGRESS_IP $EXPECTED_EGRESS_IP $EXPECTED_EGRESS_IP"
 if [ -n "${EXPECTED_EGRESS_LOC:-}" ]; then
-  expect "Cloudflare 看到的国家" "$(guest "curl -s --max-time 15 $TRACE" 2>/dev/null | trace_field loc)" "$EXPECTED_EGRESS_LOC"
+  if cf_trace_loc; then
+    expect "Cloudflare 看到的国家" "$CF_LOC" "$EXPECTED_EGRESS_LOC"
+  else
+    bad "Cloudflare 看到的国家（期望 ${EXPECTED_EGRESS_LOC}，3 次均未取到：${CF_LOC_REASON}）"
+  fi
 fi
 
 log "-- 环境与出口一致"
@@ -169,14 +198,14 @@ stripe_js_code=$(stripe_http_code "https://js.stripe.com/v3/")
 stripe_api_code=$(stripe_http_code "https://api.stripe.com/v1")
 if stripe_code_ok "$stripe_js_code" && stripe_code_ok "$stripe_api_code"; then
   stripe_ok="true"
-  ok "Stripe 可达（js.stripe.com=$stripe_js_code, api.stripe.com=$stripe_api_code）"
+  ok "Stripe 可达（js.stripe.com=$stripe_js_code, api.stripe.com=${stripe_api_code}）"
 else
   stripe_ok="false"
   # 只提示不判失败：Stripe 仅影响 claude.ai 网页付款，已订阅或别处付款的用户不受影响
   if [ "$EXIT_MODE" = "single" ] && [ "$STRIPE_EXIT_MODE" = "off" ]; then
-    warn "Stripe 不可达（js.stripe.com=$stripe_js_code, api.stripe.com=$stripe_api_code）：单节点出口可能屏蔽 Stripe，claude.ai 网页付款会失败（不影响已订阅账号使用）；如需在此付款，可配置 Stripe 备用节点（STRIPE_EXIT_MODE=node + STRIPE_NODE_*）或改链式（EXIT_MODE=chain）"
+    warn "Stripe 不可达（js.stripe.com=$stripe_js_code, api.stripe.com=${stripe_api_code}）：单节点出口可能屏蔽 Stripe，claude.ai 网页付款会失败（不影响已订阅账号使用）；如需在此付款，可配置 Stripe 备用节点（STRIPE_EXIT_MODE=node + STRIPE_NODE_*）或改链式（EXIT_MODE=chain）"
   else
-    warn "Stripe 不可达（js.stripe.com=$stripe_js_code, api.stripe.com=$stripe_api_code，当前 STRIPE_EXIT_MODE=$STRIPE_EXIT_MODE）：claude.ai 网页付款会失败（不影响已订阅账号使用）"
+    warn "Stripe 不可达（js.stripe.com=$stripe_js_code, api.stripe.com=${stripe_api_code}，当前 STRIPE_EXIT_MODE=${STRIPE_EXIT_MODE}）：claude.ai 网页付款会失败（不影响已订阅账号使用）"
   fi
 fi
 

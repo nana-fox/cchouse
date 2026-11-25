@@ -29,7 +29,7 @@ if [ -z "$ip" ]; then
   else alert "SSH 连不上客机 $GUEST_IP"; fi
   exit 1
 elif [ "$ip" != "$EXPECTED_EGRESS_IP" ]; then
-  alert "出口变了：实际 $ip，期望 $EXPECTED_EGRESS_IP。先别登录账号"
+  alert "出口变了：实际 ${ip}，期望 ${EXPECTED_EGRESS_IP}。先别登录账号"
   exit 1
 fi
 say "ok"
