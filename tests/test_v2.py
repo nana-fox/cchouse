@@ -714,6 +714,35 @@ class TestCchouseV2(unittest.TestCase):
             self.assertIn("GUEST_KEYBOARD", text, doc_name)
             self.assertIn("v2.0.0-preview.2", text, doc_name)
 
+    def test_firstboot_atomic_sync_and_empty_state_output(self):
+        # 1) firstboot.sh 安装 Claude Code 采用同目录临时文件 + sync + 原子 mv，并在末尾 sync 落盘
+        fb = (ROOT / "guest-linux" / "firstboot.sh").read_text(encoding="utf-8")
+        self.assertIn("/usr/local/bin/.claude.tmp", fb)
+        self.assertIn("mv -f /usr/local/bin/.claude.tmp /usr/local/bin/claude", fb)
+        self.assertRegex(fb, r"(?m)^sync\s*$")
+
+        # 2) cchouse-firstboot.service 显式声明 Wants=network-pre.target
+        svc = (ROOT / "guest-linux" / "cchouse-firstboot.service").read_text(encoding="utf-8")
+        self.assertIn("Before=network-pre.target", svc)
+        self.assertIn("Wants=network-pre.target", svc)
+
+        # 3) assert-empty-state.sh 不得在 check 外层重定向 stdout/stderr（避免静默吞掉 PASS/FAIL 输出）
+        aes = (ROOT / "guest-linux" / "image-builder" / "assert-empty-state.sh").read_text(encoding="utf-8")
+        for line in aes.splitlines():
+            stripped = line.strip()
+            if stripped.startswith('check "'):
+                self.assertFalse(
+                    stripped.endswith(">/dev/null 2>&1") or stripped.endswith(">/dev/null"),
+                    f"assert-empty-state.sh 中 check 外层重定向会吞掉 PASS/FAIL 输出：{stripped}",
+                )
+        self.assertIn("bash -c 'systemctl is-enabled cchouse-default-drop.service >/dev/null 2>&1'", aes)
+        self.assertIn("bash -c 'systemctl is-enabled cchouse-firstboot.service >/dev/null 2>&1'", aes)
+
+        # 4) build-tart-linux-from-cloud-image.sh 使用唯一临时主机名并在 ARP 未命中时回退 /var/db/dhcpd_leases
+        tart_builder = (ROOT / "guest-linux" / "image-builder" / "build-tart-linux-from-cloud-image.sh").read_text(encoding="utf-8")
+        self.assertIn("BUILD_HOST=", tart_builder)
+        self.assertIn("/var/db/dhcpd_leases", tart_builder)
+
 
 if __name__ == "__main__":
     unittest.main()

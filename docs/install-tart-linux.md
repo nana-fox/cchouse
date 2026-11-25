@@ -55,6 +55,7 @@ tart clone cchouse-debian13-arm64 "<VM_NAME>"
    - 使用 `--disk "<PRIVATE_DIR>/seed.iso:ro"` 启动客机（镜像内置 `cchouse-default-drop.service` 会在 `network-pre.target` 前拦截全部非回环流量；若需物理层零出包，可通过 `--net-fd` 绑定死 socketpair）。
    - 等待约 30–40 秒待 `firstboot` 完成（失败时可看控制台 `/etc/issue.d/cchouse.issue` 或 `/var/lib/cchouse/firstboot.log`）。
 2. **关机、卸载并销毁明文**：
+   - 待首次注入完成后关机（优先在客机桌面右键选择 `Power Off (Safe Shutdown)`；若使用无界面 `tart stop` 关机，待默认 `tart ip` 就绪后说明 `firstboot` 已 `sync` 落盘，再执行 `tart stop`）。
    - 关机后**立即删除 `<PRIVATE_DIR>/seed.iso` 与 `<PRIVATE_DIR>/rendered/`**。
    - **后续启动严禁再带 `--disk seed.iso`**，防止明文凭据长期挂在客机内。
 3. **正常开机并获取 IP**：
