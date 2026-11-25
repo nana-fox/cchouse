@@ -1028,6 +1028,77 @@ class TestCchouseV2(unittest.TestCase):
         self.assertEqual(nic_items[0].findtext("rasd:ResourceSubType", default="", namespaces=ns), "VmxNet3")
         self.assertEqual(nic_items[0].findtext("rasd:AutomaticAllocation", default="", namespaces=ns), "false")
 
+    def test_cloud_arm64_tart_oci_workflow_and_packer(self):
+        import importlib.util
+        from types import SimpleNamespace
+
+        wf = (ROOT / ".github" / "workflows" / "build-tvm.yml").read_text(encoding="utf-8")
+        self.assertIn("workflow_dispatch:", wf)
+        self.assertNotIn("\n  pull_request:", wf)
+        self.assertNotIn("\n  push:", wf)
+        for marker in (
+            "runs-on: ubuntu-24.04-arm",
+            "packages: write",
+            "/dev/kvm",
+            "build-debian13-golden.sh",
+            "TARGET_HYPERVISOR=tart",
+            "MIHOMO_ARCH=arm64",
+            "push-tart-oci.py",
+        ):
+            self.assertIn(marker, wf)
+
+        spec = importlib.util.spec_from_file_location(
+            "push_tart_oci",
+            ROOT / "guest-linux" / "image-builder" / "push-tart-oci.py",
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        nvram = mod.empty_linux_nvram_bytes()
+        self.assertEqual(len(nvram), 131072)
+        self.assertEqual(nvram[40:44], b"_FVH")
+        self.assertEqual(
+            mod.parse_image_ref("ghcr.io/nana-fox/cchouse-debian13-arm64:ci-test"),
+            ("ghcr.io", "nana-fox/cchouse-debian13-arm64", "ci-test"),
+        )
+        with self.assertRaises(ValueError):
+            mod.parse_image_ref("ghcr.io/Nana-Fox/cchouse-debian13-arm64:ci-test")
+
+        # Dry-run manifest generation with a tiny synthetic disk (mocking bv4 compressor for stdlib-only CI)
+        orig_comp = mod.compress_apple_lz4_bv4
+        mod.compress_apple_lz4_bv4 = lambda b: b"bv4-" + len(b).to_bytes(4, "little") + b + b"bv4$"
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                disk_p = Path(td) / "disk.raw"
+                disk_p.write_bytes(b"\x00" * 4096)
+                man_p = Path(td) / "manifest.json"
+                res = mod.build_and_push(
+                    SimpleNamespace(
+                        disk=str(disk_p),
+                        image="ghcr.io/nana-fox/cchouse-debian13-arm64:ci-test",
+                        cpu=4,
+                        memory_mb=4096,
+                        display="1440x900",
+                        dry_run=True,
+                        manifest_out=str(man_p),
+                    )
+                )
+                self.assertEqual(res["uncompressed_disk_bytes"], 4096)
+                manifest = json.loads(man_p.read_text(encoding="utf-8"))
+                media_types = [l["mediaType"] for l in manifest["layers"]]
+                self.assertEqual(
+                    media_types,
+                    [
+                        "application/vnd.cirruslabs.tart.config.v1",
+                        "application/vnd.cirruslabs.tart.disk.v2",
+                        "application/vnd.cirruslabs.tart.nvram.v1",
+                    ],
+                )
+                self.assertEqual(manifest["annotations"]["org.cirruslabs.tart.uncompressed-disk-size"], "4096")
+                self.assertEqual(manifest["layers"][1]["annotations"]["org.cirruslabs.tart.uncompressed-size"], "4096")
+        finally:
+            mod.compress_apple_lz4_bv4 = orig_comp
+
 
 if __name__ == "__main__":
     unittest.main()
