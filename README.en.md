@@ -45,7 +45,7 @@ This guide is for image version `v2.0.0-preview.2`. The installer uses the repos
 
 1. **Install the basics and the VM software** (one-time)
    - Mac: [Homebrew](https://brew.sh), Git and Python 3. Then on Apple Silicon: `brew install cirruslabs/cli/tart`; on Intel Mac: free VMware Fusion Pro (requires a Broadcom account to download).
-   - Windows (x64): [Git for Windows](https://git-scm.com/download/win), Python 3 (run it as `py -3` in PowerShell), the OpenSSH client (Settings → Optional features), and CPU virtualization enabled in BIOS. Install VMware Workstation Pro (download requires a Broadcom account). The installer uses its `vmrun.exe` and `ovftool.exe`.
+   - On Windows (x64), install [Git for Windows](https://git-scm.com/download/win), Python 3 (run it as `py -3` in PowerShell), and the OpenSSH client (Settings → Optional features). Enable CPU virtualization in BIOS and install VMware Workstation Pro (download requires a Broadcom account). The installer uses its `vmrun.exe` and `ovftool.exe`.
 2. **Run the installer and paste a single-proxy link**
    ```bash
    git clone https://github.com/nana-fox/cchouse.git
@@ -55,7 +55,7 @@ This guide is for image version `v2.0.0-preview.2`. The installer uses the repos
 
    In Windows PowerShell, run `py -3 -I scripts/cchouse.py up --tag cc01`.
 
-   The link is hidden as you paste it. The installer downloads and verifies the image and official Claude Code package over the host network while it configures the VM and checks prerequisites. On Apple Silicon Mac and Windows, it imports the image, injects the configuration offline, removes the plaintext staging files, reboots, and runs `verify-linux.sh --fail-closed`. After the checks pass, it saves a clean snapshot. On Intel Mac, follow the installer's instructions to import the image and verify the VM manually. [Manual install (Chinese)](docs/manual-install.md)
+   The link is hidden as you paste it. The installer downloads and verifies the image and official Claude Code package over the host network while it configures the VM and checks prerequisites. On Apple Silicon Mac and Windows, it imports or clones the image, injects the configuration offline, removes the plaintext staging files, reboots, and runs `verify-linux.sh --fail-closed`. After the checks pass, it saves a clean snapshot. On Intel Mac, follow the installer's instructions to import the image and verify the VM manually. [Manual install (Chinese)](docs/manual-install.md)
 
    If a step fails, address the reported error and rerun the same command from the same directory. Keep the same `--tag` and any custom directory options to reuse completed steps and verified downloads.
 3. **Open the VM desktop and confirm all network checks pass**, then sign in using the browser inside the VM. The page checks the network only, not your account. Open the Claude Code sign-in link only in the VM's browser, never on your host.
@@ -74,8 +74,8 @@ The guest is always Debian 13 + Chromium + Claude Code. Linux hosts are not supp
 
 **First-install timing with an empty cache** (includes image and Claude Code downloads)
 
-- **Apple Silicon Mac:** about 3–5 minutes through the automated checks. A Mac mini took 3 minutes 43 seconds with `preview.1`. The roughly 757 MB image downloaded over the host proxy at about 7 MiB/s. That image lacked the shutdown permissions, so the run stopped at verification without saving a snapshot.
-- **Windows:** `<COLD_WIN>` (measurement pending).
+- On **Apple Silicon Mac**, allow about 3–5 minutes through the automated checks. A Mac mini took 3 minutes 43 seconds with `preview.1`. The roughly 757 MB image downloaded over the host proxy at about 7 MiB/s. That image lacked the shutdown permissions, so the run stopped at verification without saving a snapshot.
+- **Windows** timing is `<COLD_WIN>` (measurement pending).
 
 ---
 
