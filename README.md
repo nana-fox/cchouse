@@ -1,90 +1,178 @@
 # cchouse
 
-一台**固定出口、断网即停、环境隔离**的虚拟机环境，用来运行 Claude（网页 + Claude Code CLI）。
-这个仓库是环境的**唯一配置源**：纯文本模板、渲染脚本、自动验收和文档都在这里，**不包含凭据和大镜像**。
+**一台干净、稳定、不漏网的 Claude 专用环境。**
+在你的电脑里开一台隔离的小虚拟机，网页版 Claude 和 Claude Code 都在里面用，所有流量只走你自己的节点；节点一断，整台机器就断网，不会偷偷用你本机的网络。
+
+[![CI](https://github.com/nana-fox/cchouse/actions/workflows/ci.yml/badge.svg)](https://github.com/nana-fox/cchouse/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/nana-fox/cchouse?include_prereleases&label=release)](https://github.com/nana-fox/cchouse/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+中文 | [English](README.en.md)
+
+![装好后打开桌面上的检查页，全部打勾就可以登录（图中 IP 为文档示例地址）](docs/assets/check-all-green.png)
 
 ---
 
-## 一句话交给你的 AI Agent 安装
+## 适合谁
 
-把下面这句话发给你的 AI Agent（Codex、Claude Code、Cursor、Antigravity 等）：
+你已经有一个自己的代理节点，想长期稳定地用 Claude（网页版 + Claude Code），又不想每天担心下面这些事：
 
-> 帮我拉取 `https://github.com/nana-fox/cchouse`（当前使用 `main` 分支或指定 commit；首个正式 release tag 将在 v2 黄金镜像发布后提供），严格按根目录 `AGENTS.md` 的 6 步状态机运行 `preflight` 检查我的电脑环境和代理前提，引导我选择路线、安装并完成 `--fail-closed` 验收。
+1. **IP 飘来飘去**：今天一个地区，明天另一个，账号看到的是一直在变的你。
+2. **环境对不上**：IP 在美国，电脑时区却是北京时间、系统语言是中文。
+3. **代理断了偷偷直连**：节点掉线的那几秒，软件悄悄用回了本机网络，真实 IP 就露了。
 
----
-
-## 前提条件（所有路线通用）
-
-1. **必须自备外部 IP 代理**（`cchouse` 不提供代理）：
-   - **单节点模式（`EXIT_MODE=single`）**：1 个固定出口节点（SOCKS5 / HTTP / VLESS / Trojan / Shadowsocks / SSH；不支持 Hysteria2 / TUIC 等纯 UDP 协议）。**注：当前仅支持 v2 Linux（VMware）路线。** 若该节点拦截 Stripe（如 Webshare），只影响在 claude.ai 网页上付款，安装验收会给出提示但不拦截；需要时可加一个 Stripe 备用节点。
-   - **链式模式（`EXIT_MODE=chain`）**：前置节点（自建 VPS / CF 前置 / 机场）→ 固定 ISP 出口（**v1 macOS Tart 与 v2 Linux 均支持**）；若所用 ISP 屏蔽 Stripe（如 Webshare），可额外开启 `STRIPE_EXIT_MODE`（v1 macOS 必须为 `front` 或 `tmh-chain`）。
-   - 详细配置见 [docs/proxy-modes.md](docs/proxy-modes.md)。
-2. **本机硬件建议**：内存 ≥ 16 GB；磁盘剩余空间（Tart macOS 客机 ≥ 50 GB，VMware Debian 13 客机 ≥ 25 GB）。
+cchouse 把这三件事一次解决：固定一个出口，把时区、语言、地区调成和出口一致，并且断了就是断了，不会自动换路。
 
 ---
 
-## 系统与路线选择
+## 原理
 
-| 你的电脑 | 状态 | 路线 | 客机环境 | 人工准备（一次性） | 自动部署耗时（参考） | 入口文档 |
-|---|---|---|---|---|---|---|
-| **Apple Silicon Mac** | **已实机验收（v1）** | **优先推荐：Tart** | macOS + Safari + Claude Code CLI | `brew install cirruslabs/cli/tart` | 首次拉取 macOS 镜像（~25–30 GB）约 30–60 分钟 | [docs/build.md](docs/build.md) |
-| **Windows（x64，家庭版 / Pro）** | **开发预览（v2，待真机实测）** | **VMware Workstation Pro** | Debian 13 + Chromium + Claude Code CLI | 注册 Broadcom 下载安装免费版 VMware、开启 BIOS 虚拟化 | 发布黄金 `.ova` 后约 5–10 分钟 | [docs/install-vmware-linux.md](docs/install-vmware-linux.md) |
-| **Intel Mac** | **开发预览（v2，待真机实测）** | **VMware Fusion Pro** | Debian 13 + Chromium + Claude Code CLI | 注册 Broadcom 下载安装免费版 VMware Fusion | 发布黄金 `.ova` 后约 5–10 分钟 | [docs/install-vmware-linux.md](docs/install-vmware-linux.md) |
-
-> 注：v2.0 黄金镜像当前处于 `unreleased-dev`（尚未发布公开 `.ova` 下载链接），首版仅覆盖 `amd64`（Windows x64 与 Intel Mac）；Apple Silicon Mac 走已验收的 Tart 路线（注意 Tart 初装阶段与冷启动边界见 [docs/architecture.md#已知限制](docs/architecture.md#已知限制)）。
-
----
-
-## 核心原则
-
-1. **一号、一机、一出口**：一台环境只登一个账号，只走固定出口。
-2. **出问题就断网（fail-closed）**：代理挂了、入口变了、规则写错，结果只能是断网，绝不退回宿主直连。
-   - macOS 客机靠 `pf` 兜底；Linux 客机靠「出厂默认全断 `nftables`（排在 `network-pre.target` 前）+ 网卡首启断开 + `meta skuid mihomo` 白名单」三层兜底。
-3. **环境和出口一致**：时区、语言、地区、键盘、随机主机名/machine-id 都要和出口 IP 所在地匹配；自动验收对比出口 IP 时区与客机时区。
-4. **网页与 CLI 全在客机内闭环**：只用官方网页与官方 Claude Code CLI；**OAuth 授权链接必须在客机浏览器内打开，严禁复制到宿主浏览器**。
-
----
-
-## 目录
-
-```text
-guest/                 v1 macOS 客机模板（Tart，保持原样）
-guest-linux/           v2 Debian 13 客机模板（VMware / 通用 Linux）
-host/                  v1 Apple Silicon 宿主机启停与巡检脚本
-scripts/               preflight.py(.ps1) 环境自检 / render.py 渲染 / verify.sh & verify-linux.sh 验收
-docs/                  架构、代理模式、分路线安装手册、验收与运维
-tests/                 render / preflight / 防泄漏断言单元测试
-instance.env.example        v1 macOS 链式实例模板
-instance.env.linux.example  v2 Linux 实例模板（支持 single 与 chain）
+```mermaid
+flowchart LR
+    A["你的电脑"] --> B["隔离虚拟机<br/>（Claude 只在这里面用）"]
+    B --> C["你自己的节点"]
+    C --> D["Claude"]
+    B -. "任何一环断开" .-> X["整台虚拟机断网<br/>绝不改走本机网络"]
 ```
 
+- 虚拟机里只允许通往你那一个节点的流量，别的路一律堵死。
+- 你的电脑本身照常上网，不受影响。
+
 ---
 
-## 快速上手（命令行）
+## 快速开始
+
+> 下面是目标流程。一条命令安装（`cchouse.py up`）还在开发中，正式发布前请先看 [手动安装](docs/manual-install.md)。
+
+**第 1 步：装虚拟机软件**（一次性）
+
+- Apple Silicon Mac（M 系列芯片）：`brew install cirruslabs/cli/tart`
+- Windows / Intel Mac：安装免费版 VMware（Windows 用 Workstation Pro，Intel Mac 用 Fusion Pro），需要先在 Broadcom 官网注册账号才能下载。
+
+**第 2 步：一条命令，粘贴节点链接**（实测约 3 分钟）
 
 ```bash
-# 0. 安装前先启用防凭据提交钩子
-git config core.hooksPath .githooks
-
-# 1. 运行环境自检（Windows 无 Python 时先跑 powershell -File scripts/preflight.ps1）
-python3 -I scripts/preflight.py
-
-# 2. 准备实例参数（放私有目录，不进仓库）
-#    macOS Tart 路线复制 instance.env.example；VMware Linux 路线复制 instance.env.linux.example
-D=~/Library/Application\ Support/cchouse/<TAG>; mkdir -p "$D"; chmod 700 "$D"
-cp instance.env.linux.example "$D/instance.env"; chmod 600 "$D/instance.env"
-
-# 3. 渲染客机文件（输出含明文凭据，注入后立即删除）
-python3 -I scripts/render.py "$D/instance.env" "$D/rendered"
-
-# 4. 按对应路线文档部署并验收
-#    macOS Tart:    scripts/verify.sh "$D/instance.env" --fail-closed
-#    VMware Linux:  scripts/verify-linux.sh "$D/instance.env" --fail-closed
+git clone https://github.com/nana-fox/cchouse.git && cd cchouse
+python3 scripts/cchouse.py up
 ```
+
+提示时粘贴你的节点链接（输入不会显示在屏幕上）。脚本会自动选择适合你电脑的虚拟机，下载镜像、配置好网络并自动验收。首次下载镜像的时间取决于你的网速，另计。
+
+**第 3 步：打开虚拟机桌面，看全绿后登录**
+
+虚拟机桌面上有一个检查页（就是上面那张图），全部打勾后，在**虚拟机里的浏览器**登录 Claude。
+
+> 登录 Claude Code 时弹出的授权链接，也只能在虚拟机里的浏览器打开，不要复制到你本机的浏览器。
+
+想手动控制每一步，或者让 AI Agent 代你装：见 [docs/manual-install.md](docs/manual-install.md)。
 
 ---
 
-## 凭据与变更
+## 支持的电脑
 
-- 所有凭据只在私有目录的 `instance.env`（`chmod 600`），真实值来源于密码管理器。仓库内只允许 `<占位符>`，`.githooks/pre-commit` 会拦截疑似凭据。
-- 详细架构见 [docs/architecture.md](docs/architecture.md)，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
+| 你的电脑 | 用什么虚拟机软件 | 状态 |
+|---|---|---|
+| Apple Silicon Mac（M 系列） | Tart | ✅ 已真机验证（2026-11-25，Mac mini） |
+| Windows（x64） | VMware Workstation Pro | ✅ 已真机验证（2026-11-25） |
+| Intel Mac | VMware Fusion Pro | 🟡 支持，与 Windows 共用同一镜像，尚未单独真机验证 |
+
+虚拟机里统一是 Debian 13 + Chromium + Claude Code。不支持 Linux 电脑作为宿主机。
+
+2026-11-25 两台真机一键验证：Mac mini（Tart）2 分 35 秒、Windows（VMware）2 分 55 秒，26 项自动验收全部通过。
+
+---
+
+## 你需要准备什么
+
+- **一个节点**（cchouse 不提供节点）。支持 SOCKS5、HTTP(S)、VLESS、Trojan、Shadowsocks；不支持 Hysteria2、TUIC、WireGuard 这类走 UDP 的协议。最好是固定 IP、地区稳定的节点。
+- **电脑配置**：建议内存 16 GB 以上，硬盘剩余 25 GB 以上。
+
+> **关于 Stripe**：有些节点会拦截付款服务 Stripe。这只影响在 claude.ai 网页上付款，不影响登录和日常使用；安装时会提示你，但不会拦着你装。需要的话可以加一个付款专用节点，见 [docs/proxy-modes.md](docs/proxy-modes.md)。
+
+想用"前置节点 → 固定出口"的两跳链式代理？见 [docs/proxy-modes.md](docs/proxy-modes.md)（进阶）。
+
+---
+
+## 常见问题
+
+<details>
+<summary><b>用了会不会被封号？</b></summary>
+
+**不保证。** 账号是否安全取决于很多我们控制不了的因素。
+
+我们做了：固定一个出口；时区、语言、地区和出口 IP 保持一致；节点断了就断网，不会漏出真实 IP；网页版和 Claude Code 都在同一台虚拟机里，只用官方网页和官方 Claude Code。
+
+我们没做：不提供节点；不伪造浏览器指纹；不替你注册、登录或付款；不承诺任何账号结果。
+
+</details>
+
+<details>
+<summary><b>为什么用虚拟机，不用指纹浏览器或直接开代理？</b></summary>
+
+- **直接开代理**：代理软件一断，很多程序会自动回到本机网络；命令行工具也常常不走系统代理。电脑的时区、语言也还是你本地的。
+- **指纹浏览器**：只管浏览器，管不到 Claude Code 这种命令行工具。
+- **虚拟机**：整台机器的网络在系统层面锁死，只能走你的节点，网页和命令行走的是同一个出口，环境也一起配好。
+
+</details>
+
+<details>
+<summary><b>Stripe 不通，能付款吗？</b></summary>
+
+Stripe 不通只影响在 claude.ai 网页上付款。已经订阅的、或在别处付款的，不受影响。安装时只提示，不拦截。要在虚拟机里付款，可以加一个付款专用节点，见 [docs/proxy-modes.md](docs/proxy-modes.md)。
+
+</details>
+
+<details>
+<summary><b>国内下载很慢怎么办？</b></summary>
+
+镜像和代码都放在 GitHub，国内直连可能很慢。可以先在你自己的电脑上用代理把镜像文件下载好，再按 [手动安装](docs/manual-install.md) 里对应路线的导入步骤离线导入。
+
+</details>
+
+<details>
+<summary><b>装的时候出错了怎么办？</b></summary>
+
+运行诊断工具，导出一个已经自动去掉密码、节点地址等敏感信息的诊断包：
+
+```bash
+python3 scripts/doctor.py --env <你的 instance.env 路径> --vm-ssh
+```
+
+把生成的 zip 附在 [Issue](https://github.com/nana-fox/cchouse/issues) 里。发出去之前建议自己打开看一眼。详见 [docs/operations.md](docs/operations.md)。
+
+</details>
+
+<details>
+<summary><b>VMware 为什么要注册 Broadcom 账号？</b></summary>
+
+VMware 现在个人免费使用，但官方要求先在 Broadcom 官网注册账号才能下载，这一步目前绕不开。我们在评估不需要注册的替代方案。Apple Silicon Mac 用的 Tart 不需要注册。
+
+</details>
+
+---
+
+## 安全设计
+
+给想了解细节的人：
+
+1. **一号、一机、一出口**：一台环境只登一个账号，只走一个固定出口。
+2. **出问题就断网**：代理挂了、配置写错，结果只能是断网，绝不退回本机直连。客机防火墙默认全断，只放行代理进程访问你节点的那一个地址；代理配置里不允许出现直连规则，脚本会硬拦截；UDP 和 IPv6 一律封锁。
+3. **环境和出口一致**：时区、语言、地区、键盘、随机主机名都按出口所在地配置，自动验收会核对出口 IP 的时区和虚拟机时区是否一致。
+4. **全在虚拟机里闭环**：只用官方网页和官方 Claude Code；登录授权链接只在虚拟机浏览器里打开。
+5. **凭据不落仓库**：节点信息只存在你电脑上的私有目录（仅本人可读），明文中间文件用完即删；仓库自带提交钩子拦截疑似凭据。
+
+我们**绝不**做：内置节点、为了"恢复联网"放宽断网保护、桌面 GUI 程序。
+
+架构细节见 [docs/architecture.md](docs/architecture.md)，验收项见 [docs/verify.md](docs/verify.md)。
+
+---
+
+## 免责声明
+
+cchouse 只是一个本地环境配置工具，**不保证账号安全**，也不提供任何代理服务。请自行遵守你所在地的法律法规，以及 Anthropic 和你所用服务的使用条款。
+
+## License · 贡献 · 更新日志
+
+- License：[MIT](LICENSE)
+- 贡献：欢迎提 Issue 和 PR。改了模板或脚本，请跑 `python3 -I -m unittest discover -s tests` 并在 [CHANGELOG.md](CHANGELOG.md) 记一笔；开发规则见 [AGENTS.md](AGENTS.md)。
+- 更新日志：[CHANGELOG.md](CHANGELOG.md)

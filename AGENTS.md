@@ -25,6 +25,7 @@
 | Apple Silicon Mac（Tart + Debian 13 arm64，轻量首选） | [docs/install-tart-linux.md](docs/install-tart-linux.md) |
 | Apple Silicon Mac（Tart + macOS，v1 高拟真） | [docs/build.md](docs/build.md) |
 | 自建前置、加 UUID（链式模式） | [docs/front.md](docs/front.md) |
+| 手动安装、目录结构与 AI Agent 安装话术 | [docs/manual-install.md](docs/manual-install.md) |
 | 验收与手工核对项 | [docs/verify.md](docs/verify.md) |
 | 换出口、快照重建、排障与远程交接 | [docs/operations.md](docs/operations.md) |
 

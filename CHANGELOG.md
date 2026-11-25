@@ -2,6 +2,7 @@
 
 ## v2.0-preview
 
+- 重写 README 面向首次使用者（大白话价值、三个痛点、原理图、3 步快速开始、支持矩阵、FAQ、安全设计、免责声明），新增英文版 `README.en.md` 与脱敏检查页截图 `docs/assets/check-all-green.png`；原 README 中的出口模式、目录结构、手动安装步骤移至新增的 `docs/manual-install.md`。
 - 新增跨平台 Linux 客机模板（`guest-linux/`，Debian 13 + VMware Workstation/Fusion Pro 路线，开发预览）。
 - 出口层与客机隔离层解耦：支持 `EXIT_MODE=single`（单节点）与 `EXIT_MODE=chain`（前置 → 固定 ISP），可选 `STRIPE_EXIT_MODE`。
 - 新增面向外部 AI Agent 的 6 步状态机手册（`AGENTS.md`）、`scripts/preflight.py(.ps1)`、`scripts/make-seed-iso.py`、`scripts/verify-linux.sh` 与单元测试 `tests/test_v2.py`。
