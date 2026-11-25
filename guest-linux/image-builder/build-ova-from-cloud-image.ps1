@@ -93,7 +93,9 @@ Remove-Item $workQcow -Force
 
 Write-Host "== [4/7] 生成一次性 cidata ISO 与临时 SSH 密钥..."
 $sshKey = Join-Path $vmDir "build_ed25519"
-& ssh-keygen.exe -t ed25519 -N "" -f $sshKey | Out-Null
+# PowerShell 5.1 会吞掉传给原生 exe 的空字符串 ""，改经 cmd /c 传递 -N ""
+& cmd.exe /c "ssh-keygen.exe -q -t ed25519 -N `"`" -f `"$sshKey`""
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path "$sshKey.pub")) { throw "ssh-keygen 生成临时密钥失败" }
 $pubKey = (Get-Content "$sshKey.pub" -Raw).Trim()
 
 $ciDir = Join-Path $vmDir "cidata"
