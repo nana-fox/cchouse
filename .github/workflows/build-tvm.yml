@@ -165,7 +165,7 @@ jobs:
             -drive "file=${DISK_RAW},if=virtio,format=raw" \
             -drive "file=${CI_ISO},if=virtio,format=raw,readonly=on" \
             -netdev user,id=net0,hostfwd=tcp:127.0.0.1:2222-:22 \
-            -device virtio-net-pci,netdev=net0 \
+            -device virtio-net-pci,netdev=net0,romfile="" \
             >"$QEMU_LOG" 2>&1 &
           QEMU_PID=$!
 
