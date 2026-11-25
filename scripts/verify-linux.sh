@@ -44,7 +44,7 @@ rm -f "$TMP_ENV"
   "${ROUTER_IP:?instance.env 缺 ROUTER_IP}" "${TIMEZONE:?instance.env 缺 TIMEZONE}"
 MIHOMO_USER="${MIHOMO_USER:-mihomo}"
 
-SSH_OPTS=(-i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$SSH_KNOWN_HOSTS")
+SSH_OPTS=(-F none -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=\"$SSH_KNOWN_HOSTS\"")
 guest() { ssh "${SSH_OPTS[@]}" "claude@$GUEST_IP" "$@"; }
 
 TRACE=https://www.cloudflare.com/cdn-cgi/trace

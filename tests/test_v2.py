@@ -123,6 +123,7 @@ class TestCchouseV2(unittest.TestCase):
             non_comment_nft = "\n".join(l for l in nft.splitlines() if not l.lstrip().startswith("#"))
             self.assertNotIn("flush ruleset", non_comment_nft)
             self.assertNotIn("!=", non_comment_nft)
+            self.assertIn('iifname "cchouse0" meta nfproto ipv4 accept', non_comment_nft)
             self.assertIn('oifname "cchouse0" meta nfproto ipv4 accept', non_comment_nft)
             self.assertIn('meta skuid "mihomo" ip daddr 203.0.113.55 tcp dport 1080 accept', non_comment_nft)
             self.assertIn("meta nfproto ipv6 drop", non_comment_nft)
@@ -350,7 +351,12 @@ class TestCchouseV2(unittest.TestCase):
             fb_svc = (ROOT / "guest-linux" / "cchouse-firstboot.service").read_text(encoding="utf-8")
             self.assertIn("cchouse-default-drop.service", fb_svc)
 
-            # 5) verify-linux.sh 在 Bash 3.2 / Git Bash 下可解析带 BOM + CRLF 的 env（不报缺 TAG）
+            # 5) verify-linux.sh 必须包含 -F none 与带内层引号的 UserKnownHostsFile（兼容含空格路径如 Application Support）
+            vl_sh = (ROOT / "scripts" / "verify-linux.sh").read_text(encoding="utf-8")
+            self.assertIn("-F none", vl_sh)
+            self.assertIn('UserKnownHostsFile=\\"$SSH_KNOWN_HOSTS\\"', vl_sh)
+
+            # 6) verify-linux.sh 在 Bash 3.2 / Git Bash 下可解析带 BOM + CRLF 的 env（不报缺 TAG）
             bash_exe = find_bash()
             if bash_exe:
                 v_env = Path(td) / "verify.env"
