@@ -111,7 +111,7 @@ cchouse_tart_boot() {
   # Wait briefly for mihomo TUN fallback probe to warm up before verify-linux.sh
   for w in $(seq 1 10); do
     if ssh -F none -i "$key" -o BatchMode=yes -o ConnectTimeout=3 \
-         -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$kh" \
+         -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=\"$kh\"" \
          "claude@$ip" "curl -s --max-time 6 https://www.cloudflare.com/cdn-cgi/trace | grep -q '^ip='" 2>/dev/null; then
       echo "mihomo egress warmed up (attempt $w)"
       break
