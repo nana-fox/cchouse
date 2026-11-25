@@ -18,8 +18,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import render as render_mod  # noqa: E402
 
 VMRUN_CANDIDATES = [
-    r"C:\Program Files (x86)\VMware\VMware Workstation\vmrun.exe",
     r"C:\Program Files\VMware\VMware Workstation\vmrun.exe",
+    r"C:\Program Files (x86)\VMware\VMware Workstation\vmrun.exe",
     "/Applications/VMware Fusion.app/Contents/Library/vmrun",
     "/usr/bin/vmrun",
 ]

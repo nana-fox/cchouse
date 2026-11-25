@@ -323,7 +323,13 @@ class TestCchouseV2(unittest.TestCase):
                 })
                 raw = "\r\n".join(f"{k}='{v}'" for k, v in v_data.items()) + "\r\n"
                 v_env.write_bytes(b"\xef\xbb\xbf" + raw.encode("utf-8"))
-                cp_v = subprocess.run([bash_exe, str(ROOT / "scripts" / "verify-linux.sh"), str(v_env)], capture_output=True, text=True)
+                cp_v = subprocess.run(
+                    [bash_exe, str(ROOT / "scripts" / "verify-linux.sh"), str(v_env)],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                )
                 self.assertNotIn("缺 TAG", cp_v.stderr)
                 self.assertIn("期望出口 198.51.100.55", cp_v.stdout)
 

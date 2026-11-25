@@ -35,32 +35,41 @@ def pick_iso_tool():
 
 
 def build_iso_imapi2(ps_exe, stage_dir, out_iso):
+    # PowerShell 无法直接调用裸 System.__ComObject 的 IStream.Read，通过内置 C# ComTypes.IStream 桥接写入
     ps_script = r"""
 param([string]$Src, [string]$Dst)
 $ErrorActionPreference = "Stop"
+Add-Type -TypeDefinition @"
+using System;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.ComTypes;
+public static class CchouseIsoWriter {
+    public static void Write(object comStream, string dstPath) {
+        IStream stream = (IStream)comStream;
+        byte[] buf = new byte[65536];
+        IntPtr readPtr = Marshal.AllocCoTaskMem(sizeof(int));
+        try {
+            using (FileStream fs = File.Create(dstPath)) {
+                while (true) {
+                    stream.Read(buf, buf.Length, readPtr);
+                    int read = Marshal.ReadInt32(readPtr);
+                    if (read <= 0) break;
+                    fs.Write(buf, 0, read);
+                }
+            }
+        } finally {
+            Marshal.FreeCoTaskMem(readPtr);
+        }
+    }
+}
+"@
 $img = New-Object -ComObject IMAPI2FS.MsftFileSystemImage
 $img.VolumeName = "CCHOUSE"
 $img.FileSystemsToCreate = 3
 $img.Root.AddTree($Src, $false)
 $res = $img.CreateResultImage()
-$stream = $res.ImageStream
-$fs = [System.IO.File]::Open($Dst, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write)
-try {
-  $buf = New-Object byte[] 65536
-  $ptr = [System.Runtime.InteropServices.Marshal]::AllocHGlobal(8)
-  try {
-    while ($true) {
-      $stream.Read($buf, $buf.Length, $ptr)
-      $read = [System.Runtime.InteropServices.Marshal]::ReadInt32($ptr)
-      if ($read -le 0) { break }
-      $fs.Write($buf, 0, $read)
-    }
-  } finally {
-    [System.Runtime.InteropServices.Marshal]::FreeHGlobal($ptr)
-  }
-} finally {
-  $fs.Close()
-}
+[CchouseIsoWriter]::Write($res.ImageStream, $Dst)
 """
     with tempfile.NamedTemporaryFile("w", suffix=".ps1", delete=False, encoding="utf-8") as tf:
         tf.write(ps_script)
