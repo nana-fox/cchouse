@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # 公共函数：读 instance.env、拼 SSH 参数。被其他脚本 source。
 
 load_env() {
