@@ -29,7 +29,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
-      WORK_DIR: ${{ runner.temp }}/cchouse-ova-build
       CLOUD_IMAGE_URL: ${{ inputs.cloud_image_url || 'https://cloud.debian.org/images/cloud/trixie/20261123-2671/debian-13-generic-amd64-20261123-2671.qcow2' }}
       CLOUD_IMAGE_SHA512: ${{ inputs.cloud_image_sha512 || '562a4614952657a6ab8a89cda56eaf1bc85c8dfea51155184267bb6b6361eff215baf6afa2f8c2c8c2bad328ac6c30eead80664286ef4c8538368aeb7f87104f' }}
       MIHOMO_VERSION: ${{ inputs.mihomo_version || 'v1.19.19' }}
@@ -42,6 +41,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          echo "WORK_DIR=${RUNNER_TEMP}/cchouse-ova-build" >> "$GITHUB_ENV"
           if [ ! -c /dev/kvm ]; then
             echo "ERROR: /dev/kvm is not available on this runner." >&2
             exit 1
@@ -52,7 +52,7 @@ jobs:
           ls -la /dev/kvm
           echo "CPUs: $(nproc)"
           free -h
-          df -h "${{ runner.temp }}"
+          df -h "$RUNNER_TEMP"
 
       - name: Install QEMU and ISO tools
         shell: bash
