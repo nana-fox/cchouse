@@ -117,10 +117,34 @@ def detect_ram_gb():
     return None
 
 
-def tart_home_dir():
+def _parse_wrapper_tart_home(tart_bin):
+    """当 tart 通过 host/tart-wrapper.sh.example 包装脚本安装时，解析其中 export 的 TART_HOME。"""
+    if not tart_bin or not os.path.isfile(tart_bin):
+        return None
+    try:
+        with open(tart_bin, "rb") as f:
+            head = f.read(4096)
+    except OSError:
+        return None
+    if not head.startswith(b"#!"):
+        return None
+    text = head.decode("utf-8", errors="ignore")
+    for line in text.splitlines():
+        m = re.match(r'^\s*(?:export\s+)?TART_HOME=(?:"([^"]+)"|\'([^\']+)\'|([^\s#]+))', line)
+        if m:
+            raw = m.group(1) or m.group(2) or m.group(3)
+            if raw:
+                return Path(os.path.expanduser(os.path.expandvars(raw)))
+    return None
+
+
+def tart_home_dir(tart_bin=None):
     env_home = os.environ.get("TART_HOME", "").strip()
-    if env_home and os.path.isdir(env_home):
-        return Path(env_home)
+    if env_home:
+        return Path(os.path.expanduser(env_home))
+    wrapper_home = _parse_wrapper_tart_home(tart_bin if tart_bin is not None else find_tart())
+    if wrapper_home is not None:
+        return wrapper_home
     return Path.home() / ".tart"
 
 
@@ -138,6 +162,21 @@ def has_tart_cached_image(th=None):
             if entry.is_dir() and ("vanilla" in name or "base" in name) and (entry / "disk.img").is_file():
                 return True
     return False
+
+
+TART_LINUX_GOLDEN_RE = re.compile(r"^cchouse-debian13-arm64(?:-v\d[0-9a-zA-Z._-]*)?$")
+
+
+def find_tart_linux_golden_images(th=None):
+    """检测本地是否已有可复用的 Tart Debian 13 黄金镜像（仅精确匹配默认名或 -v* 发布标签，避免误匹配克隆测试机）。"""
+    th = Path(th) if th is not None else tart_home_dir()
+    vms_dir = th / "vms"
+    found = []
+    if vms_dir.is_dir():
+        for entry in sorted(vms_dir.iterdir()):
+            if entry.is_dir() and TART_LINUX_GOLDEN_RE.match(entry.name) and (entry / "disk.img").is_file():
+                found.append(entry.name)
+    return found
 
 
 def check_lf_endings(directory):
@@ -258,7 +297,8 @@ def main():
     else:
         route = args.route
 
-    disk_probe_path = tart_home_dir() if (route in ("macos-tart", "tart-linux") and tart_home_dir().exists()) else ROOT
+    resolved_tart_home = tart_home_dir(tart_path) if route in ("macos-tart", "tart-linux") else None
+    disk_probe_path = resolved_tart_home if (resolved_tart_home is not None and resolved_tart_home.exists()) else ROOT
     disk_gb = round(shutil.disk_usage(disk_probe_path).free / (1024 ** 3), 1)
 
     errors = []
@@ -280,7 +320,7 @@ def main():
             status = "HUMAN_WAIT"
             errors.append("MISSING_TART: 未检测到 tart，请先执行 brew install cirruslabs/cli/tart")
             next_action = "install_tart"
-        tart_cached = has_tart_cached_image()
+        tart_cached = has_tart_cached_image(resolved_tart_home)
         if disk_gb < 30 and not tart_cached:
             status = "HUMAN_WAIT"
             errors.append(
@@ -350,6 +390,7 @@ def main():
     if args.set_next_action:
         next_action = args.set_next_action
 
+    tart_linux_golden = find_tart_linux_golden_images(resolved_tart_home) if route == "tart-linux" else []
     result = {
         "ok": ok,
         "status": status,
@@ -360,8 +401,10 @@ def main():
             "disk_free_gb": disk_gb,
             "python": platform.python_version(),
             "tart_found": bool(tart_path),
+            "tart_home": str(resolved_tart_home) if resolved_tart_home is not None else None,
             "vmrun_found": bool(vmrun_path),
             "detected_vmnet_cidr": detected_vmnet,
+            "tart_linux_golden_images": tart_linux_golden,
         },
         "route": route,
         "errors": errors,

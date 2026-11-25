@@ -251,6 +251,55 @@ class TestCchouseV2(unittest.TestCase):
             (img_dir / "disk.img").write_bytes(b"x")
             self.assertTrue(preflight_mod.has_tart_cached_image(th))
 
+    def test_tart_linux_builder_tarxz_and_golden_detect(self):
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import preflight as preflight_mod
+        builder = (ROOT / "guest-linux" / "image-builder" / "build-tart-linux-from-cloud-image.sh").read_text(encoding="utf-8")
+        self.assertIn(".tar.xz", builder)
+        self.assertIn("CLOUD_IMAGE_VERSION", builder)
+        self.assertIn('dirname "$DISK_IMG"', builder)
+        self.assertIn("${CLOUD_IMG}.part", builder)
+        self.assertIn("不支持的云镜像文件格式", builder)
+        self.assertNotIn("/trixie/latest/debian-13-generic-arm64.raw", builder)
+        bash_exe = find_bash()
+        if bash_exe:
+            chk = subprocess.run(
+                [bash_exe, "-n", str(ROOT / "guest-linux" / "image-builder" / "build-tart-linux-from-cloud-image.sh")],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(chk.returncode, 0, chk.stderr)
+        with tempfile.TemporaryDirectory() as td:
+            th = Path(td) / "ext-tart-home"
+            (th / "vms" / "claude-deb-qa01").mkdir(parents=True)
+            (th / "vms" / "claude-deb-qa01" / "disk.img").write_bytes(b"x")
+            (th / "vms" / "cchouse-debian13-arm64-empty").mkdir(parents=True)
+            (th / "vms" / "cchouse-debian13-arm64-test").mkdir(parents=True)
+            (th / "vms" / "cchouse-debian13-arm64-test" / "disk.img").write_bytes(b"x")
+            self.assertEqual(preflight_mod.find_tart_linux_golden_images(th), [])
+            (th / "vms" / "cchouse-debian13-arm64").mkdir(parents=True)
+            (th / "vms" / "cchouse-debian13-arm64" / "disk.img").write_bytes(b"x")
+            (th / "vms" / "cchouse-debian13-arm64-v2.0.0-preview.2").mkdir(parents=True)
+            (th / "vms" / "cchouse-debian13-arm64-v2.0.0-preview.2" / "disk.img").write_bytes(b"x")
+            self.assertEqual(
+                preflight_mod.find_tart_linux_golden_images(th),
+                ["cchouse-debian13-arm64", "cchouse-debian13-arm64-v2.0.0-preview.2"],
+            )
+            # 验证 host/tart-wrapper.sh.example 形式的外置盘包装脚本可正确解析 TART_HOME
+            wrapper = Path(td) / "tart"
+            wrapper.write_text(f'#!/bin/sh\nexport TART_HOME="{th}"\nexec /bin/true "$@"\n', encoding="utf-8")
+            old_env = os.environ.pop("TART_HOME", None)
+            try:
+                resolved = preflight_mod.tart_home_dir(str(wrapper))
+                self.assertEqual(resolved, th)
+                self.assertEqual(
+                    preflight_mod.find_tart_linux_golden_images(resolved),
+                    ["cchouse-debian13-arm64", "cchouse-debian13-arm64-v2.0.0-preview.2"],
+                )
+            finally:
+                if old_env is not None:
+                    os.environ["TART_HOME"] = old_env
+
     def test_image_builder_scripts_and_seed_iso(self):
         bash_exe = find_bash()
         if bash_exe:
