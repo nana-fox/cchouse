@@ -5,6 +5,7 @@
   python3 -I scripts/preflight.py [--route auto|macos-tart|tart-linux|vmware-linux] [--env <instance.env>] [--state <state.json>]
 """
 import argparse
+import base64
 import ctypes
 import datetime
 import ipaddress
@@ -13,6 +14,8 @@ import os
 import platform
 import re
 import shutil
+import socket
+import struct
 import subprocess
 import sys
 from pathlib import Path
@@ -227,6 +230,138 @@ def check_lf_endings(directory):
     return bad
 
 
+def _validate_node_fields(env, prefix, errors, warnings):
+    k = lambda suffix: f"{prefix}_{suffix}"
+    stype = env.get(k("TYPE"), "").strip().lower()
+    if stype in render_mod.REJECTED_UDP_TYPES:
+        errors.append(f"UDP_PROXY_REJECTED: {k('TYPE')}={stype} 是 UDP 协议，cchouse 默认禁 UDP")
+    elif stype not in render_mod.SUPPORTED_SINGLE_TYPES:
+        errors.append(f"INVALID_{prefix}_TYPE: 不支持的 {k('TYPE')}={stype or '<空>'}")
+    server = env.get(k("SERVER"), "").strip()
+    if not server:
+        errors.append(f"MISSING_{prefix}_SERVER: 缺少 {k('SERVER')}")
+    elif not render_mod.is_ipv4(server):
+        pinned = env.get(k("SERVER_IP"), "").strip()
+        if not pinned:
+            warnings.append(
+                f"DOMAIN_NEEDS_PIN: {k('SERVER')} 是域名且未填 {k('SERVER_IP')}；"
+                "请先在宿主解析 A 记录填入，或渲染时使用 render.py --resolve"
+            )
+        elif not render_mod.is_ipv4(pinned):
+            errors.append(f"INVALID_{prefix}_SERVER_IP: {k('SERVER_IP')} 不是有效 IPv4")
+    port = env.get(k("PORT"), "").strip()
+    if not port.isdigit() or not (1 <= int(port) <= 65535):
+        errors.append(f"INVALID_{prefix}_PORT: {k('PORT')} 必须是 1-65535 的端口")
+
+
+def _probe_socks5_connect(proxy_host, proxy_port, user, pwd, target_host, target_port=443, timeout=8):
+    try:
+        s = socket.create_connection((proxy_host, proxy_port), timeout=timeout)
+    except OSError as exc:
+        return False, f"proxy_connect_error({type(exc).__name__})"
+    try:
+        s.settimeout(timeout)
+        if user or pwd:
+            s.sendall(b"\x05\x02\x00\x02")
+        else:
+            s.sendall(b"\x05\x01\x00")
+        resp = s.recv(2)
+        if len(resp) < 2 or resp[0] != 5:
+            return False, "socks5_handshake_failed"
+        if resp[1] == 0x02:
+            ub, pb = user.encode("utf-8"), pwd.encode("utf-8")
+            s.sendall(bytes([1, len(ub)]) + ub + bytes([len(pb)]) + pb)
+            auth = s.recv(2)
+            if auth != b"\x01\x00":
+                return False, "socks5_auth_failed"
+        elif resp[1] != 0x00:
+            return False, f"socks5_method_rejected(0x{resp[1]:02x})"
+        hb = target_host.encode("ascii")
+        s.sendall(b"\x05\x01\x00\x03" + bytes([len(hb)]) + hb + struct.pack("!H", target_port))
+        rep = s.recv(10)
+        if len(rep) < 2:
+            return False, "socks5_empty_reply"
+        if rep[1] == 0x00:
+            return True, "ok"
+        if rep[1] == 0x02:
+            return False, "socks5_ruleset_blocked(0x02)"
+        return False, f"socks5_connect_failed(0x{rep[1]:02x})"
+    except OSError as exc:
+        return False, f"connect_error({type(exc).__name__})"
+    finally:
+        s.close()
+
+
+def _probe_http_connect(proxy_host, proxy_port, user, pwd, target_host, target_port=443, timeout=8):
+    try:
+        s = socket.create_connection((proxy_host, proxy_port), timeout=timeout)
+    except OSError as exc:
+        return False, f"proxy_connect_error({type(exc).__name__})"
+    try:
+        s.settimeout(timeout)
+        headers = [f"CONNECT {target_host}:{target_port} HTTP/1.1", f"Host: {target_host}:{target_port}"]
+        if user or pwd:
+            token = base64.b64encode(f"{user}:{pwd}".encode("utf-8")).decode("ascii")
+            headers.append(f"Proxy-Authorization: Basic {token}")
+        req = ("\r\n".join(headers) + "\r\n\r\n").encode("ascii")
+        s.sendall(req)
+        raw = s.recv(1024).decode("latin1", errors="ignore")
+        first = raw.splitlines()[0] if raw else ""
+        parts = first.split()
+        if len(parts) >= 2 and parts[1] == "200":
+            return True, "ok"
+        code = parts[1] if len(parts) >= 2 else "empty"
+        return False, f"http_connect_rejected({code})"
+    except OSError as exc:
+        return False, f"connect_error({type(exc).__name__})"
+    finally:
+        s.close()
+
+
+def check_stripe_reachability(env_path, timeout=8):
+    """在宿主机通过 socks5/http 节点探测 Stripe 核心域名可达性（绝不输出凭据）。"""
+    try:
+        env = render_mod.load_env(env_path)
+    except SystemExit:
+        return None
+    guest_os = env.get("GUEST_OS", "macos").strip().lower()
+    exit_mode = env.get("EXIT_MODE", "chain").strip().lower()
+    if exit_mode != "single":
+        return {"skipped": True, "reason": "chain_mode_uses_guest_verify"}
+    stripe_mode = render_mod.effective_stripe_mode(env, guest_os, exit_mode)
+    prefix = "STRIPE_NODE" if stripe_mode == "node" else "SINGLE"
+    stype = env.get(f"{prefix}_TYPE", "").strip().lower()
+    if stype not in ("socks5", "http"):
+        return {
+            "skipped": True,
+            "target": prefix,
+            "protocol": stype,
+            "reason": "protocol_requires_guest_verify",
+        }
+    host = (env.get(f"{prefix}_SERVER_IP", "").strip() or env.get(f"{prefix}_SERVER", "").strip())
+    port_s = env.get(f"{prefix}_PORT", "").strip()
+    if not host or not port_s.isdigit():
+        return {"skipped": True, "target": prefix, "reason": "invalid_host_or_port"}
+    port = int(port_s)
+    user = env.get(f"{prefix}_USER", "")
+    pwd = env.get(f"{prefix}_PASS", "")
+    probe_fn = _probe_socks5_connect if stype == "socks5" else _probe_http_connect
+    domains = {}
+    all_ok = True
+    for dom in ("js.stripe.com", "api.stripe.com"):
+        ok_dom, reason = probe_fn(host, port, user, pwd, dom, 443, timeout=timeout)
+        domains[dom] = {"reachable": ok_dom, "detail": reason}
+        if not ok_dom:
+            all_ok = False
+    return {
+        "skipped": False,
+        "target": prefix,
+        "stripe_mode": stripe_mode,
+        "reachable": all_ok,
+        "domains": domains,
+    }
+
+
 def validate_env_file(env_path, route):
     errors, warnings = [], []
     try:
@@ -238,8 +373,7 @@ def validate_env_file(env_path, route):
         errors.append("MISSING_TAG: instance.env 缺少 TAG")
     guest_os = env.get("GUEST_OS", "macos").strip().lower()
     exit_mode = env.get("EXIT_MODE", "chain").strip().lower()
-    default_stripe = "off" if (guest_os == "linux" and exit_mode == "single") else "front"
-    stripe_mode = env.get("STRIPE_EXIT_MODE", default_stripe).strip().lower()
+    stripe_mode = render_mod.effective_stripe_mode(env, guest_os, exit_mode)
 
     if route in ("vmware-linux", "tart-linux") and guest_os != "linux":
         errors.append(f"ROUTE_OS_MISMATCH: {route} 路线要求 GUEST_OS=linux，当前为 {guest_os}")
@@ -251,28 +385,16 @@ def validate_env_file(env_path, route):
     elif exit_mode == "single":
         if guest_os != "linux":
             errors.append("UNSUPPORTED_SINGLE_ON_MACOS: v1 macOS 模板当前仅支持 EXIT_MODE=chain")
-        if stripe_mode != "off":
-            errors.append("INVALID_STRIPE_MODE: EXIT_MODE=single 时 STRIPE_EXIT_MODE 必须为 off")
-        stype = env.get("SINGLE_TYPE", "").strip().lower()
-        if stype in render_mod.REJECTED_UDP_TYPES:
-            errors.append(f"UDP_PROXY_REJECTED: SINGLE_TYPE={stype} 是 UDP 协议，cchouse 默认禁 UDP")
-        elif stype not in render_mod.SUPPORTED_SINGLE_TYPES:
-            errors.append(f"INVALID_SINGLE_TYPE: 不支持的 SINGLE_TYPE={stype or '<空>'}")
-        server = env.get("SINGLE_SERVER", "").strip()
-        if not server:
-            errors.append("MISSING_SINGLE_SERVER: 缺少 SINGLE_SERVER")
-        elif not render_mod.is_ipv4(server):
-            pinned = env.get("SINGLE_SERVER_IP", "").strip()
-            if not pinned:
-                warnings.append(
-                    "DOMAIN_NEEDS_PIN: SINGLE_SERVER 是域名且未填 SINGLE_SERVER_IP；"
-                    "请先在宿主解析 A 记录填入，或渲染时使用 render.py --resolve"
-                )
-            elif not render_mod.is_ipv4(pinned):
-                errors.append("INVALID_SINGLE_SERVER_IP: SINGLE_SERVER_IP 不是有效 IPv4")
-        port = env.get("SINGLE_PORT", "").strip()
-        if not port.isdigit() or not (1 <= int(port) <= 65535):
-            errors.append("INVALID_SINGLE_PORT: SINGLE_PORT 必须是 1-65535 的端口")
+        if stripe_mode not in ("off", "node"):
+            errors.append("INVALID_STRIPE_MODE: EXIT_MODE=single 时 STRIPE_EXIT_MODE 仅支持 off 或 node")
+        _validate_node_fields(env, "SINGLE", errors, warnings)
+        if stripe_mode == "node":
+            _validate_node_fields(env, "STRIPE_NODE", errors, warnings)
+        elif env.get("STRIPE_NODE_SERVER", "").strip():
+            warnings.append(
+                "STRIPE_NODE_IGNORED: 已填 STRIPE_NODE_SERVER 但 STRIPE_EXIT_MODE=off，"
+                "Stripe 备用节点不会生效；如需启用请设 STRIPE_EXIT_MODE=node"
+            )
     else:
         if stripe_mode not in ("off", "front", "tmh-chain"):
             errors.append(f"INVALID_STRIPE_MODE: {stripe_mode}")
@@ -315,6 +437,7 @@ def main():
     parser.add_argument("--set-step", dest="set_step", default=None)
     parser.add_argument("--set-status", dest="set_status", default=None)
     parser.add_argument("--next-action", dest="set_next_action", default=None)
+    parser.add_argument("--check-stripe", action="store_true", help="在宿主机探测单节点代理是否可连接 Stripe")
     args = parser.parse_args()
 
     sys_name = platform.system()
@@ -396,6 +519,7 @@ def main():
             warnings.append(f"LOW_DISK: 当前可用磁盘 {disk_gb} GB，Debian 13 客机建议 ≥ 25 GB")
 
     detected_vmnet = detect_vmnet8_cidr() if route == "vmware-linux" else None
+    stripe_check = None
     if args.env_path:
         env_errors, env_warnings = validate_env_file(args.env_path, route)
         if route == "vmware-linux" and detected_vmnet:
@@ -410,6 +534,22 @@ def main():
                         )
             except Exception:
                 pass
+        if args.check_stripe and not env_errors:
+            stripe_check = check_stripe_reachability(args.env_path)
+            if stripe_check and not stripe_check.get("skipped") and not stripe_check.get("reachable"):
+                details = ", ".join(
+                    f"{d}:{v['detail']}" for d, v in stripe_check.get("domains", {}).items() if not v.get("reachable")
+                )
+                # 只提示不拦截：Stripe 仅影响 claude.ai 网页付款，不影响已订阅用户正常使用
+                if stripe_check.get("stripe_mode") == "node":
+                    env_warnings.append(
+                        f"STRIPE_NODE_UNREACHABLE: 配置的 STRIPE_NODE 无法连接 Stripe（{details}），claude.ai 网页付款会失败，可更换 Stripe 专用节点"
+                    )
+                else:
+                    env_warnings.append(
+                        f"STRIPE_UNREACHABLE: 当前单节点无法连接 Stripe（{details}），claude.ai 付款会失败；"
+                        "建议配置 Stripe 备用节点（STRIPE_EXIT_MODE=node + STRIPE_NODE_*）或改链式（EXIT_MODE=chain）"
+                    )
         errors.extend(env_errors)
         warnings.extend(env_warnings)
         if env_errors and status != "HUMAN_WAIT":
@@ -449,6 +589,7 @@ def main():
             "expected_image": expected_image,
         },
         "route": route,
+        "stripe_check": stripe_check,
         "errors": errors,
         "warnings": warnings,
         "next_action": next_action,

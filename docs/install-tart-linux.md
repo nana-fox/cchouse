@@ -74,6 +74,8 @@ tart clone cchouse-debian13-arm64 "<VM_NAME>"
 scripts/verify-linux.sh "<PRIVATE_DIR>/instance.env" --fail-closed
 ```
 
+> **关于 Stripe 警告**：若验收输出 `WARN Stripe 不可达`，说明当前出口（常见于 Webshare 等代理商）拦截了 Stripe，只影响**在 claude.ai 网页上付款**；已订阅或在其他地方付款的账号可照常使用，验收仍算通过。需要在客机里付款时，按 [proxy-modes.md](proxy-modes.md) 配 Stripe 备用节点或改链式。
+
 退出码为 `0` 后关机并打干净快照：
 
 ```bash

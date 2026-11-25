@@ -1,0 +1,312 @@
+name: Build OVA (Debian 13 amd64)
+
+on:
+  workflow_dispatch:
+    inputs:
+      cloud_image_url:
+        description: "Debian 13 amd64 official cloud qcow2 URL"
+        required: false
+        default: "https://cloud.debian.org/images/cloud/trixie/20261123-2671/debian-13-generic-amd64-20261123-2671.qcow2"
+      cloud_image_sha512:
+        description: "Expected SHA-512 of Debian 13 cloud qcow2"
+        required: false
+        default: "562a4614952657a6ab8a89cda56eaf1bc85c8dfea51155184267bb6b6361eff215baf6afa2f8c2c8c2bad328ac6c30eead80664286ef4c8538368aeb7f87104f"
+      mihomo_version:
+        description: "mihomo release tag"
+        required: false
+        default: "v1.19.19"
+      mihomo_sha256:
+        description: "Expected SHA-256 of mihomo-linux-amd64-<version>.gz"
+        required: false
+        default: "d066f77fd9210d5f280877d4e35fd84f4711c43bd8905335946b9b0b1f128094"
+
+permissions:
+  contents: read
+
+jobs:
+  build-ova:
+    name: Build Debian 13 amd64 golden OVA (QEMU/KVM)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      CLOUD_IMAGE_URL: ${{ inputs.cloud_image_url || 'https://cloud.debian.org/images/cloud/trixie/20261123-2671/debian-13-generic-amd64-20261123-2671.qcow2' }}
+      CLOUD_IMAGE_SHA512: ${{ inputs.cloud_image_sha512 || '562a4614952657a6ab8a89cda56eaf1bc85c8dfea51155184267bb6b6361eff215baf6afa2f8c2c8c2bad328ac6c30eead80664286ef4c8538368aeb7f87104f' }}
+      MIHOMO_VERSION: ${{ inputs.mihomo_version || 'v1.19.19' }}
+      MIHOMO_SHA256: ${{ inputs.mihomo_sha256 || 'd066f77fd9210d5f280877d4e35fd84f4711c43bd8905335946b9b0b1f128094' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check /dev/kvm and runner resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "WORK_DIR=${RUNNER_TEMP}/cchouse-ova-build" >> "$GITHUB_ENV"
+          if [ ! -c /dev/kvm ]; then
+            echo "ERROR: /dev/kvm is not available on this runner." >&2
+            exit 1
+          fi
+          if [ ! -r /dev/kvm ] || [ ! -w /dev/kvm ]; then
+            sudo chmod 666 /dev/kvm
+          fi
+          ls -la /dev/kvm
+          echo "CPUs: $(nproc)"
+          free -h
+          df -h "$RUNNER_TEMP"
+
+      - name: Install QEMU and ISO tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils xorriso
+
+      - name: Download and verify Debian 13 cloud image & mihomo
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$WORK_DIR"
+          QCOW2="${WORK_DIR}/debian-13-generic-amd64.qcow2"
+          MIHOMO_GZ="${WORK_DIR}/mihomo-linux-amd64-${MIHOMO_VERSION}.gz"
+          MIHOMO_URL="https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VERSION}/mihomo-linux-amd64-${MIHOMO_VERSION}.gz"
+
+          echo "== [1/4] Downloading Debian 13 cloud image..."
+          curl -fL --retry 3 --retry-delay 5 "$CLOUD_IMAGE_URL" -o "$QCOW2"
+          echo "${CLOUD_IMAGE_SHA512}  ${QCOW2}" | sha512sum -c -
+
+          echo "== [2/4] Downloading mihomo ${MIHOMO_VERSION}..."
+          curl -fL --retry 3 --retry-delay 5 "$MIHOMO_URL" -o "$MIHOMO_GZ"
+          echo "${MIHOMO_SHA256}  ${MIHOMO_GZ}" | sha256sum -c -
+
+      - name: Boot QEMU/KVM guest and run build-debian13-golden.sh + assert-empty-state.sh
+        shell: bash
+        run: |
+          set -euo pipefail
+          START_TS="$(date +%s)"
+          echo "BUILD_START_TS=${START_TS}" >> "$GITHUB_ENV"
+
+          SOURCE_COMMIT="$(git rev-parse HEAD)"
+          if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+            SOURCE_COMMIT="${SOURCE_COMMIT}-dirty"
+          fi
+          BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "SOURCE_COMMIT=${SOURCE_COMMIT}" >> "$GITHUB_ENV"
+          echo "BUILD_TIME=${BUILD_TIME}" >> "$GITHUB_ENV"
+
+          QCOW2="${WORK_DIR}/debian-13-generic-amd64.qcow2"
+          WORK_QCOW2="${WORK_DIR}/work.qcow2"
+          MIHOMO_GZ="${WORK_DIR}/mihomo-linux-amd64-${MIHOMO_VERSION}.gz"
+          SERIAL_LOG="${WORK_DIR}/serial.log"
+          QEMU_LOG="${WORK_DIR}/qemu.log"
+
+          cp "$QCOW2" "$WORK_QCOW2"
+          qemu-img resize "$WORK_QCOW2" 24G
+
+          SSH_KEY="${WORK_DIR}/build_ed25519"
+          rm -f "$SSH_KEY" "${SSH_KEY}.pub"
+          ssh-keygen -q -t ed25519 -N "" -f "$SSH_KEY"
+          PUB_KEY="$(cat "${SSH_KEY}.pub")"
+
+          CI_DIR="${WORK_DIR}/cidata"
+          rm -rf "$CI_DIR"
+          mkdir -p "$CI_DIR"
+          printf 'instance-id: cchouse-ci-build-01\nlocal-hostname: debian\n' > "${CI_DIR}/meta-data"
+          cat > "${CI_DIR}/user-data" <<EOF
+          #cloud-config
+          disable_root: false
+          ssh_pwauth: false
+          users:
+            - name: root
+              ssh_authorized_keys:
+                - ${PUB_KEY}
+          growpart:
+            mode: auto
+            devices: ['/']
+          resize_rootfs: true
+          EOF
+
+          CI_ISO="${WORK_DIR}/cidata.iso"
+          xorriso -as mkisofs -o "$CI_ISO" -V cidata -J -R "$CI_DIR" >/dev/null 2>&1
+
+          QEMU_PID=""
+          cleanup() {
+            if [ -n "$QEMU_PID" ] && kill -0 "$QEMU_PID" 2>/dev/null; then
+              kill -TERM "$QEMU_PID" 2>/dev/null || true
+              sleep 2
+              kill -KILL "$QEMU_PID" 2>/dev/null || true
+            fi
+          }
+          trap cleanup EXIT
+
+          echo "== [3/4] Starting QEMU/KVM guest..."
+          qemu-system-x86_64 \
+            -machine q35,accel=kvm \
+            -cpu host \
+            -smp 4 \
+            -m 4096 \
+            -display none \
+            -serial "file:${SERIAL_LOG}" \
+            -drive "file=${WORK_QCOW2},if=virtio,format=qcow2" \
+            -drive "file=${CI_ISO},media=cdrom,readonly=on" \
+            -netdev user,id=net0,hostfwd=tcp:127.0.0.1:2222-:22 \
+            -device virtio-net-pci,netdev=net0 \
+            >"$QEMU_LOG" 2>&1 &
+          QEMU_PID=$!
+
+          SSH_OPTS=(-p 2222 -i "$SSH_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=5 -o BatchMode=yes)
+          SCP_OPTS=(-P 2222 -i "$SSH_KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=5 -o BatchMode=yes)
+
+          SSH_READY=0
+          for i in $(seq 1 90); do
+            if ! kill -0 "$QEMU_PID" 2>/dev/null; then
+              echo "ERROR: QEMU exited unexpectedly while waiting for SSH." >&2
+              cat "$QEMU_LOG" >&2 || true
+              tail -n 80 "$SERIAL_LOG" >&2 || true
+              exit 1
+            fi
+            if ssh "${SSH_OPTS[@]}" root@127.0.0.1 true 2>/dev/null; then
+              SSH_READY=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$SSH_READY" -ne 1 ]; then
+            echo "ERROR: Guest SSH did not become ready within 180s." >&2
+            tail -n 100 "$SERIAL_LOG" >&2 || true
+            exit 1
+          fi
+          echo "  OK  Guest SSH ready on 127.0.0.1:2222"
+
+          ssh "${SSH_OPTS[@]}" root@127.0.0.1 "mkdir -p /tmp/cchouse-guest-linux/image-builder"
+          scp "${SCP_OPTS[@]}" \
+            guest-linux/nftables-default-drop.conf \
+            guest-linux/cchouse-firstboot.service \
+            root@127.0.0.1:/tmp/cchouse-guest-linux/
+          scp "${SCP_OPTS[@]}" \
+            guest-linux/image-builder/build-debian13-golden.sh \
+            guest-linux/image-builder/assert-empty-state.sh \
+            guest-linux/image-builder/cchouse-firstboot-loader.sh \
+            root@127.0.0.1:/tmp/cchouse-guest-linux/image-builder/
+          scp "${SCP_OPTS[@]}" "$MIHOMO_GZ" root@127.0.0.1:/tmp/mihomo.gz
+
+          # Reuse existing build-debian13-golden.sh (which invokes assert-empty-state.sh fail-closed).
+          # Only background the poweroff so ssh returns the exact exit status of golden + assert-empty-state.
+          BUILD_CMD="TARGET_HYPERVISOR=vmware MIHOMO_ARCH=amd64 MIHOMO_VERSION=${MIHOMO_VERSION} MIHOMO_SHA256=${MIHOMO_SHA256} MIHOMO_LOCAL_GZ=/tmp/mihomo.gz SOURCE_COMMIT=${SOURCE_COMMIT} BUILD_TIME=${BUILD_TIME} bash /tmp/cchouse-guest-linux/image-builder/build-debian13-golden.sh && rm -rf /tmp/cchouse-guest-linux /tmp/mihomo.gz && sync && { nohup sh -c 'sleep 2 && systemctl poweroff' </dev/null >/dev/null 2>&1 & }"
+          ssh "${SSH_OPTS[@]}" root@127.0.0.1 "$BUILD_CMD"
+
+          echo "== Waiting for clean guest poweroff..."
+          SHUTDOWN_OK=0
+          for _ in $(seq 1 60); do
+            if ! kill -0 "$QEMU_PID" 2>/dev/null; then
+              SHUTDOWN_OK=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$SHUTDOWN_OK" -ne 1 ]; then
+            echo "ERROR: Guest did not power off cleanly within 120s." >&2
+            tail -n 80 "$SERIAL_LOG" >&2 || true
+            exit 1
+          fi
+          wait "$QEMU_PID" || true
+          QEMU_PID=""
+          rm -rf "$CI_DIR" "$CI_ISO" "$SSH_KEY" "${SSH_KEY}.pub"
+          echo "  OK  Guest powered off cleanly."
+
+      - name: Convert to streamOptimized VMDK and package OVA (.ovf + .mf + tar)
+        shell: bash
+        run: |
+          set -euo pipefail
+          STAGE_DIR="${WORK_DIR}/ova-stage"
+          OUT_DIR="${WORK_DIR}/out"
+          rm -rf "$STAGE_DIR" "$OUT_DIR"
+          mkdir -p "$STAGE_DIR" "$OUT_DIR"
+
+          WORK_QCOW2="${WORK_DIR}/work.qcow2"
+          VMDK_NAME="cchouse-debian13-amd64-disk1.vmdk"
+          OVF_NAME="cchouse-debian13-amd64.ovf"
+          MF_NAME="cchouse-debian13-amd64.mf"
+          OVA_NAME="cchouse-debian13-amd64.ova"
+
+          echo "== [4/4] Converting qcow2 -> streamOptimized VMDK..."
+          qemu-img convert -p -f qcow2 -O vmdk \
+            -o subformat=streamOptimized,adapter_type=lsilogic,compat6 \
+            "$WORK_QCOW2" "${STAGE_DIR}/${VMDK_NAME}"
+
+          qemu-img info --output=json "${STAGE_DIR}/${VMDK_NAME}" | tee "${WORK_DIR}/vmdk-info.json"
+
+          python3 -I - \
+            guest-linux/image-builder/cchouse-debian13-amd64.ovf.tmpl \
+            "${STAGE_DIR}/${VMDK_NAME}" \
+            "${WORK_DIR}/vmdk-info.json" \
+            "${STAGE_DIR}/${OVF_NAME}" <<'PY'
+          import json, os, sys, xml.etree.ElementTree as ET
+          tmpl_path, vmdk_path, info_path, out_path = sys.argv[1:5]
+          vmdk_size = os.path.getsize(vmdk_path)
+          info = json.loads(open(info_path, encoding="utf-8").read())
+          virtual_size = int(info["virtual-size"])
+          text = open(tmpl_path, encoding="utf-8").read()
+          text = (
+            text.replace("__VMDK_FILE__", os.path.basename(vmdk_path))
+                .replace("__VMDK_SIZE__", str(vmdk_size))
+                .replace("__DISK_CAPACITY__", str(virtual_size))
+          )
+          ET.fromstring(text)
+          with open(out_path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(text)
+          print(f"Rendered {out_path}: vmdk_size={vmdk_size} virtual_size={virtual_size}")
+          PY
+
+          OVF_SHA256="$(sha256sum "${STAGE_DIR}/${OVF_NAME}" | awk '{print $1}')"
+          VMDK_SHA256="$(sha256sum "${STAGE_DIR}/${VMDK_NAME}" | awk '{print $1}')"
+          cat > "${STAGE_DIR}/${MF_NAME}" <<EOF
+          SHA256(${OVF_NAME})= ${OVF_SHA256}
+          SHA256(${VMDK_NAME})= ${VMDK_SHA256}
+          EOF
+
+          (
+            cd "$STAGE_DIR"
+            tar --format=ustar -cf "${OUT_DIR}/${OVA_NAME}" "$OVF_NAME" "$MF_NAME" "$VMDK_NAME"
+          )
+
+          (
+            cd "$OUT_DIR"
+            sha256sum "$OVA_NAME" > "${OVA_NAME}.sha256"
+          )
+
+          OVA_BYTES="$(stat -c %s "${OUT_DIR}/${OVA_NAME}")"
+          OVA_MB="$(awk -v b="$OVA_BYTES" 'BEGIN { printf "%.1f", b / 1048576 }')"
+          OVA_SHA256="$(awk '{print $1}' "${OUT_DIR}/${OVA_NAME}.sha256")"
+          END_TS="$(date +%s)"
+          ELAPSED="$((END_TS - BUILD_START_TS))"
+          ELAPSED_MIN="$((ELAPSED / 60))"
+          ELAPSED_SEC="$((ELAPSED % 60))"
+
+          echo "=== Cloud OVA Build Complete ==="
+          echo "OVA:      ${OUT_DIR}/${OVA_NAME}"
+          echo "SIZE:     ${OVA_MB} MiB (${OVA_BYTES} bytes)"
+          echo "SHA256:   ${OVA_SHA256}"
+          echo "COMMIT:   ${SOURCE_COMMIT}"
+          echo "ELAPSED:  ${ELAPSED_MIN}m${ELAPSED_SEC}s (${ELAPSED}s)"
+
+          {
+            echo "## Cloud OVA Build Summary"
+            echo ""
+            echo "- **File**: \`${OVA_NAME}\`"
+            echo "- **Size**: \`${OVA_MB} MiB\` (\`${OVA_BYTES}\` bytes)"
+            echo "- **SHA-256**: \`${OVA_SHA256}\`"
+            echo "- **Source commit**: \`${SOURCE_COMMIT}\`"
+            echo "- **Build time (UTC)**: \`${BUILD_TIME}\`"
+            echo "- **Guest + OVA duration**: \`${ELAPSED_MIN}m${ELAPSED_SEC}s\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload OVA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cchouse-debian13-amd64-ova
+          path: |
+            ${{ env.WORK_DIR }}/out/cchouse-debian13-amd64.ova
+            ${{ env.WORK_DIR }}/out/cchouse-debian13-amd64.ova.sha256
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: error

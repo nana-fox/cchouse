@@ -128,20 +128,33 @@ def render_text(text, env, name, optional_keys=()):
     return PLACEHOLDER.sub(lambda m: env.get(m.group(1), ""), text)
 
 
-def resolve_single_server_ip(env, allow_resolve=False):
-    server = env.get("SINGLE_SERVER", "").strip()
+def effective_stripe_mode(env, guest_os, exit_mode):
+    raw = env.get("STRIPE_EXIT_MODE", "").strip().lower()
+    if raw:
+        return raw
+    if guest_os == "linux" and exit_mode == "single":
+        if env.get("STRIPE_NODE_SERVER", "").strip():
+            return "node"
+        return "off"
+    return "front"
+
+
+def resolve_node_server_ip(env, prefix="SINGLE", allow_resolve=False):
+    server_key = f"{prefix}_SERVER"
+    ip_key = f"{prefix}_SERVER_IP"
+    server = env.get(server_key, "").strip()
     if not server:
-        sys.exit("EXIT_MODE=single 缺少 SINGLE_SERVER")
+        sys.exit(f"缺少 {server_key}")
     if is_ipv4(server):
         return server, None
-    pinned = env.get("SINGLE_SERVER_IP", "").strip()
+    pinned = env.get(ip_key, "").strip()
     if pinned:
         if not is_ipv4(pinned):
-            sys.exit(f"SINGLE_SERVER_IP 不是有效 IPv4：{pinned}")
+            sys.exit(f"{ip_key} 不是有效 IPv4：{pinned}")
         return pinned, server
     if not allow_resolve:
         sys.exit(
-            f"SINGLE_SERVER={server} 是域名，请在宿主机解析 IPv4 后填入 SINGLE_SERVER_IP，"
+            f"{server_key}={server} 是域名，请在宿主机解析 IPv4 后填入 {ip_key}，"
             "或加 --resolve 参数由 render.py 在宿主解析并钉死 IP"
         )
     try:
@@ -152,6 +165,10 @@ def resolve_single_server_ip(env, allow_resolve=False):
     if not ips:
         sys.exit(f"宿主机未解析到 {server} 的 IPv4 (A) 记录")
     return ips[0], server
+
+
+def resolve_single_server_ip(env, allow_resolve=False):
+    return resolve_node_server_ip(env, prefix="SINGLE", allow_resolve=allow_resolve)
 
 
 def write_lf(path, text):
@@ -168,21 +185,17 @@ def yaml_kv(key, value, indent=2):
     return f"{' ' * indent}{key}: {value}"
 
 
-def build_single_linux_config(env, pinned_ip, orig_host):
-    tag_upper = env["TAG_UPPER"]
-    stype = env.get("SINGLE_TYPE", "").strip().lower()
+def build_proxy_node_lines(env, prefix, node_name, pinned_ip, orig_host):
+    k = lambda suffix: f"{prefix}_{suffix}"
+    stype = env.get(k("TYPE"), "").strip().lower()
     if stype in REJECTED_UDP_TYPES:
-        sys.exit(f"SINGLE_TYPE={stype} 是 UDP 协议，cchouse 默认全局禁 UDP，拒绝渲染")
+        sys.exit(f"{k('TYPE')}={stype} 是 UDP 协议，cchouse 默认全局禁 UDP，拒绝渲染")
     if stype not in SUPPORTED_SINGLE_TYPES:
-        sys.exit(f"不支持的 SINGLE_TYPE={stype}，允许值：{', '.join(SUPPORTED_SINGLE_TYPES)}")
-    port = env.get("SINGLE_PORT", "").strip()
+        sys.exit(f"不支持的 {k('TYPE')}={stype}，允许值：{', '.join(SUPPORTED_SINGLE_TYPES)}")
+    port = env.get(k("PORT"), "").strip()
     if not port.isdigit() or not (1 <= int(port) <= 65535):
-        sys.exit(f"SINGLE_PORT 无效：{port}")
-    lan_cidr = env.get("HOME_LAN_CIDR", "").strip()
-    if not lan_cidr:
-        sys.exit("instance.env 缺少 HOME_LAN_CIDR")
+        sys.exit(f"{k('PORT')} 无效：{port}")
 
-    node_name = f"{tag_upper}-Single-Exit"
     lines = [
         f"- name: {node_name}",
         yaml_kv("type", stype),
@@ -190,88 +203,123 @@ def build_single_linux_config(env, pinned_ip, orig_host):
         yaml_kv("port", port),
         yaml_kv("udp", "false"),
     ]
-    raw_tls = env.get("SINGLE_TLS", "").strip().lower()
+    raw_tls = env.get(k("TLS"), "").strip().lower()
     if stype in ("socks5", "http"):
-        if env.get("SINGLE_USER"):
-            lines.append(yaml_kv("username", yaml_quote(env["SINGLE_USER"])))
-        if env.get("SINGLE_PASS"):
-            lines.append(yaml_kv("password", yaml_quote(env["SINGLE_PASS"])))
+        if env.get(k("USER")):
+            lines.append(yaml_kv("username", yaml_quote(env[k("USER")])))
+        if env.get(k("PASS")):
+            lines.append(yaml_kv("password", yaml_quote(env[k("PASS")])))
         if raw_tls == "true":
             if stype == "socks5" and orig_host:
                 sys.exit("锁定版 mihomo 的 SOCKS5 TLS 使用 server 字段校验域名证书，不支持域名钉 IP 后启用 TLS")
             lines.append(yaml_kv("tls", "true"))
-            sni = env.get("SINGLE_SNI") or orig_host
+            sni = env.get(k("SNI")) or orig_host
             if sni:
                 lines.append(yaml_kv("sni", sni))
     elif stype == "vless":
-        if not env.get("SINGLE_UUID"):
-            sys.exit("SINGLE_TYPE=vless 缺少 SINGLE_UUID")
+        if not env.get(k("UUID")):
+            sys.exit(f"{k('TYPE')}=vless 缺少 {k('UUID')}")
         if raw_tls == "false":
-            sys.exit("SINGLE_TYPE=vless 禁止明文（SINGLE_TLS 不能为 false）")
-        net = env.get("SINGLE_NETWORK", "tcp").strip().lower()
+            sys.exit(f"{k('TYPE')}=vless 禁止明文（{k('TLS')} 不能为 false）")
+        net = env.get(k("NETWORK"), "tcp").strip().lower()
         if net not in ("tcp", "ws"):
-            sys.exit(f"SINGLE_TYPE=vless 不支持的传输 SINGLE_NETWORK={net}，仅支持 tcp 或 ws")
-        lines.append(yaml_kv("uuid", env["SINGLE_UUID"]))
+            sys.exit(f"{k('TYPE')}=vless 不支持的传输 {k('NETWORK')}={net}，仅支持 tcp 或 ws")
+        lines.append(yaml_kv("uuid", env[k("UUID")]))
         lines.append(yaml_kv("tls", "true"))
         lines.append(yaml_kv("skip-cert-verify", "false"))
-        if env.get("SINGLE_FLOW"):
-            lines.append(yaml_kv("flow", env["SINGLE_FLOW"]))
-        if env.get("SINGLE_FINGERPRINT"):
-            lines.append(yaml_kv("client-fingerprint", env["SINGLE_FINGERPRINT"]))
-        sni = env.get("SINGLE_SNI") or orig_host
+        if env.get(k("FLOW")):
+            lines.append(yaml_kv("flow", env[k("FLOW")]))
+        if env.get(k("FINGERPRINT")):
+            lines.append(yaml_kv("client-fingerprint", env[k("FINGERPRINT")]))
+        sni = env.get(k("SNI")) or orig_host
         if sni:
             lines.append(yaml_kv("servername", sni))
-        if env.get("SINGLE_PUBLIC_KEY"):
+        if env.get(k("PUBLIC_KEY")):
             lines.append("  reality-opts:")
-            lines.append(yaml_kv("public-key", env["SINGLE_PUBLIC_KEY"], indent=4))
-            if env.get("SINGLE_SHORT_ID"):
-                lines.append(yaml_kv("short-id", env["SINGLE_SHORT_ID"], indent=4))
+            lines.append(yaml_kv("public-key", env[k("PUBLIC_KEY")], indent=4))
+            if env.get(k("SHORT_ID")):
+                lines.append(yaml_kv("short-id", env[k("SHORT_ID")], indent=4))
         if net == "ws":
             lines.append(yaml_kv("network", "ws"))
             lines.append("  ws-opts:")
-            lines.append(yaml_kv("path", yaml_quote(env.get("SINGLE_WS_PATH") or "/"), indent=4))
-            ws_host = env.get("SINGLE_WS_HOST") or sni
+            lines.append(yaml_kv("path", yaml_quote(env.get(k("WS_PATH")) or "/"), indent=4))
+            ws_host = env.get(k("WS_HOST")) or sni
             if ws_host:
                 lines.append("    headers:")
                 lines.append(yaml_kv("Host", ws_host, indent=6))
     elif stype == "trojan":
-        if not env.get("SINGLE_PASS"):
-            sys.exit("SINGLE_TYPE=trojan 缺少 SINGLE_PASS")
+        if not env.get(k("PASS")):
+            sys.exit(f"{k('TYPE')}=trojan 缺少 {k('PASS')}")
         if raw_tls == "false":
-            sys.exit("SINGLE_TYPE=trojan 必须启用 TLS（SINGLE_TLS 不能为 false）")
-        net = env.get("SINGLE_NETWORK", "tcp").strip().lower()
+            sys.exit(f"{k('TYPE')}=trojan 必须启用 TLS（{k('TLS')} 不能为 false）")
+        net = env.get(k("NETWORK"), "tcp").strip().lower()
         if net not in ("tcp", "ws"):
-            sys.exit(f"SINGLE_TYPE=trojan 不支持的传输 SINGLE_NETWORK={net}，仅支持 tcp 或 ws")
-        lines.append(yaml_kv("password", yaml_quote(env["SINGLE_PASS"])))
+            sys.exit(f"{k('TYPE')}=trojan 不支持的传输 {k('NETWORK')}={net}，仅支持 tcp 或 ws")
+        lines.append(yaml_kv("password", yaml_quote(env[k("PASS")])))
         lines.append(yaml_kv("skip-cert-verify", "false"))
-        sni = env.get("SINGLE_SNI") or orig_host
+        sni = env.get(k("SNI")) or orig_host
         if sni:
             lines.append(yaml_kv("sni", sni))
-        if env.get("SINGLE_FINGERPRINT"):
-            lines.append(yaml_kv("client-fingerprint", env["SINGLE_FINGERPRINT"]))
+        if env.get(k("FINGERPRINT")):
+            lines.append(yaml_kv("client-fingerprint", env[k("FINGERPRINT")]))
         if net == "ws":
             lines.append(yaml_kv("network", "ws"))
             lines.append("  ws-opts:")
-            lines.append(yaml_kv("path", yaml_quote(env.get("SINGLE_WS_PATH") or "/"), indent=4))
-            ws_host = env.get("SINGLE_WS_HOST") or sni
+            lines.append(yaml_kv("path", yaml_quote(env.get(k("WS_PATH")) or "/"), indent=4))
+            ws_host = env.get(k("WS_HOST")) or sni
             if ws_host:
                 lines.append("    headers:")
                 lines.append(yaml_kv("Host", ws_host, indent=6))
     elif stype == "ss":
-        if not env.get("SINGLE_CIPHER") or not env.get("SINGLE_PASS"):
-            sys.exit("SINGLE_TYPE=ss 缺少 SINGLE_CIPHER 或 SINGLE_PASS")
-        lines.append(yaml_kv("cipher", env["SINGLE_CIPHER"]))
-        lines.append(yaml_kv("password", yaml_quote(env["SINGLE_PASS"])))
+        if not env.get(k("CIPHER")) or not env.get(k("PASS")):
+            sys.exit(f"{k('TYPE')}=ss 缺少 {k('CIPHER')} 或 {k('PASS')}")
+        lines.append(yaml_kv("cipher", env[k("CIPHER")]))
+        lines.append(yaml_kv("password", yaml_quote(env[k("PASS")])))
     elif stype == "ssh":
-        if not env.get("SINGLE_USER") or not env.get("SINGLE_PASS"):
-            sys.exit("SINGLE_TYPE=ssh 缺少 SINGLE_USER 或 SINGLE_PASS")
-        lines.append(yaml_kv("username", yaml_quote(env["SINGLE_USER"])))
-        lines.append(yaml_kv("password", yaml_quote(env["SINGLE_PASS"])))
-        if env.get("SINGLE_HOST_KEY"):
+        if not env.get(k("USER")) or not env.get(k("PASS")):
+            sys.exit(f"{k('TYPE')}=ssh 缺少 {k('USER')} 或 {k('PASS')}")
+        lines.append(yaml_kv("username", yaml_quote(env[k("USER")])))
+        lines.append(yaml_kv("password", yaml_quote(env[k("PASS")])))
+        if env.get(k("HOST_KEY")):
             lines.append("  host-key:")
-            lines.append(f"  - {yaml_quote(env['SINGLE_HOST_KEY'])}")
+            lines.append(f"  - {yaml_quote(env[k('HOST_KEY')])}")
 
-    proxy_block = "\n".join(lines)
+    return "\n".join(lines), int(port)
+
+
+def build_single_linux_config(env, pinned_ip, orig_host, stripe_node=None):
+    tag_upper = env["TAG_UPPER"]
+    lan_cidr = env.get("HOME_LAN_CIDR", "").strip()
+    if not lan_cidr:
+        sys.exit("instance.env 缺少 HOME_LAN_CIDR")
+
+    node_name = f"{tag_upper}-Single-Exit"
+    proxy_block, main_port = build_proxy_node_lines(env, "SINGLE", node_name, pinned_ip, orig_host)
+    targets = [(pinned_ip, main_port)]
+
+    stripe_group_block = ""
+    stripe_rules_block = ""
+    if stripe_node is not None:
+        stripe_pinned_ip, stripe_orig_host = stripe_node
+        stripe_node_name = f"{tag_upper}-Stripe-Node"
+        stripe_proxy_block, stripe_port = build_proxy_node_lines(
+            env, "STRIPE_NODE", stripe_node_name, stripe_pinned_ip, stripe_orig_host
+        )
+        proxy_block = proxy_block + "\n" + stripe_proxy_block
+        targets.append((stripe_pinned_ip, stripe_port))
+        stripe_group_block = (
+            f"- name: {tag_upper}-Stripe\n"
+            f"  type: select\n"
+            f"  proxies:\n"
+            f"  - {stripe_node_name}\n"
+            f"  disable-udp: true\n"
+        )
+        stripe_rules_block = (
+            f"- DOMAIN-SUFFIX,stripe.com,{tag_upper}-Stripe\n"
+            f"- DOMAIN-SUFFIX,stripe.network,{tag_upper}-Stripe\n"
+            f"- DOMAIN-SUFFIX,stripecdn.com,{tag_upper}-Stripe\n"
+        )
+
     config = f"""---
 find-process-mode: off
 allow-lan: false
@@ -315,17 +363,17 @@ proxy-groups:
   proxies:
   - {node_name}
   disable-udp: true
-- name: GLOBAL
+{stripe_group_block}- name: GLOBAL
   type: select
   proxies:
   - {tag_upper}-Exit
   disable-udp: true
 rules:
 - NETWORK,UDP,REJECT
-- MATCH,{tag_upper}-Exit
+{stripe_rules_block}- MATCH,{tag_upper}-Exit
 """
     assert_no_direct_rules(config)
-    return config, [(pinned_ip, int(port))]
+    return config, targets
 
 
 def build_chain_linux_config(env, stripe_mode):
@@ -450,10 +498,13 @@ def render_linux(env, out, exit_mode, stripe_mode, allow_resolve):
     env["SSH_NETS"] = ", ".join(str(n) for n in collapsed)
 
     if exit_mode == "single":
-        if stripe_mode != "off":
-            sys.exit("EXIT_MODE=single 时 STRIPE_EXIT_MODE 必须为 off")
-        pinned_ip, orig_host = resolve_single_server_ip(env, allow_resolve=allow_resolve)
-        config_text, targets = build_single_linux_config(env, pinned_ip, orig_host)
+        if stripe_mode not in ("off", "node"):
+            sys.exit("EXIT_MODE=single 时 STRIPE_EXIT_MODE 仅支持 off 或 node")
+        pinned_ip, orig_host = resolve_node_server_ip(env, prefix="SINGLE", allow_resolve=allow_resolve)
+        stripe_node = None
+        if stripe_mode == "node":
+            stripe_node = resolve_node_server_ip(env, prefix="STRIPE_NODE", allow_resolve=allow_resolve)
+        config_text, targets = build_single_linux_config(env, pinned_ip, orig_host, stripe_node=stripe_node)
     elif exit_mode == "chain":
         if stripe_mode not in ("off", "front", "tmh-chain"):
             sys.exit("EXIT_MODE=chain 时 STRIPE_EXIT_MODE 必须为 off、front 或 tmh-chain")
@@ -498,8 +549,7 @@ def main():
         sys.exit("instance.env 缺少 TAG")
     guest_os = env.get("GUEST_OS", "macos").strip().lower()
     exit_mode = env.get("EXIT_MODE", "chain").strip().lower()
-    default_stripe = "off" if (guest_os == "linux" and exit_mode == "single") else "front"
-    stripe_mode = env.get("STRIPE_EXIT_MODE", default_stripe).strip().lower()
+    stripe_mode = effective_stripe_mode(env, guest_os, exit_mode)
 
     out = Path(args[1])
     if guest_os == "macos":

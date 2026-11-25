@@ -43,15 +43,28 @@ rm -f "$TMP_ENV"
   "${EXPECTED_EGRESS_ASN:?instance.env 缺 EXPECTED_EGRESS_ASN}" \
   "${ROUTER_IP:?instance.env 缺 ROUTER_IP}" "${TIMEZONE:?instance.env 缺 TIMEZONE}"
 MIHOMO_USER="${MIHOMO_USER:-mihomo}"
+EXIT_MODE="${EXIT_MODE:-chain}"
+if [ -z "${STRIPE_EXIT_MODE:-}" ]; then
+  if [ "$EXIT_MODE" = "single" ]; then
+    if [ -n "${STRIPE_NODE_SERVER:-}" ]; then
+      STRIPE_EXIT_MODE="node"
+    else
+      STRIPE_EXIT_MODE="off"
+    fi
+  else
+    STRIPE_EXIT_MODE="front"
+  fi
+fi
 
 SSH_OPTS=(-F none -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=\"$SSH_KNOWN_HOSTS\"")
 guest() { ssh "${SSH_OPTS[@]}" "claude@$GUEST_IP" "$@"; }
 
 TRACE=https://www.cloudflare.com/cdn-cgi/trace
-pass=0; fail=0
+pass=0; fail=0; warn_count=0; stripe_ok="unknown"
 log() { [ "$JSON_OUT" = 1 ] || echo "$@"; }
 ok()  { log "  PASS  $1"; pass=$((pass+1)); }
 bad() { log "  FAIL  $1"; fail=$((fail+1)); }
+warn() { log "  WARN  $1"; warn_count=$((warn_count+1)); }
 expect() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1（期望 $3，实际 ${2:-无}）"; fi; }
 
 expect_blocked() {
@@ -140,6 +153,33 @@ if [ -n "${GUEST_LOCALE:-}" ]; then
   expect "客机默认语言 = GUEST_LOCALE" "$(guest "awk -F= '/^LANG=/{print \$2}' /etc/default/locale 2>/dev/null")" "$GUEST_LOCALE"
 fi
 
+log "-- Stripe 可达性"
+stripe_http_code() {
+  local code=""
+  code=$(guest "curl -s --max-time 12 -o /dev/null -w '%{http_code}' '$1'" 2>/dev/null || true)
+  printf '%s' "${code:-000}"
+}
+stripe_code_ok() {
+  case "$1" in
+    [234][0-9][0-9]) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+stripe_js_code=$(stripe_http_code "https://js.stripe.com/v3/")
+stripe_api_code=$(stripe_http_code "https://api.stripe.com/v1")
+if stripe_code_ok "$stripe_js_code" && stripe_code_ok "$stripe_api_code"; then
+  stripe_ok="true"
+  ok "Stripe 可达（js.stripe.com=$stripe_js_code, api.stripe.com=$stripe_api_code）"
+else
+  stripe_ok="false"
+  # 只提示不判失败：Stripe 仅影响 claude.ai 网页付款，已订阅或别处付款的用户不受影响
+  if [ "$EXIT_MODE" = "single" ] && [ "$STRIPE_EXIT_MODE" = "off" ]; then
+    warn "Stripe 不可达（js.stripe.com=$stripe_js_code, api.stripe.com=$stripe_api_code）：单节点出口可能屏蔽 Stripe，claude.ai 网页付款会失败（不影响已订阅账号使用）；如需在此付款，可配置 Stripe 备用节点（STRIPE_EXIT_MODE=node + STRIPE_NODE_*）或改链式（EXIT_MODE=chain）"
+  else
+    warn "Stripe 不可达（js.stripe.com=$stripe_js_code, api.stripe.com=$stripe_api_code，当前 STRIPE_EXIT_MODE=$STRIPE_EXIT_MODE）：claude.ai 网页付款会失败（不影响已订阅账号使用）"
+  fi
+fi
+
 log "-- 不该通的"
 expect "客机没有公网 IPv6 地址" "$(guest "ip -6 addr show scope global | grep -c inet6 || true" 2>/dev/null | tr -d ' ')" "0"
 expect_blocked "直连 IPv6 地址不通" "curl -g -s --max-time 8 -o /dev/null 'https://[2606:4700:4700::1111]/'"
@@ -199,10 +239,13 @@ if [ "$FAIL_CLOSED" = 1 ]; then
   fi
 fi
 
-log "== 结果：$pass PASS / $fail FAIL"
+log "== 结果：$pass PASS / $fail FAIL / $warn_count WARN"
 if [ "$JSON_OUT" = 1 ]; then
   ok_bool="false"; next_act="fix_failed_checks"
   if [ "$fail" = 0 ]; then ok_bool="true"; next_act="human_check_html_and_login"; fi
-  printf '{"ok":%s,"pass":%d,"fail":%d,"next_action":"%s"}\n' "$ok_bool" "$pass" "$fail" "$next_act"
+  stripe_json="null"
+  if [ "$stripe_ok" = "true" ] || [ "$stripe_ok" = "false" ]; then stripe_json="$stripe_ok"; fi
+  printf '{"ok":%s,"pass":%d,"fail":%d,"warn":%d,"stripe_reachable":%s,"next_action":"%s"}\n' \
+    "$ok_bool" "$pass" "$fail" "$warn_count" "$stripe_json" "$next_act"
 fi
 [ "$fail" = 0 ]
