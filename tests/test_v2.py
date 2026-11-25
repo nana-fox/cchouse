@@ -469,6 +469,33 @@ class TestCchouseV2(unittest.TestCase):
             self.assertIn("20-cchouse-dhcp.network", aes)
             self.assertIn("systemd-networkd.service", aes)
 
+    def test_tun_route_exclude_covers_vmnet_in_both_modes(self):
+        # VMware NAT 网段与家庭局域网不同（如 GTR 192.168.140.0/24），必须绕过 TUN，否则宿主 SSH 被劫持
+        import re as _re
+        cases = [("single", base_single_linux_env()), ("chain", base_chain_env())]
+        for mode, env in cases:
+            env = dict(env)
+            if mode == "chain":
+                env.update({"GUEST_OS": "linux", "EXIT_MODE": "chain", "STRIPE_EXIT_MODE": "front"})
+                env.setdefault("SSH_PUBKEY", base_single_linux_env()["SSH_PUBKEY"])
+            env["VMNET_CIDR"] = "192.168.140.0/24"
+            env["HOME_LAN_CIDR"] = "192.168.124.0/24"
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as td:
+                env_p = Path(td) / "instance.env"
+                out_d = Path(td) / "out"
+                write_env(env_p, env)
+                cp = subprocess.run(
+                    [sys.executable, "-I", str(RENDER), str(env_p), str(out_d)],
+                    capture_output=True, text=True, encoding="utf-8", errors="replace",
+                )
+                self.assertEqual(cp.returncode, 0, cp.stderr)
+                cfg = (out_d / "config.yaml").read_text(encoding="utf-8")
+                m = _re.search(r"  route-exclude-address:\n((?:  - [^\n]*\n)+)", cfg)
+                self.assertIsNotNone(m, cfg)
+                items = [l[4:] for l in m.group(1).splitlines()]
+                self.assertEqual(items, ["192.168.64.0/24", "192.168.124.0/24", "192.168.140.0/24"])
+                self.assertEqual(cfg.count("route-exclude-address:"), 1)
+
     def test_linux_desktop_ux_and_review_hardening(self):
         import configparser
 

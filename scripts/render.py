@@ -364,6 +364,15 @@ def build_chain_linux_config(env, stripe_mode):
     return base, egress_targets
 
 
+def set_route_exclude(config_text, nets):
+    """把 tun.route-exclude-address 列表整体替换为去重合并后的宿主侧网段（与 SSH 白名单同源）。"""
+    pattern = re.compile(r"(  route-exclude-address:\n)(?:  - [^\n]*\n)+")
+    if len(pattern.findall(config_text)) != 1:
+        sys.exit("config.yaml 中 tun.route-exclude-address 必须恰好出现一次")
+    items = "".join(f"  - {n}\n" for n in nets)
+    return pattern.sub(lambda m: m.group(1) + items, config_text, count=1)
+
+
 def format_nft_egress_rules(mihomo_user, targets):
     lines = []
     seen = set()
@@ -421,19 +430,6 @@ def render_linux(env, out, exit_mode, stripe_mode, allow_resolve):
     env.setdefault("GUEST_HOSTNAME", "")
     env.setdefault("VMNET_CIDR", "192.168.180.0/24")
 
-    if exit_mode == "single":
-        if stripe_mode != "off":
-            sys.exit("EXIT_MODE=single 时 STRIPE_EXIT_MODE 必须为 off")
-        pinned_ip, orig_host = resolve_single_server_ip(env, allow_resolve=allow_resolve)
-        config_text, targets = build_single_linux_config(env, pinned_ip, orig_host)
-    elif exit_mode == "chain":
-        if stripe_mode not in ("off", "front", "tmh-chain"):
-            sys.exit("EXIT_MODE=chain 时 STRIPE_EXIT_MODE 必须为 off、front 或 tmh-chain")
-        config_text, targets = build_chain_linux_config(env, stripe_mode)
-    else:
-        sys.exit("EXIT_MODE 必须为 single 或 chain")
-
-    env["NFT_EGRESS_RULES"] = format_nft_egress_rules(env["MIHOMO_USER"], targets)
     raw_cidrs = [
         env.get("VMNET_CIDR", "").strip(),
         env.get("HOME_LAN_CIDR", "").strip(),
@@ -452,6 +448,22 @@ def render_linux(env, out, exit_mode, stripe_mode, allow_resolve):
         parsed_nets.append(net)
     collapsed = list(ipaddress.collapse_addresses(parsed_nets))
     env["SSH_NETS"] = ", ".join(str(n) for n in collapsed)
+
+    if exit_mode == "single":
+        if stripe_mode != "off":
+            sys.exit("EXIT_MODE=single 时 STRIPE_EXIT_MODE 必须为 off")
+        pinned_ip, orig_host = resolve_single_server_ip(env, allow_resolve=allow_resolve)
+        config_text, targets = build_single_linux_config(env, pinned_ip, orig_host)
+    elif exit_mode == "chain":
+        if stripe_mode not in ("off", "front", "tmh-chain"):
+            sys.exit("EXIT_MODE=chain 时 STRIPE_EXIT_MODE 必须为 off、front 或 tmh-chain")
+        config_text, targets = build_chain_linux_config(env, stripe_mode)
+    else:
+        sys.exit("EXIT_MODE 必须为 single 或 chain")
+
+    # 宿主侧网段（VMware NAT / 家庭局域网 / Tart）必须绕过 TUN，否则 mihomo 启动后宿主 SSH 回包被劫持
+    config_text = set_route_exclude(config_text, collapsed)
+    env["NFT_EGRESS_RULES"] = format_nft_egress_rules(env["MIHOMO_USER"], targets)
 
     rendered = [("config.yaml", config_text)]
     for src in sorted(GUEST_LINUX.iterdir()):
