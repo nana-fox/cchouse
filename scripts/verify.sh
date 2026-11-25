@@ -24,7 +24,7 @@ expect_blocked() {
   case $rc in
     42) ok "$1" ;;
     0) bad "$1（仍可连接）" ;;
-    *) bad "$1（无法确认阻断，远程状态 $rc）" ;;
+    *) bad "$1（无法确认阻断，远程状态 ${rc}）" ;;
   esac
 }
 

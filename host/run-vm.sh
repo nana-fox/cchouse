@@ -16,7 +16,7 @@ esac
 # 虚拟机放外置盘时，开机后等盘挂上（最多 5 分钟）
 if [ -n "${VM_STORAGE:-}" ]; then
   for i in $(seq 1 60); do [ -d "$VM_STORAGE" ] && break; sleep 5; done
-  [ -d "$VM_STORAGE" ] || { echo "$(date '+%F %T') 等不到 $VM_STORAGE，放弃启动" >> "$RUN_LOG"; exit 1; }
+  [ -d "$VM_STORAGE" ] || { echo "$(date '+%F %T') 等不到 ${VM_STORAGE}，放弃启动" >> "$RUN_LOG"; exit 1; }
 fi
 
 "$TART_BIN" list | grep -q "^local *$VM_NAME .*running" && { echo "$VM_NAME 已在运行"; exit 0; }

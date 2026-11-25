@@ -1099,6 +1099,69 @@ class TestCchouseV2(unittest.TestCase):
         finally:
             mod.compress_apple_lz4_bv4 = orig_comp
 
+    def test_shell_vars_braced_before_non_ascii(self):
+        # macOS /bin/bash 3.2 在 UTF-8 locale 下会把紧跟的多字节字符首字节并入变量名（"$x）" -> 变量 x\xef），
+        # set -u 时直接报 unbound variable；凡变量后紧跟非 ASCII 字符必须写成 ${x}
+        import re
+        pat = re.compile(r"\$[A-Za-z_][A-Za-z0-9_]*(?=[^\x00-\x7f])")
+        offenders = []
+        for sh in sorted(ROOT.rglob("*.sh")):
+            if ".git" in sh.parts:
+                continue
+            for no, line in enumerate(sh.read_text(encoding="utf-8").splitlines(), 1):
+                if pat.search(line):
+                    offenders.append(f"{sh.relative_to(ROOT)}:{no}")
+        self.assertEqual(offenders, [])
+    def test_verify_linux_cloudflare_loc_retry(self):
+        # Cloudflare 国家探测：只在取不到 loc 时最多重试 2 次；国家不符不重试、照常 FAIL；三次都取不到时说明每次原因
+        bash = find_bash()
+        if not bash or os.name == "nt":
+            self.skipTest("需要 POSIX bash")
+        import re
+        src = (ROOT / "scripts" / "verify-linux.sh").read_text(encoding="utf-8")
+        funcs = []
+        for name in ("trace_field", "cf_trace_loc"):
+            # 单行函数到行尾 " }"，多行函数到行首 "}"
+            m = re.search(r"^%s\(\) \{(?: [^\n]*? \}$|\n.*?^\}$)" % name, src, re.S | re.M)
+            self.assertIsNotNone(m, name)
+            funcs.append(m.group(0))
+        self.assertIn('if cf_trace_loc; then\n    expect "Cloudflare 看到的国家" "$CF_LOC" "$EXPECTED_EGRESS_LOC"', src)
+        harness = "\n".join([
+            "set -uo pipefail",
+            "TRACE=https://example.invalid/trace",
+            "CF_TRACE_RETRY_SLEEP=0",
+            *funcs,
+            'guest() {',
+            '  local n; n=$(( $(cat "$CNT") + 1 )); echo "$n" > "$CNT"',
+            '  case "$(sed -n "${n}p" "$SCEN")" in',
+            '    TIMEOUT) echo "__curl_rc=28" ;;',
+            '    EMPTY) echo "__curl_rc=0" ;;',
+            '    SSHFAIL) return 255 ;;',
+            '    LOC:*) l="$(sed -n "${n}p" "$SCEN")"; printf "fl=1\\nloc=%s\\n__curl_rc=0\\n" "${l#LOC:}" ;;',
+            '  esac',
+            '}',
+            'if cf_trace_loc; then echo "OK ${CF_LOC}"; else echo "FAIL ${CF_LOC_REASON}"; fi',
+            'echo "calls=$(cat "$CNT")"',
+        ])
+        cases = [
+            (["EMPTY", "TIMEOUT", "LOC:US"], "OK US", 3),
+            (["LOC:JP"], "OK JP", 1),
+            (["TIMEOUT", "TIMEOUT", "TIMEOUT"], "FAIL 第1次超时；第2次超时；第3次超时", 3),
+            (["EMPTY", "SSHFAIL", "EMPTY", "LOC:US"], "FAIL 第1次空响应；第2次 SSH 无返回；第3次空响应", 3),
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            hp = Path(td) / "h.sh"
+            hp.write_text(harness + "\n", encoding="utf-8")
+            for scen, want, calls in cases:
+                sp = Path(td) / "scen"
+                sp.write_text("\n".join(scen) + "\n", encoding="utf-8")
+                cp = Path(td) / "cnt"
+                cp.write_text("0\n", encoding="utf-8")
+                env = dict(os.environ, SCEN=str(sp), CNT=str(cp), LC_ALL="en_US.UTF-8")
+                r = subprocess.run([bash, str(hp)], capture_output=True, env=env)
+                out = r.stdout.decode("utf-8", "replace").splitlines()
+                self.assertEqual(r.returncode, 0, r.stderr.decode("utf-8", "replace"))
+                self.assertEqual(out, [want, f"calls={calls}"], scen)
 
 if __name__ == "__main__":
     unittest.main()
