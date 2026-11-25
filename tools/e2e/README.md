@@ -31,6 +31,8 @@ GTR_GOLDEN_VMX="C:\\Users\\<WIN_USER>\\cchouse-e2e-base\\cchouse-debian13-amd64\
 GTR_WORK_DIR="C:\\Users\\<WIN_USER>\\AppData\\Local\\cchouse\\e2e"
 ```
 
+> 客机导入、首启注入、联网重启的实现与 `scripts/cchouse.py up` 共用：Tart 见 `scripts/vm-tart.sh`（`run-mac.sh` source 复用），VMware 见 `scripts/vm-vmware.ps1`（`run-gtr.sh` 随 `gtr-remote.ps1` 一并上传并点源复用）。
+
 ## 验证覆盖项
 
 1. **当前工作区脚本覆盖**：在 Mac 侧使用当前仓库的 `scripts/render.py` 与 `guest-linux/` 渲染并打包 `seed.iso`（含在 Mac 侧下载并校验 SHA-512 的 Claude Code 对应架构原生包，避免 Windows 宿主机代理 TLS 问题）。

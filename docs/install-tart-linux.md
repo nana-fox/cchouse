@@ -6,6 +6,23 @@
 
 ---
 
+## 最快路径：一条命令 `cchouse up`（预览）
+
+```bash
+python3 -I scripts/cchouse.py up --tag cc01
+```
+
+启动后**先在后台下载**黄金镜像（`image-manifest.json` 的 URL + SHA-256）与 Claude Code 官方包（npm SRI），走宿主网络、默认跟随系统代理设置、断点续传、已校验则跳过；下载期间同时完成：粘贴节点链接（不回显）→ 探测出口 IP/时区（回车确认）→ 生成密钥与 `instance.env`（`600`）→ `preflight` → 渲染并生成 `seed.iso`。下载校验完成后自动：`tart import`/`clone` → 挂 `seed.iso` 首启注入 → 删除明文并联网重启 → `verify-linux.sh --fail-closed` → 保存干净快照 `claude-<TAG>-clean` 并以图形界面开机交给你。
+
+- 每步开始/结束/耗时/是否命中缓存写入 `<私有目录>/state.json`，结束打印耗时表（区分冷启动/热缓存）。
+- 任一步失败即停：打印失败步骤，**再次运行同一命令从该步继续**；求助时用 `scripts/doctor.py` 导出脱敏诊断包。
+- 下载慢（前 10 秒 < 1 MB/s）会提示可换直连或镜像源：`--image-mirror <目录URL>` / `CCHOUSE_IMAGE_MIRROR`，`--npm-mirror <registry镜像>` / `CCHOUSE_NPM_MIRROR`（校验值始终以官方 manifest / npm registry 为准）。
+- `--dry-run` 只生成配置并跑 `preflight`，其余步骤只打印命令；`--config-only` 只生成 `instance.env`。
+
+以下为手工分步流程（`up` 内部即按此执行，排障时可对照）。
+
+---
+
 ## 阶段 0：前提准备
 
 1. 安装 `tart`：`brew install cirruslabs/cli/tart`（或将官方 release 放外置盘并配置 `TART_HOME`）。
@@ -43,7 +60,7 @@ python3 -I scripts/make-seed-iso.py "<PRIVATE_DIR>/rendered" "<PRIVATE_DIR>/seed
 
 ```bash
 shasum -a 256 cchouse-debian13-arm64.tvm
-tart import cchouse-debian13-arm64 cchouse-debian13-arm64.tvm
+tart import cchouse-debian13-arm64.tvm cchouse-debian13-arm64
 tart clone cchouse-debian13-arm64 "<VM_NAME>"
 ```
 

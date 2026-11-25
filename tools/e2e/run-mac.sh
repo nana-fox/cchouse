@@ -19,12 +19,13 @@ VM_NAME="cchouse-${RUN_ID}"
 IMPORTED_BASE=""
 TMP_DIR="$(mktemp -d)"
 chmod 700 "$TMP_DIR"
-TART_PID=""
 FAILED=0
 FAIL_STEP=""
 FAIL_REASON=""
 
 report() { python3 "$SCRIPT_DIR/report.py" "$@"; }
+# shellcheck source=scripts/vm-tart.sh
+. "$REPO_ROOT/scripts/vm-tart.sh"
 
 mkdir -p "$RUN_DIR"
 report init "$RUN_DIR" --target mac --mode "$MODE" --commit "$COMMIT" --vm-name "$VM_NAME"
@@ -43,9 +44,9 @@ fail_step() {
 
 cleanup() {
   report step-start "$RUN_DIR" cleanup "清理测试机与临时文件" >/dev/null 2>&1 || true
-  if [ -n "$TART_PID" ]; then
-    kill "$TART_PID" 2>/dev/null || true
-    wait "$TART_PID" 2>/dev/null || true
+  if [ -n "$CCHOUSE_TART_PID" ]; then
+    kill "$CCHOUSE_TART_PID" 2>/dev/null || true
+    wait "$CCHOUSE_TART_PID" 2>/dev/null || true
   fi
   if [ "$KEEP_VM" = "0" ]; then
     tart stop "$VM_NAME" >/dev/null 2>&1 || true
@@ -134,12 +135,9 @@ LOG3="$TMP_DIR/step3.log"
   if [ "$MODE" = "release" ]; then
     [ -n "$TVM_PATH" ] && [ -f "$TVM_PATH" ] || { echo "Release mode requires --tvm <file> or MAC_GOLDEN_TVM"; exit 1; }
     IMPORTED_BASE="cchouse-relbase-$$"
-    echo "Importing $TVM_PATH -> $IMPORTED_BASE..."
-    tart import "$IMPORTED_BASE" "$TVM_PATH"
-    tart clone "$IMPORTED_BASE" "$VM_NAME"
+    cchouse_tart_import "$IMPORTED_BASE" "$TVM_PATH" && cchouse_tart_clone "$IMPORTED_BASE" "$VM_NAME"
   else
-    echo "Cloning golden VM $GOLDEN_VM -> $VM_NAME..."
-    tart clone "$GOLDEN_VM" "$VM_NAME"
+    cchouse_tart_clone "$GOLDEN_VM" "$VM_NAME"
   fi
 } >"$LOG3" 2>&1
 if [ $? -ne 0 ]; then
@@ -152,36 +150,7 @@ report step-end "$RUN_DIR" clone --status PASS --detail "VM=$VM_NAME" --log-file
 report step-start "$RUN_DIR" firstboot "首次开机离线注入（挂载 seed.iso）"
 LOG4="$TMP_DIR/step4.log"
 {
-  tart run --no-graphics --disk "$TMP_DIR/seed.iso:ro" "$VM_NAME" >"$TMP_DIR/tart-firstboot.log" 2>&1 &
-  TART_PID=$!
-  echo "Started firstboot VM (pid=$TART_PID), waiting for injection..."
-  FB_IP=""
-  FB_DONE=0
-  for i in $(seq 1 30); do
-    sleep 2
-    if ! kill -0 "$TART_PID" 2>/dev/null; then
-      echo "Tart firstboot process exited early"
-      break
-    fi
-    if [ -z "$FB_IP" ]; then
-      FB_IP="$(tart ip "$VM_NAME" --wait 2 2>/dev/null || tart ip --resolver=arp "$VM_NAME" --wait 2 2>/dev/null || true)"
-    fi
-    if [ -n "$FB_IP" ]; then
-      if ssh -F none -i "$TMP_DIR/id_ed25519" -o BatchMode=yes -o ConnectTimeout=2 \
-           -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
-           "claude@$FB_IP" "test -f /var/lib/cchouse/firstboot.done && test -x /usr/local/bin/claude" 2>/dev/null; then
-        echo "Firstboot completed at $((i * 2))s (ip=$FB_IP)"
-        FB_DONE=1
-        break
-      fi
-    fi
-  done
-  tart stop "$VM_NAME" || true
-  wait "$TART_PID" 2>/dev/null || true
-  TART_PID=""
-  if [ "$FB_DONE" = "0" ]; then
-    echo "Note: firstboot SSH probe did not complete within 60s (may still have completed offline); proceeding to reboot check."
-  fi
+  cchouse_tart_firstboot "$VM_NAME" "$TMP_DIR/seed.iso" "$TMP_DIR/id_ed25519" "$TMP_DIR/tart-firstboot.log"
 } >"$LOG4" 2>&1
 if [ $? -ne 0 ]; then
   fail_step firstboot "首次开机离线注入（挂载 seed.iso）" "首启注入阶段异常退出" "$LOG4"
@@ -196,48 +165,8 @@ GUEST_IP=""
 {
   rm -rf "$TMP_DIR/seed.iso" "$TMP_DIR/rendered"
   echo "Deleted plaintext seed.iso and rendered/."
-  tart run --no-graphics "$VM_NAME" >"$TMP_DIR/tart-run.log" 2>&1 &
-  TART_PID=$!
-  echo "Started networked VM (pid=$TART_PID), waiting for IP + SSH..."
-  SSH_OK=0
-  for i in $(seq 1 40); do
-    sleep 2
-    if ! kill -0 "$TART_PID" 2>/dev/null; then
-      echo "Tart VM exited unexpectedly!"
-      cat "$TMP_DIR/tart-run.log" || true
-      exit 1
-    fi
-    if [ -z "$GUEST_IP" ]; then
-      GUEST_IP="$(tart ip "$VM_NAME" --wait 2 2>/dev/null || tart ip --resolver=arp "$VM_NAME" --wait 2 2>/dev/null || true)"
-    fi
-    if [ -n "$GUEST_IP" ]; then
-      if ssh -F none -i "$TMP_DIR/id_ed25519" -o BatchMode=yes -o ConnectTimeout=3 \
-           -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
-           "claude@$GUEST_IP" "true" 2>/dev/null; then
-        SSH_OK=1
-        break
-      fi
-    fi
-  done
-  if [ "$SSH_OK" != "1" ]; then
-    echo "Timed out waiting for SSH on $VM_NAME (last ip=${GUEST_IP:-none})"
-    exit 1
-  fi
-  echo "SSH ready: claude@$GUEST_IP"
-  ssh-keyscan -t ed25519 "$GUEST_IP" >"$TMP_DIR/known_hosts" 2>/dev/null
-  chmod 600 "$TMP_DIR/known_hosts"
-  echo "GUEST_IP=$GUEST_IP" >> "$TMP_DIR/instance.env"
-  printf '%s' "$GUEST_IP" > "$TMP_DIR/guest_ip.txt"
-  # Wait briefly for mihomo TUN fallback probe to warm up before verify-linux.sh
-  for w in $(seq 1 10); do
-    if ssh -F none -i "$TMP_DIR/id_ed25519" -o BatchMode=yes -o ConnectTimeout=3 \
-         -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$TMP_DIR/known_hosts" \
-         "claude@$GUEST_IP" "curl -s --max-time 6 https://www.cloudflare.com/cdn-cgi/trace | grep -q '^ip='" 2>/dev/null; then
-      echo "mihomo egress warmed up (attempt $w)"
-      break
-    fi
-    sleep 2
-  done
+  cchouse_tart_boot "$VM_NAME" "$TMP_DIR/id_ed25519" "$TMP_DIR/known_hosts" "$TMP_DIR/guest_ip.txt" "$TMP_DIR/tart-run.log" \
+    && echo "GUEST_IP=$(cat "$TMP_DIR/guest_ip.txt")" >> "$TMP_DIR/instance.env"
 } >"$LOG5" 2>&1
 if [ $? -ne 0 ]; then
   fail_step reboot "销毁 seed.iso 并联网重启，等待 SSH" "客机重启后无法获取 IP 或 SSH 超时" "$LOG5"

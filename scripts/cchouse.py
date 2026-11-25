@@ -2,16 +2,22 @@
 """cchouse 一条命令安装向导（当前子命令：up）。
 
 用法：
-  python3 -I scripts/cchouse.py up [--tag cc01] [--route auto|tart-linux|vmware-linux]
+  python3 -I scripts/cchouse.py up [--tag cc01] [--route auto|tart-linux|vmware-linux] [--dry-run] [--config-only]
 
-本轮范围：
-  1. 无回显读取用户粘贴的单节点代理链接（socks5/http/https/vless/trojan/ss），拒绝 UDP 协议。
-  2. 生成 ed25519 SSH 密钥对，按宿主机架构自动选择路线（Apple Silicon -> tart-linux，其余 -> vmware-linux）。
-  3. 对 socks5/http 节点可选探测出口 IP / 时区 / ASN 与 Stripe 可达性（Stripe 不通只提示不拦截）。
-  4. 在用户私有目录以 600 权限写出 instance.env（绝不写入仓库），运行 preflight.py 并输出下一步命令。
+流程（耗时的先下载，配置并行准备，下完一键装好）：
+  0. 启动即在后台下载黄金镜像（guest-linux/image-manifest.json 的 URL + SHA-256）与 Claude Code 官方 npm 包（SRI），
+     走宿主网络、断点续传、已校验则跳过（scripts/downloads.py）。
+  1-2. 下载同时：无回显读取单节点链接 → 解析 → 探测出口 IP/时区 → 生成密钥与 600 权限 instance.env → preflight。
+  3. 渲染 + 生成 seed.iso（渲染明文打包后立即删除）。
+  4-9. 下载校验完成后：导入/克隆镜像 → 挂 seed.iso 首启注入 → 删明文并联网重启 → verify-linux.sh --fail-closed → 干净快照。
+     Tart 用 scripts/vm-tart.sh，VMware(Windows) 用 scripts/vm-vmware.ps1，与 tools/e2e 共用同一套函数。
+每步开始/结束/耗时/是否命中缓存写入 <私有目录>/state.json，结束打印耗时表；任一步失败即停，
+再次运行同一命令从失败步骤继续，并提示用 scripts/doctor.py 导出脱敏诊断包。
+红线：链接和密码不回显、不写日志；明文用完即删；绝不放宽断网保护。
 """
 import argparse
 import base64
+import datetime
 import getpass
 import ipaddress
 import json
@@ -24,11 +30,14 @@ import ssl
 import struct
 import subprocess
 import sys
+import threading
+import time
 import urllib.parse
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import downloads  # noqa: E402
 import preflight as preflight_mod  # noqa: E402
 import render as render_mod  # noqa: E402
 
@@ -540,33 +549,303 @@ def _print_next_steps(env_path, private_dir, route):
     print(f'   bash scripts/verify-linux.sh "{env_path}" --fail-closed')
 
 
-def cmd_up(args):
-    tag = (args.tag or "cc01").strip().lower()
-    if not SAFE_TAG_RE.fullmatch(tag):
-        sys.exit("错误：--tag 仅支持小写字母开头的 2-16 位字母/数字/下划线/短横线（如 cc01）")
+UP_STEPS = (
+    ("config", "解析节点链接并生成 instance.env"),
+    ("preflight", "preflight 自检"),
+    ("seed", "渲染客机配置并生成 seed.iso"),
+    ("download", "等待黄金镜像下载校验完成"),
+    ("import", "导入/克隆黄金镜像"),
+    ("firstboot", "挂载 seed.iso 离线首启注入"),
+    ("boot", "删除明文 seed.iso 并联网重启"),
+    ("verify", "verify-linux.sh --fail-closed 自动验收"),
+    ("snapshot", "保存干净快照并交给用户"),
+)
+CLEAN_SNAPSHOT = "cchouse-clean"
 
-    route = detect_route() if args.route == "auto" else args.route
-    private_dir = Path(args.private_dir).expanduser() if args.private_dir else (default_private_root() / tag)
-    if _is_inside_repo(private_dir):
-        sys.exit("错误：私有目录不能放在 cchouse 仓库内，请改用用户私有目录")
 
-    # 1. 无回显读取节点链接（绝不回显、不写日志）
+class StepError(RuntimeError):
+    """某一步失败（文案不含链接或凭据）。"""
+
+
+def _now_iso():
+    return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+
+
+def detect_vm_backend(route):
+    """tart：Apple Silicon 宿主；vmware：Windows 宿主（vmrun + PowerShell）；其余（如 Intel Mac Fusion）先手工。"""
+    sys_name = platform.system()
+    if route == "tart-linux":
+        return "tart" if sys_name == "Darwin" else "manual"
+    return "vmware" if sys_name == "Windows" else "manual"
+
+
+def find_bash():
+    if os.name == "nt":
+        for p in (r"C:\Program Files\Git\bin\bash.exe", r"C:\Program Files (x86)\Git\bin\bash.exe"):
+            if Path(p).is_file():
+                return p
+    return shutil.which("bash") or "/bin/bash"
+
+
+def update_env_value(env_path, key, value):
+    """改写 instance.env 中单个非敏感键（GUEST_IP / VMX_PATH），保持 600 权限。"""
+    text = Path(env_path).read_text(encoding="utf-8")
+    line = f"{key}={value}"
+    pattern = re.compile(rf"^{re.escape(key)}=.*$", re.M)
+    text = pattern.sub(lambda _m: line, text, count=1) if pattern.search(text) else text.rstrip("\n") + f"\n{line}\n"
+    write_env_secure(env_path, text)
+
+
+def _fmt_secs(sec):
+    if sec is None:
+        return "-"
+    sec = float(sec)
+    return f"{sec:.1f}s" if sec < 90 else f"{int(sec // 60)}m{int(sec % 60):02d}s"
+
+
+class Downloader:
+    """后台线程下载黄金镜像与 Claude Code 包（走宿主网络，不经过用户节点）。"""
+
+    def __init__(self):
+        self.items = {}
+        self._last_print = 0.0
+
+    def start(self, key, label, fn):
+        if key in self.items:
+            return
+        prog = downloads.Progress(label)
+        rec = {"label": label, "network": downloads.network_label(), "status": "running", "started_at": _now_iso()}
+
+        def run():
+            t0 = time.monotonic()
+            try:
+                res = fn(prog)
+                rec["status"] = res
+            except Exception as exc:  # noqa: BLE001 - 进度对象带出错误，主线程决定如何处理
+                rec["status"] = "failed"
+                rec["error"] = str(exc)
+                if prog.snapshot()["state"] != "failed":
+                    prog.update(state="failed", error=str(exc))
+            secs = time.monotonic() - t0
+            snap = prog.snapshot()
+            fetched = max(0, snap["done"] - prog.start) if rec["status"] == "downloaded" else 0
+            rec.update(
+                ended_at=_now_iso(),
+                seconds=round(secs, 1),
+                bytes_total=snap["total"] or snap["done"],
+                bytes_downloaded=fetched,
+                speed_mb_s=round(fetched / 1048576 / secs, 2) if fetched and secs > 0 else 0,
+            )
+
+        th = threading.Thread(target=run, name=f"cchouse-dl-{key}", daemon=True)
+        self.items[key] = (prog, th, rec)
+        th.start()
+
+    def status_line(self):
+        return " | ".join(prog.render() for prog, _th, _rec in self.items.values())
+
+    def active(self):
+        return any(th.is_alive() for _p, th, _r in self.items.values())
+
+    def print_status(self):
+        if self.items:
+            print(f"  [后台下载] {self.status_line()}")
+            self.print_slow_hints()
+
+    def print_slow_hints(self, newline=False):
+        for prog, _th, rec in self.items.values():
+            slow = prog.slow_hint()
+            if slow is not None:
+                rec["slow_hint_mb_s"] = round(slow, 2)
+                print(("\n" if newline else "") + "  " + downloads.slow_download_tip(prog.label, slow), flush=True)
+
+    def wait(self, key):
+        prog, th, rec = self.items[key]
+        tty = sys.stdout.isatty()
+        while th.is_alive():
+            th.join(1.0)
+            now = time.monotonic()
+            if tty:
+                print(f"\r  [下载] {self.status_line()}    ", end="", flush=True)
+            elif now - self._last_print >= 15:
+                print(f"  [下载] {self.status_line()}", flush=True)
+                self._last_print = now
+            self.print_slow_hints(newline=tty)
+        if tty:
+            print()
+        if rec["status"] == "failed":
+            raise StepError(f"{prog.label} 下载失败：{rec.get('error')}（已下载部分保留，再次运行会断点续传）")
+        return rec
+
+    def records(self):
+        return {key: dict(rec) for key, (_p, _t, rec) in self.items.items()}
+
+
+class UpContext:
+    def __init__(self, args, tag, route, private_dir):
+        self.args = args
+        self.tag = tag
+        self.route = route
+        self.private_dir = private_dir
+        self.env_path = private_dir / "instance.env"
+        self.state_path = private_dir / "state.json"
+        self.rendered = private_dir / "rendered"
+        self.seed_iso = private_dir / "seed.iso"
+        self.logs = private_dir / "logs"
+        self.ip_file = private_dir / "guest_ip.txt"
+        self.ssh_key = private_dir / "id_ed25519"
+        self.known_hosts = private_dir / "known_hosts"
+        self.cache_dir = Path(args.cache_dir).expanduser() if args.cache_dir else default_private_root() / "cache"
+        self.dry_run = args.dry_run
+        self.backend = detect_vm_backend(route) if getattr(args, "vm_backend", "auto") == "auto" else args.vm_backend
+        self.vm_name = f"claude-{tag}"
+        self.vmx = private_dir / "vm" / self.vm_name / f"{self.vm_name}.vmx"
+        self.artifact = downloads.load_image_artifact(ROOT / "guest-linux" / "image-manifest.json", route)
+        self.image_path = self.cache_dir / "images" / self.artifact["filename"]
+        self.golden_name = f"cchouse-debian13-arm64-{self.artifact['image_version']}"
+        self.claude_platform = "linux-arm64" if route == "tart-linux" else "linux-x64"
+        self.claude_path = self.cache_dir / f"claude-code-{self.claude_platform}.tgz"
+        self.downloader = Downloader()
+        self.state = self._load_state()
+
+    # ---- state.json（断点续跑 + 计时） ----
+    def _load_state(self):
+        data = {}
+        if self.state_path.is_file():
+            try:
+                data = json.loads(self.state_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                data = {}
+        data.setdefault("completed_steps", [])
+        data.setdefault("timings", {})
+        data.setdefault("downloads", {})
+        return data
+
+    def save_state(self):
+        if self.dry_run:
+            return
+        self.state["updated_at"] = _now_iso()
+        self.state["route"] = self.route
+        self.state["downloads"].update(self.downloader.records())
+        self.private_dir.mkdir(parents=True, exist_ok=True)
+        tmp = self.state_path.with_name("state.json.tmp")
+        tmp.write_text(json.dumps(self.state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        if os.name != "nt":
+            os.chmod(tmp, 0o600)
+        os.replace(tmp, self.state_path)
+
+    def done(self, name):
+        return f"up:{name}" in self.state["completed_steps"]
+
+    def mark_done(self, name):
+        if not self.done(name):
+            self.state["completed_steps"].append(f"up:{name}")
+
+    def unmark(self, name):
+        self.state["completed_steps"] = [s for s in self.state["completed_steps"] if s != f"up:{name}"]
+
+    # ---- 命令执行 ----
+    def run(self, cmd, env=None):
+        shown = " ".join(f'"{c}"' if " " in str(c) else str(c) for c in cmd)
+        if self.dry_run:
+            print(f"  [dry-run] {shown}")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        print(f"  $ {shown}", flush=True)
+        try:
+            return subprocess.run([str(c) for c in cmd], check=True, env=env)
+        except subprocess.CalledProcessError as exc:
+            name = next((Path(str(c)).name for c in cmd if str(c).endswith((".sh", ".ps1", ".py"))), Path(str(cmd[0])).name)
+            op = cmd[cmd.index("-CcOp") + 1] if "-CcOp" in cmd else (cmd[2] if name == "vm-tart.sh" else "")
+            what = f"{name} {op}".strip()
+            raise StepError(f"{what} 退出码 {exc.returncode}") from None
+        except FileNotFoundError:
+            raise StepError(f"找不到命令：{cmd[0]}") from None
+
+    def tart(self, *op):
+        return self.run(["bash", ROOT / "scripts" / "vm-tart.sh", *op])
+
+    def vmware(self, op, **kw):
+        cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ROOT / "scripts" / "vm-vmware.ps1", "-CcOp", op]
+        for k, v in kw.items():
+            cmd += [f"-Cc{k}", v]
+        return self.run(cmd)
+
+    def start_downloads(self):
+        need_claude = not self.done("firstboot")
+        need_image = not self.done("import")
+        if self.dry_run:
+            if need_image:
+                print(f"  [dry-run] 后台下载镜像 {downloads.image_urls(self.artifact, self.args.image_mirror)[0]} -> {self.image_path}（sha256 校验，断点续传）")
+            if need_claude:
+                print(f"  [dry-run] 后台下载 Claude Code {self.claude_platform} -> {self.claude_path}（npm SRI 校验）")
+            return
+        if need_image:
+            art = self.artifact
+            self.downloader.start(
+                "image",
+                f"镜像 {art['filename']}",
+                lambda prog: downloads.fetch_verified(
+                    downloads.image_urls(art, self.args.image_mirror), self.image_path, sha256=art["sha256"], size=art.get("size_bytes"), progress=prog
+                ),
+            )
+        if need_claude:
+            self.downloader.start(
+                "claude",
+                f"Claude Code {self.claude_platform}",
+                lambda prog: downloads.fetch_claude_code(
+                    self.claude_platform, self.claude_path, progress=prog, mirror=self.args.npm_mirror
+                )["status"],
+            )
+
+    def wait_download(self, key):
+        if self.dry_run:
+            print(f"  [dry-run] 等待 {key} 下载校验完成")
+            return False
+        if key not in self.downloader.items:
+            self.start_downloads()
+        if key not in self.downloader.items:
+            raise StepError(f"{key} 下载未启动")
+        rec = self.downloader.wait(key)
+        return rec["status"] == "skipped"
+
+    def delete_plaintext(self):
+        shutil.rmtree(self.rendered, ignore_errors=True)
+        try:
+            self.seed_iso.unlink()
+        except FileNotFoundError:
+            pass
+
+    def py(self):
+        return "python -I" if platform.system() == "Windows" else "python3 -I"
+
+    def rerun_cmd(self):
+        parts = [self.py(), "scripts/cchouse.py", "up", "--tag", self.tag]
+        if self.args.private_dir:
+            parts += ["--private-dir", f'"{self.private_dir}"']
+        if self.args.route != "auto":
+            parts += ["--route", self.route]
+        return " ".join(parts)
+
+
+def do_config(ctx):
+    """第一轮逻辑：无回显读取节点链接 → 解析 → 探测出口 → 生成密钥 → 写 600 权限 instance.env。"""
+    args = ctx.args
+    tag, route, private_dir = ctx.tag, ctx.route, ctx.private_dir
     if args.link_stdin:
         raw_link = sys.stdin.readline().rstrip("\r\n")
     else:
         try:
             raw_link = getpass.getpass("请粘贴单节点代理链接（输入不回显，支持 socks5/http/vless/trojan/ss）: ")
         except (EOFError, KeyboardInterrupt):
-            sys.exit("\n已取消。")
+            raise StepError("已取消输入节点链接") from None
 
     try:
         single_fields = parse_node_link(raw_link)
     except NodeLinkError as exc:
-        sys.exit(f"节点链接校验失败：{exc}")
+        raise StepError(f"节点链接校验失败：{exc}") from None
     finally:
         raw_link = ""
 
-    # 2. 若服务器为域名，尝试在宿主机解析并钉死 IPv4
     if not single_fields["SINGLE_SERVER_IP"]:
         resolved = resolve_server_ipv4(single_fields["SINGLE_SERVER"])
         if resolved:
@@ -574,7 +853,6 @@ def cmd_up(args):
 
     print(f"[cchouse up] 路线：{route} | 协议：{single_fields['SINGLE_TYPE']} | 端口：{single_fields['SINGLE_PORT']}")
 
-    # 3. 可选探测出口信息（仅 socks5/http）
     probed = None
     if not args.no_probe and single_fields["SINGLE_TYPE"] in ("socks5", "http"):
         print("[cchouse up] 正在通过代理探测出口 IP 与时区（凭据不落盘不回显）...")
@@ -596,16 +874,15 @@ def cmd_up(args):
         tz = default_tz
         expected_ip = default_ip
     else:
-        tz = _prompt_with_default("出口时区 TIMEZONE", default_tz)
-        expected_ip = _prompt_with_default("预期出口 IP (EXPECTED_EGRESS_IP)", default_ip)
+        ctx.downloader.print_status()
+        tz = _prompt_with_default("出口时区 TIMEZONE（回车确认）", default_tz)
+        expected_ip = _prompt_with_default("预期出口 IP EXPECTED_EGRESS_IP（回车确认）", default_ip)
 
-    # 4. 生成 SSH 密钥对
     try:
         ssh_key, ssh_pubkey = generate_ssh_keypair(private_dir, tag)
     except RuntimeError as exc:
-        sys.exit(f"错误：{exc}")
+        raise StepError(str(exc)) from None
 
-    # 5. 网络默认值
     if route == "tart-linux":
         vmnet_cidr = "192.168.64.0/24"
         guest_ip = "192.168.64.2"
@@ -623,14 +900,7 @@ def cmd_up(args):
         "router_ip": "192.168.100.1",
         "home_lan_cidr": "192.168.100.0/24",
     }
-    egress_cfg = {
-        "timezone": tz,
-        "ip": expected_ip,
-        "loc": default_loc,
-        "asn": default_asn,
-    }
-
-    env_path = private_dir / "instance.env"
+    egress_cfg = {"timezone": tz, "ip": expected_ip, "loc": default_loc, "asn": default_asn}
     env_text = format_instance_env(
         tag=tag,
         route=route,
@@ -641,23 +911,291 @@ def cmd_up(args):
         net_cfg=net_cfg,
         egress_cfg=egress_cfg,
     )
-    write_env_secure(env_path, env_text)
-    print(f"[cchouse up] 已生成私有配置（权限 600）：{env_path}")
+    write_env_secure(ctx.env_path, env_text)
+    print(f"[cchouse up] 已生成私有配置（权限 600）：{ctx.env_path}")
 
-    # 6. 运行 preflight（含 Stripe 探测：只提示不拦截）
-    rc, pf_json, pf_stderr = run_preflight_check(env_path, route, check_stripe=(not args.no_probe))
-    print("\n== preflight 自检结果 ==")
-    if pf_json:
-        print(f"状态：{pf_json.get('status')} | ok={pf_json.get('ok')} | next_action={pf_json.get('next_action')}")
-        for w in pf_json.get("warnings", []):
-            print(f"  WARN  {w}")
-        for e in pf_json.get("errors", []):
-            print(f"  ERR   {e}")
+
+def step_config(ctx):
+    if ctx.env_path.is_file() and not ctx.args.reconfigure:
+        print(f"  已有私有配置 {ctx.env_path}，沿用（更换节点请加 --reconfigure）")
+        return True
+    do_config(ctx)
+    return False
+
+
+def step_preflight(ctx):
+    rc, pf_json, pf_stderr = run_preflight_check(ctx.env_path, ctx.route, check_stripe=(not ctx.args.no_probe))
+    if not pf_json:
+        msg = f"preflight 无法运行（退出码 {rc}）：{pf_stderr[-300:]}"
+        if ctx.dry_run:
+            print(f"  [dry-run] {msg}")
+            return False
+        raise StepError(msg)
+    print(f"  状态：{pf_json.get('status')} | ok={pf_json.get('ok')} | next_action={pf_json.get('next_action')}")
+    for w in pf_json.get("warnings", []):
+        print(f"  WARN  {w}")
+    for e in pf_json.get("errors", []):
+        print(f"  ERR   {e}")
+    if not pf_json.get("ok"):
+        if ctx.dry_run:
+            print("  [dry-run] preflight 未通过，真实运行会停在这一步")
+            return False
+        raise StepError(f"preflight 未通过（{pf_json.get('status')}），按上方 ERR 处理后重新运行")
+    return False
+
+
+def step_seed(ctx):
+    ctx.wait_download("claude")
+    py = sys.executable
+    try:
+        ctx.run([py, "-I", ROOT / "scripts" / "render.py", "--resolve", ctx.env_path, ctx.rendered])
+        ctx.run([py, "-I", ROOT / "scripts" / "make-seed-iso.py", ctx.rendered, ctx.seed_iso, "--claude-tarball", ctx.claude_path])
+    finally:
+        # 渲染明文只用于打包 ISO，用完即删
+        shutil.rmtree(ctx.rendered, ignore_errors=True)
+    return False
+
+
+def step_download(ctx):
+    return ctx.wait_download("image")
+
+
+def vm_exists(ctx):
+    if ctx.dry_run:
+        return False
+    if ctx.backend == "tart":
+        return subprocess.run(
+            ["bash", str(ROOT / "scripts" / "vm-tart.sh"), "exists", ctx.vm_name],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        ).returncode == 0
+    return ctx.vmx.is_file()
+
+
+def step_import(ctx):
+    # 只重建 up 自己建过的虚拟机；同名的既有虚拟机（可能已登录）绝不覆盖
+    if not ctx.state.get("vm_created_by_up") and vm_exists(ctx):
+        raise StepError(
+            f"已存在同名虚拟机 {ctx.vm_name}（非本次 up 创建），为避免覆盖已登录环境不会删除；"
+            "请换 --tag，或确认无用后自行删除再运行"
+        )
+    if ctx.backend == "tart":
+        existed = (not ctx.dry_run) and subprocess.run(
+            ["bash", str(ROOT / "scripts" / "vm-tart.sh"), "exists", ctx.golden_name],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        ).returncode == 0
+        if existed:
+            print(f"  本机已有黄金镜像 {ctx.golden_name}，直接克隆（热缓存）")
+        else:
+            ctx.tart("import", ctx.golden_name, ctx.image_path)
+        ctx.state["vm_created_by_up"] = True
+        ctx.save_state()
+        ctx.tart("clone", ctx.golden_name, ctx.vm_name)
+        return existed
+    ctx.state["vm_created_by_up"] = True
+    ctx.save_state()
+    ctx.vmware("import", Vmx=ctx.vmx, Ova=ctx.image_path, VmName=ctx.vm_name, VmDir=ctx.private_dir / "vm")
+    if not ctx.dry_run:
+        update_env_value(ctx.env_path, "VMX_PATH", _env_quote_double(ctx.vmx))
+    return False
+
+
+def step_firstboot(ctx):
+    if not ctx.dry_run and not ctx.seed_iso.is_file():
+        raise StepError("seed.iso 不存在（可能已被清理），再次运行会重新生成")
+    if not ctx.dry_run:
+        ctx.logs.mkdir(parents=True, exist_ok=True)
+    if ctx.backend == "tart":
+        ctx.tart("firstboot", ctx.vm_name, ctx.seed_iso, ctx.ssh_key, ctx.logs / "tart-firstboot.log")
     else:
-        print(f"preflight 退出码 {rc}：{pf_stderr}")
+        ctx.vmware("firstboot", Vmx=ctx.vmx, SeedIso=ctx.seed_iso)
+    return False
 
-    _print_next_steps(env_path, private_dir, route)
-    return 0 if (pf_json is None or pf_json.get("ok") or pf_json.get("status") == "HUMAN_WAIT") else 1
+
+def step_boot(ctx):
+    if not ctx.dry_run:
+        ctx.logs.mkdir(parents=True, exist_ok=True)
+    if ctx.backend == "tart":
+        ctx.delete_plaintext()
+        ctx.tart("boot", ctx.vm_name, ctx.ssh_key, ctx.known_hosts, ctx.ip_file, ctx.logs / "tart-run.log")
+    else:
+        ctx.vmware("boot", Vmx=ctx.vmx, SeedIso=ctx.seed_iso, Key=ctx.ssh_key, KnownHosts=ctx.known_hosts, IpFile=ctx.ip_file)
+        ctx.delete_plaintext()
+    if ctx.dry_run:
+        return False
+    ip = ctx.ip_file.read_text(encoding="utf-8").strip()
+    if not render_mod.is_ipv4(ip):
+        raise StepError("未拿到客机 IPv4 地址")
+    update_env_value(ctx.env_path, "GUEST_IP", ip)
+    print(f"  客机已联网：claude@{ip}（明文 seed.iso / rendered 已删除）")
+    return False
+
+
+def step_verify(ctx):
+    env = os.environ.copy()
+    if os.name == "nt":
+        env["PATH"] = r"C:\Windows\System32\OpenSSH;" + env.get("PATH", "")
+    try:
+        ctx.run([find_bash(), ROOT / "scripts" / "verify-linux.sh", ctx.env_path, "--fail-closed"], env=env)
+    except StepError as exc:
+        raise StepError(f"自动验收未通过（{exc}）；断网保护不会放宽，请按上方 FAIL 项排查代理") from None
+    return False
+
+
+def step_snapshot(ctx):
+    if ctx.backend == "tart":
+        snap = f"{ctx.vm_name}-clean"
+        ctx.tart("snapshot", ctx.vm_name, snap)
+        ctx.tart("gui", ctx.vm_name, ctx.logs / "tart-gui.log")
+    else:
+        snap = CLEAN_SNAPSHOT
+        ctx.vmware("snapshot", Vmx=ctx.vmx, Snapshot=snap)
+    ctx.state["clean_snapshot"] = snap
+    return False
+
+
+STEP_FUNCS = {
+    "config": step_config,
+    "preflight": step_preflight,
+    "seed": step_seed,
+    "download": step_download,
+    "import": step_import,
+    "firstboot": step_firstboot,
+    "boot": step_boot,
+    "verify": step_verify,
+    "snapshot": step_snapshot,
+}
+
+
+def needs_redo(ctx, name):
+    # 失败时明文 seed.iso 会被删除；首启前恢复运行需重新生成
+    return name == "seed" and not ctx.done("firstboot") and not ctx.seed_iso.is_file()
+
+
+def print_timing_table(ctx, steps):
+    print("\n== 耗时表 ==")
+    print(f"{'步骤':<28}{'耗时':>10}  命中缓存")
+    total = 0.0
+    for i, (name, title) in enumerate(steps, 1):
+        t = ctx.state["timings"].get(name)
+        if not t:
+            continue
+        secs = t.get("seconds")
+        total += secs or 0
+        mark = {"cached": "是", "fresh": "否", "failed": "失败", "resumed": "上次已完成"}.get(t.get("result"), "-")
+        print(f"{i}. {title:<25}{_fmt_secs(secs):>10}  {mark}")
+    for rec in ctx.state["downloads"].values():
+        mb = (rec.get("bytes_total") or 0) / 1048576
+        how = "缓存命中" if rec.get("status") == "skipped" else rec.get("status")
+        print(
+            f"   下载 {rec.get('label')}: {mb:.0f} MB，{_fmt_secs(rec.get('seconds'))}，"
+            f"{rec.get('speed_mb_s', 0)} MB/s，{rec.get('network')}，{how}"
+        )
+    img = ctx.state["downloads"].get("image", {})
+    imp = ctx.state["timings"].get("import", {})
+    cold = img.get("status") == "downloaded" and imp.get("result") == "fresh"
+    ctx.state["run_kind"] = "cold" if cold else "warm"
+    print(f"合计（本次各步）：{_fmt_secs(total)} | 本次属于：{'冷启动' if cold else '热缓存/续跑（不代表首次耗时）'}")
+
+
+def print_handoff(ctx):
+    print("\n== 部署完成，交给你 ==")
+    print(f"- 客机 {ctx.vm_name} 已开机，干净快照：{ctx.state.get('clean_snapshot')}")
+    print("- 请在客机桌面核对 check.html 全绿，然后自行登录 Claude Code。")
+    print("- Claude Code 的 OAuth 登录链接只能在客机浏览器里打开，严禁复制到宿主浏览器。")
+    print("- cchouse 不会替你登录、注册、订阅或付款。")
+
+
+def run_pipeline(ctx):
+    steps = UP_STEPS[:2] if ctx.args.config_only else UP_STEPS
+    n = len(steps)
+    if ctx.dry_run:
+        print(f"[cchouse up] dry-run：路线 {ctx.route} | 虚拟机后端 {ctx.backend} | 不下载、不动虚拟机、不写 state.json")
+    ctx.start_downloads()
+    for i, (name, title) in enumerate(steps, 1):
+        if ctx.done(name) and not needs_redo(ctx, name):
+            print(f"\n[{i}/{n}] {title}：已完成（state.json），跳过")
+            continue
+        print(f"\n[{i}/{n}] {title}")
+        ctx.downloader.print_status()
+        ctx.state.update(step=f"up:{name}", status="RUNNING", ok=False)
+        ctx.state.pop("failed_step", None)
+        ctx.save_state()
+        started, t0 = _now_iso(), time.monotonic()
+        try:
+            cached = STEP_FUNCS[name](ctx)
+        except (StepError, OSError, downloads.DownloadError, KeyboardInterrupt) as exc:
+            reason = "用户中断" if isinstance(exc, KeyboardInterrupt) else str(exc)
+            ctx.state["timings"][name] = {
+                "started_at": started, "ended_at": _now_iso(),
+                "seconds": round(time.monotonic() - t0, 1), "result": "failed",
+            }
+            return on_failure(ctx, steps, i, name, title, reason)
+        ctx.state["timings"][name] = {
+            "started_at": started, "ended_at": _now_iso(),
+            "seconds": round(time.monotonic() - t0, 1), "result": "cached" if cached else "fresh",
+        }
+        ctx.mark_done(name)
+        ctx.save_state()
+        if name == "download" and ctx.backend == "manual":
+            return finish_manual(ctx, steps)
+
+    if ctx.args.config_only:
+        ctx.state.update(status="CONFIG_READY", ok=True, next_action="run_cchouse_up")
+        ctx.save_state()
+        print_timing_table(ctx, steps)
+        _print_next_steps(ctx.env_path, ctx.private_dir, ctx.route)
+        return 0
+    ctx.state.update(step="up:done", status="DONE", ok=True, next_action="human_check_and_login")
+    print_timing_table(ctx, steps)
+    ctx.save_state()
+    if not ctx.dry_run:
+        print_handoff(ctx)
+    return 0
+
+
+def on_failure(ctx, steps, i, name, title, reason):
+    ctx.delete_plaintext()
+    if name == "firstboot":
+        ctx.unmark("import")  # 首启半途失败的客机不可信，下次重新克隆/导入
+    ctx.state.update(status="FAILED", ok=False, failed_step=f"up:{name}", next_action="rerun_cchouse_up")
+    print_timing_table(ctx, steps)
+    ctx.save_state()
+    env_arg = f' --env "{ctx.env_path}"' if ctx.env_path.is_file() else ""
+    vm_arg = " --vm-ssh" if ctx.done("boot") else ""
+    print(f"\n✗ 第 {i}/{len(steps)} 步「{title}」失败：{reason}")
+    print("  明文 seed.iso / rendered 已删除；后台下载如未完成，已下载部分会保留续传。")
+    print("  修复后再次运行同一命令，会从这一步继续（state.json 断点续跑）：")
+    print(f"    {ctx.rerun_cmd()}")
+    print("  需要求助时导出脱敏诊断包：")
+    print(f"    {ctx.py()} scripts/doctor.py{env_arg}{vm_arg}")
+    return 1
+
+
+def finish_manual(ctx, steps):
+    ctx.state.update(status="HUMAN_WAIT", ok=True, next_action="manual_import_and_firstboot")
+    print_timing_table(ctx, steps)
+    ctx.save_state()
+    doc = "docs/install-tart-linux.md" if ctx.route == "tart-linux" else "docs/install-vmware-linux.md"
+    print("\n== 当前宿主暂不支持自动导入（目前自动化：Apple Silicon + Tart、Windows + VMware Workstation） ==")
+    print(f"- 已下载并校验的镜像：{ctx.image_path}")
+    print(f"- 首启注入光盘（含明文凭据，首启完成后立即删除）：{ctx.seed_iso}")
+    print(f"- 按 {doc} 导入镜像、挂载 seed.iso 首次开机，然后运行：")
+    print(f'    bash scripts/verify-linux.sh "{ctx.env_path}" --fail-closed')
+    return 0
+
+
+def cmd_up(args):
+    tag = (args.tag or "cc01").strip().lower()
+    if not SAFE_TAG_RE.fullmatch(tag):
+        sys.exit("错误：--tag 仅支持小写字母开头的 2-16 位字母/数字/下划线/短横线（如 cc01）")
+
+    route = detect_route() if args.route == "auto" else args.route
+    private_dir = Path(args.private_dir).expanduser() if args.private_dir else (default_private_root() / tag)
+    if _is_inside_repo(private_dir) or (args.cache_dir and _is_inside_repo(Path(args.cache_dir).expanduser())):
+        sys.exit("错误：私有目录/缓存目录不能放在 cchouse 仓库内，请改用用户私有目录")
+
+    ctx = UpContext(args, tag, route, private_dir)
+    return run_pipeline(ctx)
 
 
 def main():
@@ -669,15 +1207,23 @@ def main():
     parser = argparse.ArgumentParser(description="cchouse CLI")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_up = sub.add_parser("up", help="交互式解析节点链接、生成私有 instance.env 并运行 preflight")
+    p_up = sub.add_parser("up", help="一条命令：后台下载镜像，同时配置节点，下载完自动导入、首启注入、验收并打干净快照")
     p_up.add_argument("--tag", default="cc01", help="实例短名（默认 cc01）")
     p_up.add_argument("--route", choices=("auto", "tart-linux", "vmware-linux"), default="auto")
     p_up.add_argument("--private-dir", default=None, help="覆盖私有目录路径（不能位于仓库内）")
+    p_up.add_argument("--cache-dir", default=None, help="镜像与 Claude Code 包缓存目录（默认 <私有根目录>/cache，多实例共用）")
+    p_up.add_argument("--image-mirror", default=None, help=f"黄金镜像镜像源目录 URL（也可用环境变量 {downloads.IMAGE_MIRROR_ENV}），SHA-256 仍按 manifest 校验")
+    p_up.add_argument("--npm-mirror", default=None, help=f"Claude Code tarball 镜像源（也可用环境变量 {downloads.NPM_MIRROR_ENV}），integrity 仍取官方 registry")
     p_up.add_argument("--timezone", default=None, help="默认出口时区（非交互模式直接采用）")
     p_up.add_argument("--expected-ip", default=None, help="默认预期出口 IP（非交互模式直接采用）")
     p_up.add_argument("--link-stdin", action="store_true", help="从标准输入读取一行节点链接（不回显，适合脚本/测试）")
     p_up.add_argument("--non-interactive", action="store_true", help="跳过交互问答，使用探测或默认值")
     p_up.add_argument("--no-probe", action="store_true", help="跳过宿主机代理出口与 Stripe 探测")
+    p_up.add_argument("--vm-backend", choices=("auto", "tart", "vmware", "manual"), default="auto",
+                      help="虚拟机自动化后端（默认按宿主：Apple Silicon→tart，Windows→vmware，其余→manual）")
+    p_up.add_argument("--reconfigure", action="store_true", help="忽略已有 instance.env，重新输入节点链接")
+    p_up.add_argument("--config-only", action="store_true", help="只生成 instance.env 并跑 preflight（第一轮行为），不下载不建虚拟机")
+    p_up.add_argument("--dry-run", action="store_true", help="只演练：生成配置并跑 preflight，其余步骤只打印命令，不下载、不动虚拟机、不写 state.json")
 
     args = parser.parse_args()
     if args.command == "up":
