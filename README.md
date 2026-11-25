@@ -42,23 +42,28 @@ flowchart LR
 
 ## 快速开始
 
-> 下面是目标流程。一条命令安装（`cchouse.py up`）还在开发中，正式发布前请先看 [手动安装](docs/manual-install.md)。
+本文对应镜像 `v2.0.0-preview.2`。安装器按仓库内的镜像清单下载并校验文件。[镜像大小与 SHA-256](guest-linux/image-manifest.json)
 
 **第 1 步：装好基础软件和虚拟机软件**（一次性）
 
 - **Mac**：先装 [Homebrew](https://brew.sh)、Git 和 Python 3。
   - Apple Silicon Mac（M 系列芯片）：`brew install cirruslabs/cli/tart`
   - Intel Mac：安装免费版 VMware Fusion Pro（需要先在 Broadcom 官网注册账号才能下载）。
-- **Windows（x64）**：先装 [Git for Windows](https://git-scm.com/download/win)、Python 3（在 PowerShell 里用 `py -3` 运行）、OpenSSH 客户端（Windows 设置 → 可选功能），并确认 BIOS 里已开启 CPU 虚拟化；再安装免费版 VMware Workstation Pro（需要先在 Broadcom 官网注册账号才能下载）。
+- **Windows（x64）**：先装 [Git for Windows](https://git-scm.com/download/win)、Python 3（在 PowerShell 里用 `py -3` 运行）、OpenSSH 客户端（Windows 设置 → 可选功能），并确认 BIOS 里已开启 CPU 虚拟化。再安装 VMware Workstation Pro（下载需要 Broadcom 账号），安装器会用到它的 `vmrun.exe` 和 `ovftool.exe`。
 
-**第 2 步：一条命令，粘贴节点链接**（首次安装约 `<COLD_TOTAL>`，含下载镜像，待冷启动实测；镜像版本、大小和 SHA-256 见 [guest-linux/image-manifest.json](guest-linux/image-manifest.json)）
+**第 2 步：运行安装器，粘贴单节点链接**
 
 ```bash
-git clone https://github.com/nana-fox/cchouse.git && cd cchouse
-python3 scripts/cchouse.py up      # Windows PowerShell：py -3 scripts/cchouse.py up
+git clone https://github.com/nana-fox/cchouse.git
+cd cchouse
+python3 -I scripts/cchouse.py up --tag cc01
 ```
 
-提示时粘贴你的节点链接（输入不会显示在屏幕上）。脚本会自动选择适合你电脑的虚拟机，下载镜像、配置好网络并自动验收。下载那一步快慢取决于你的网速。
+Windows PowerShell 用 `py -3 -I scripts/cchouse.py up --tag cc01`。
+
+提示时粘贴节点链接，输入不会回显。安装器在后台通过宿主网络下载并校验镜像和官方 Claude Code 包，同时完成配置和自检。Apple Silicon Mac 和 Windows 会继续自动导入镜像、离线注入配置、清理明文配置文件、联网重启、运行 `verify-linux.sh --fail-closed` 并在通过后保存干净快照。Intel Mac 按安装器提示手动导入和验收。[手动安装](docs/manual-install.md)
+
+安装失败会停在出错的步骤。处理提示的原因后，从同一个目录重跑原命令，保留相同的 `--tag` 和自定义目录参数。安装器会续用已保存的步骤和校验过的下载文件。
 
 **第 3 步：打开虚拟机桌面，网络检查全部通过后再登录**
 
@@ -74,15 +79,16 @@ python3 scripts/cchouse.py up      # Windows PowerShell：py -3 scripts/cchouse.
 
 | 你的电脑 | 用什么虚拟机软件 | 状态 |
 |---|---|---|
-| Apple Silicon Mac（M 系列） | Tart | ✅ 已真机验证（2026-11-25，Mac mini） |
-| Windows（x64） | VMware Workstation Pro | ✅ 已真机验证（2026-11-25） |
+| Apple Silicon Mac（M 系列） | Tart | ✅ `preview.2` 候选镜像通过 Mac mini 整机验收 |
+| Windows（x64） | VMware Workstation Pro | ✅ 已有真机验证，`preview.2` 首装计时待测 |
 | Intel Mac | VMware Fusion Pro | 🟡 支持，与 Windows 共用同一镜像，尚未单独真机验证 |
 
 虚拟机里统一是 Debian 13 + Chromium + Claude Code。不支持 Linux 电脑作为宿主机。
 
-2026-11-25 两台真机验证：Mac mini（Tart）和 Windows（VMware）26 项自动验收全部通过。
+**空缓存首次安装耗时**（包括镜像和 Claude Code 下载）
 
-首次安装耗时（冷启动：镜像和 Claude Code 都没下载过）：Mac `<COLD_MAC>`、Windows `<COLD_WIN>`，待实测。镜像版本、下载大小和 SHA-256 见 [guest-linux/image-manifest.json](guest-linux/image-manifest.json)。
+- **Apple Silicon Mac**：约 3–5 分钟到自动验收结束。Mac mini 的 `preview.1` 空缓存样本为 3 分 43 秒，镜像约 757 MB，经宿主代理平均约 7 MiB/s。该样本的旧镜像缺少关机授权，安装停在自动验收，未保存快照。
+- **Windows**：`<COLD_WIN>`（待实测）。
 
 ---
 
@@ -129,18 +135,24 @@ Stripe 不通只影响在 claude.ai 网页上付款。已经订阅的、或在�
 <details>
 <summary><b>国内下载很慢怎么办？</b></summary>
 
-镜像和代码都放在 GitHub，国内直连可能很慢。可以先在你自己的电脑上用代理把镜像文件下载好，再按 [手动安装](docs/manual-install.md) 里对应路线的导入步骤离线导入。
+安装器下载会沿用宿主网络的代理设置。下载慢时可用 `--image-mirror <镜像目录 URL>` 指定镜像源，下载后仍会核对清单中的 SHA-256。也可在宿主先下载镜像，再按 [手动安装](docs/manual-install.md) 离线导入。
 
 </details>
 
 <details>
 <summary><b>装的时候出错了怎么办？</b></summary>
 
-运行诊断工具导出诊断包。诊断包会自动脱敏（去掉密码、节点地址等）：
+用安装时生成的 `instance.env` 导出脱敏诊断包。已启动的客机可加 `--vm-ssh`，让工具尝试采集客机诊断信息。以下命令使用默认目录和标签 `cc01`。
 
 ```bash
-python3 scripts/doctor.py --env <你的 instance.env 路径> --vm-ssh
+python3 -I scripts/doctor.py --env "$HOME/Library/Application Support/cchouse/cc01/instance.env"
 ```
+
+```powershell
+py -3 -I scripts/doctor.py --env "$env:LOCALAPPDATA\cchouse\cc01\instance.env"
+```
+
+如果安装还未生成 `instance.env`，可省略 `--env` 参数，先采集宿主诊断。
 
 **发公开 Issue 前请先解压检查**，确认没有残留的凭据或个人信息，再附到 [Issue](https://github.com/nana-fox/cchouse/issues) 里。详见 [docs/operations.md](docs/operations.md)。
 
