@@ -782,6 +782,200 @@ class TestCchouseV2(unittest.TestCase):
         self.assertIn("BUILD_HOST=", tart_builder)
         self.assertIn("/var/db/dhcpd_leases", tart_builder)
 
+    def test_linux_single_optional_stripe_node_full_chain(self):
+        with tempfile.TemporaryDirectory() as td:
+            # 1) EXIT_MODE=single + STRIPE_EXIT_MODE=node 全链路（config.yaml + nftables.conf + preflight）
+            data = base_single_linux_env()
+            data.update({
+                "STRIPE_EXIT_MODE": "node",
+                "STRIPE_NODE_TYPE": "vless",
+                "STRIPE_NODE_SERVER": "stripe-edge.example.com",
+                "STRIPE_NODE_SERVER_IP": "203.0.113.88",
+                "STRIPE_NODE_PORT": "443",
+                "STRIPE_NODE_UUID": "demo-stripe-uuid",
+                "STRIPE_NODE_FINGERPRINT": "chrome",
+            })
+            env_f = Path(td) / "stripe_node.env"
+            out = Path(td) / "out_stripe"
+            write_env(env_f, data)
+            cp = subprocess.run([sys.executable, "-I", str(RENDER), str(env_f), str(out)], capture_output=True, text=True)
+            self.assertEqual(cp.returncode, 0, cp.stderr)
+            cfg = (out / "config.yaml").read_text(encoding="utf-8")
+            nft = (out / "nftables.conf").read_text(encoding="utf-8")
+            self.assertIn("- name: WIN01-Single-Exit", cfg)
+            self.assertIn("- name: WIN01-Stripe-Node", cfg)
+            self.assertIn("server: 203.0.113.88", cfg)
+            self.assertIn("servername: stripe-edge.example.com", cfg)
+            self.assertIn("- name: WIN01-Stripe\n  type: select\n  proxies:\n  - WIN01-Stripe-Node\n  disable-udp: true", cfg)
+            self.assertIn("- DOMAIN-SUFFIX,stripe.com,WIN01-Stripe", cfg)
+            self.assertIn("- DOMAIN-SUFFIX,stripe.network,WIN01-Stripe", cfg)
+            self.assertIn("- DOMAIN-SUFFIX,stripecdn.com,WIN01-Stripe", cfg)
+            self.assertIn("- NETWORK,UDP,REJECT", cfg)
+            self.assertIn("- MATCH,WIN01-Exit", cfg)
+            self.assertNotIn(",DIRECT", cfg)
+            non_comment_nft = "\n".join(l for l in nft.splitlines() if not l.lstrip().startswith("#"))
+            self.assertNotIn("flush ruleset", non_comment_nft)
+            self.assertIn('meta skuid "mihomo" ip daddr 203.0.113.55 tcp dport 1080 accept', non_comment_nft)
+            self.assertIn('meta skuid "mihomo" ip daddr 203.0.113.88 tcp dport 443 accept', non_comment_nft)
+
+            # 2) 省略 STRIPE_EXIT_MODE 但填了 STRIPE_NODE_SERVER 时自动按 node 渲染
+            implicit_data = dict(data)
+            del implicit_data["STRIPE_EXIT_MODE"]
+            env_imp = Path(td) / "implicit.env"
+            out_imp = Path(td) / "out_imp"
+            write_env(env_imp, implicit_data)
+            cp_imp = subprocess.run([sys.executable, "-I", str(RENDER), str(env_imp), str(out_imp)], capture_output=True, text=True)
+            self.assertEqual(cp_imp.returncode, 0, cp_imp.stderr)
+            self.assertEqual((out_imp / "config.yaml").read_text(encoding="utf-8"), cfg)
+
+            # 3) STRIPE_NODE 拒绝 UDP 协议
+            udp_data = dict(data)
+            udp_data["STRIPE_NODE_TYPE"] = "hysteria2"
+            env_udp = Path(td) / "stripe_udp.env"
+            write_env(env_udp, udp_data)
+            cp_udp = subprocess.run([sys.executable, "-I", str(RENDER), str(env_udp), str(Path(td) / "out_udp")], capture_output=True, text=True)
+            self.assertNotEqual(cp_udp.returncode, 0)
+            self.assertIn("UDP", cp_udp.stderr)
+
+            # 4) EXIT_MODE=single 拒绝 STRIPE_EXIT_MODE=front
+            front_data = base_single_linux_env()
+            front_data["STRIPE_EXIT_MODE"] = "front"
+            env_fr = Path(td) / "front.env"
+            write_env(env_fr, front_data)
+            cp_fr = subprocess.run([sys.executable, "-I", str(RENDER), str(env_fr), str(Path(td) / "out_fr")], capture_output=True, text=True)
+            self.assertNotEqual(cp_fr.returncode, 0)
+            cp_pf = subprocess.run([sys.executable, "-I", str(PREFLIGHT), "--route", "tart-linux", "--env", str(env_fr)], capture_output=True, text=True)
+            self.assertNotEqual(cp_pf.returncode, 0)
+            self.assertIn("INVALID_STRIPE_MODE", cp_pf.stdout)
+
+            # 5) STRIPE_EXIT_MODE=off 但填了 STRIPE_NODE_SERVER 时 preflight 给出 STRIPE_NODE_IGNORED 警告
+            ign_data = dict(data)
+            ign_data["STRIPE_EXIT_MODE"] = "off"
+            env_ign = Path(td) / "ign.env"
+            write_env(env_ign, ign_data)
+            cp_ign = subprocess.run([sys.executable, "-I", str(PREFLIGHT), "--route", "tart-linux", "--env", str(env_ign)], capture_output=True, text=True)
+            payload_ign = json.loads(cp_ign.stdout)
+            self.assertTrue(any("STRIPE_NODE_IGNORED" in w for w in payload_ign["warnings"]))
+
+    def test_preflight_check_stripe_and_verify_linux_markers(self):
+        import socket
+        import threading
+
+        def start_mock_socks5(block_stripe):
+            srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            srv.bind(("127.0.0.1", 0))
+            srv.listen(8)
+            stop = threading.Event()
+
+            def serve():
+                srv.settimeout(0.2)
+                while not stop.is_set():
+                    try:
+                        conn, _ = srv.accept()
+                    except socket.timeout:
+                        continue
+                    except OSError:
+                        break
+                    try:
+                        hdr = conn.recv(4)
+                        if not hdr or hdr[0] != 5:
+                            conn.close()
+                            continue
+                        # 要求用户名/密码认证 0x02
+                        conn.sendall(b"\x05\x02")
+                        auth = conn.recv(256)
+                        if not auth:
+                            conn.close()
+                            continue
+                        conn.sendall(b"\x01\x00")
+                        req = conn.recv(256)
+                        if len(req) >= 5 and req[3] == 3:
+                            dlen = req[4]
+                            dom = req[5:5 + dlen].decode("ascii", errors="ignore")
+                            rep = 0x02 if (block_stripe and dom.endswith("stripe.com")) else 0x00
+                            conn.sendall(bytes([5, rep, 0, 1, 0, 0, 0, 0, 0, 0]))
+                    finally:
+                        conn.close()
+
+            t = threading.Thread(target=serve, daemon=True)
+            t.start()
+            return srv, stop, srv.getsockname()[1]
+
+        srv_blk, stop_blk, port_blk = start_mock_socks5(block_stripe=True)
+        srv_ok, stop_ok, port_ok = start_mock_socks5(block_stripe=False)
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                # 1) single + off 遇到屏蔽 Stripe 的 SOCKS5 -> 明确 STRIPE_UNREACHABLE 警告且不泄漏密码
+                d1 = base_single_linux_env()
+                d1.update({
+                    "SINGLE_SERVER": "127.0.0.1",
+                    "SINGLE_PORT": str(port_blk),
+                    "SINGLE_PASS": "SECRET_STRIPE_TEST_PASS",
+                })
+                e1 = Path(td) / "blk.env"
+                write_env(e1, d1)
+                cp1 = subprocess.run(
+                    [sys.executable, "-I", str(PREFLIGHT), "--route", "tart-linux", "--env", str(e1), "--check-stripe"],
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotIn("SECRET_STRIPE_TEST_PASS", cp1.stdout + cp1.stderr)
+                p1 = json.loads(cp1.stdout)
+                self.assertIsNotNone(p1["stripe_check"])
+                self.assertFalse(p1["stripe_check"]["reachable"])
+                self.assertTrue(any("STRIPE_UNREACHABLE" in w and "付款会失败" in w for w in p1["warnings"]))
+
+                # 2) single + node 指向屏蔽 Stripe 的节点 -> STRIPE_NODE_UNREACHABLE 报错
+                d2 = dict(d1)
+                d2.update({
+                    "STRIPE_EXIT_MODE": "node",
+                    "STRIPE_NODE_TYPE": "socks5",
+                    "STRIPE_NODE_SERVER": "127.0.0.1",
+                    "STRIPE_NODE_PORT": str(port_blk),
+                    "STRIPE_NODE_USER": "su",
+                    "STRIPE_NODE_PASS": "sp",
+                })
+                e2 = Path(td) / "node_blk.env"
+                write_env(e2, d2)
+                cp2 = subprocess.run(
+                    [sys.executable, "-I", str(PREFLIGHT), "--route", "tart-linux", "--env", str(e2), "--check-stripe"],
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotEqual(cp2.returncode, 0)
+                p2 = json.loads(cp2.stdout)
+                self.assertTrue(any("STRIPE_NODE_UNREACHABLE" in e for e in p2["errors"]))
+
+                # 3) single + node 指向可达 Stripe 的节点 -> stripe_check.reachable=True，无 Stripe 错误/警告
+                d3 = dict(d2)
+                d3["STRIPE_NODE_PORT"] = str(port_ok)
+                e3 = Path(td) / "node_ok.env"
+                write_env(e3, d3)
+                cp3 = subprocess.run(
+                    [sys.executable, "-I", str(PREFLIGHT), "--route", "tart-linux", "--env", str(e3), "--check-stripe"],
+                    capture_output=True,
+                    text=True,
+                )
+                p3 = json.loads(cp3.stdout)
+                self.assertTrue(p3["stripe_check"]["reachable"])
+                self.assertFalse(any("STRIPE_" in e for e in p3["errors"]))
+                self.assertFalse(any("STRIPE_" in w for w in p3["warnings"]))
+        finally:
+            stop_blk.set()
+            stop_ok.set()
+            srv_blk.close()
+            srv_ok.close()
+
+        # 4) verify-linux.sh 含 Stripe 可达性检查且语法正确
+        vl_sh = (ROOT / "scripts" / "verify-linux.sh").read_text(encoding="utf-8")
+        for marker in ("Stripe 可达性", "https://js.stripe.com/v3/", "https://api.stripe.com/v1", "付款会失败", "stripe_reachable"):
+            self.assertIn(marker, vl_sh)
+        bash_exe = find_bash()
+        if bash_exe:
+            chk = subprocess.run([bash_exe, "-n", str(ROOT / "scripts" / "verify-linux.sh")], capture_output=True, text=True)
+            self.assertEqual(chk.returncode, 0, chk.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
