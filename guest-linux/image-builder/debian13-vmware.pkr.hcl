@@ -35,8 +35,9 @@ variable "output_dir" {
 source "vmware-iso" "debian13" {
   iso_url          = var.debian_iso_url
   iso_checksum     = var.debian_iso_checksum
-  guest_os_type    = "debian12-64"
-  cpus             = 2
+  guest_os_type        = "debian12-64"
+  network_adapter_type = "vmxnet3"
+  cpus                 = 2
   memory           = 2048
   disk_size        = 24576
   disk_type_id     = "0"
