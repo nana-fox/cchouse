@@ -42,7 +42,11 @@ echo "== [3/6] 安装 mihomo 二进制（必须显式提供 MIHOMO_SHA256 校验
 [ -n "$MIHOMO_SHA256" ] || { echo "错误：必须显式传入 MIHOMO_SHA256 以校验 mihomo 二进制" >&2; exit 1; }
 tmp_gz="$(mktemp)"
 trap 'rm -f "$tmp_gz"' EXIT
-curl -fsSL "$MIHOMO_URL" -o "$tmp_gz"
+if [ -n "${MIHOMO_LOCAL_GZ:-}" ] && [ -f "$MIHOMO_LOCAL_GZ" ]; then
+  cp "$MIHOMO_LOCAL_GZ" "$tmp_gz"
+else
+  curl -fsSL "$MIHOMO_URL" -o "$tmp_gz"
+fi
 echo "${MIHOMO_SHA256}  ${tmp_gz}" | sha256sum -c -
 mkdir -p /usr/local/bin
 gzip -dc "$tmp_gz" >/usr/local/bin/mihomo
@@ -72,13 +76,12 @@ EOF
 systemctl daemon-reload
 systemctl enable cchouse-default-drop.service cchouse-firstboot.service
 
-echo "== [5/6] 清理局域网广播、联网探针与自动更新，恢复官方 apt 源"
-apt-get purge -y avahi-daemon cups-browsed unattended-upgrades 2>/dev/null || true
+echo "== [5/6] 清理局域网广播、联网探针、cloud-init 与自动更新，恢复官方 apt 源"
+apt-get purge -y avahi-daemon cups-browsed unattended-upgrades cloud-init cloud-guest-utils 2>/dev/null || true
+rm -rf /etc/cloud /var/lib/cloud
 apt-get autoremove -y
 apt-get clean
-if [ -f /etc/apt/sources.list ]; then
-  sed -i 's|mirrors\.ustc\.edu\.cn|deb.debian.org|g' /etc/apt/sources.list || true
-fi
+sed -i 's|mirrors\.ustc\.edu\.cn|deb.debian.org|g' /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null || true
 mkdir -p /etc/NetworkManager/conf.d
 cat >/etc/NetworkManager/conf.d/99-cchouse-no-connectivity-check.conf <<'EOF'
 [connectivity]
@@ -90,7 +93,7 @@ echo "== [6/6] 清空机器身份、随机种子、临时 root 密码哈希并�
 usermod -p '*' root
 truncate -s 0 /etc/machine-id /etc/hostname
 rm -f /var/lib/dbus/machine-id /var/lib/systemd/random-seed
-rm -f /etc/ssh/ssh_host_*
+rm -f /etc/ssh/ssh_host_* /root/.ssh/authorized_keys /home/debian/.ssh/authorized_keys
 rm -rf /var/lib/dhcp/* /var/lib/NetworkManager/* /var/log/journal/*
 rm -rf /home/claude/.config/chromium /home/claude/.cache /home/claude/.claude* /home/claude/.npm /root/.npm /root/.bash_history /home/claude/.bash_history
 rm -f /var/lib/cchouse/firstboot.done

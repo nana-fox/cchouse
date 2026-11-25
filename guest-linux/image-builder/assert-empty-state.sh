@@ -22,6 +22,7 @@ check "无 Chromium 用户目录" test ! -d /home/claude/.config/chromium
 check "无 ~/.claude* 目录或文件" bash -c '! ls -d /home/claude/.claude* >/dev/null 2>&1'
 check "未预装 Claude Code（合规：首次开机由宿主注入）" bash -c '! command -v claude >/dev/null 2>&1'
 check "无 npm 缓存" bash -c 'test ! -d /home/claude/.npm && test ! -d /root/.npm'
+check "已彻底移除 cloud-init" bash -c '! command -v cloud-init >/dev/null 2>&1 && test ! -d /var/lib/cloud'
 check "root 无可用密码哈希" bash -c 'awk -F: "\$1==\"root\"{exit (\$2==\"*\"||\$2==\"!\")?0:1}" /etc/shadow'
 check "LightDM 自动登录已配置" test -f /etc/lightdm/lightdm.conf.d/50-cchouse-autologin.conf
 check "出厂默认全断 nftables 规则存在" test -f /etc/cchouse/nftables-default-drop.conf
