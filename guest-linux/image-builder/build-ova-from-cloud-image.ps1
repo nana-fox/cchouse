@@ -159,6 +159,22 @@ displayName = "cchouse-debian13-amd64"
 guestOS = "debian12-64"
 numvcpus = "2"
 memsize = "2048"
+pciBridge0.present = "TRUE"
+pciBridge4.present = "TRUE"
+pciBridge4.virtualDev = "pcieRootPort"
+pciBridge4.functions = "8"
+pciBridge5.present = "TRUE"
+pciBridge5.virtualDev = "pcieRootPort"
+pciBridge5.functions = "8"
+pciBridge6.present = "TRUE"
+pciBridge6.virtualDev = "pcieRootPort"
+pciBridge6.functions = "8"
+pciBridge7.present = "TRUE"
+pciBridge7.virtualDev = "pcieRootPort"
+pciBridge7.functions = "8"
+vmci0.present = "TRUE"
+hpet0.present = "TRUE"
+msg.autoAnswer = "TRUE"
 scsi0.present = "TRUE"
 scsi0.virtualDev = "lsilogic"
 scsi0:0.present = "TRUE"
@@ -181,10 +197,12 @@ Write-Host "== [5/7] 启动临时构建机并等待 SSH..."
 & $vmrun -T ws start $vmx nogui
 if ($LASTEXITCODE -ne 0) { throw "vmrun start 失败" }
 
-# 轮询 VMware NAT 租约或 arp 获取客机 IP 并探测 SSH 22 端口（最多 120 秒）
+# 轮询 VMware NAT DHCP 租约 / getGuestIPAddress / arp 获取客机 IP 并探测 SSH 22 端口（最多 150 秒）
 $guestIp = ""
+$sshReady = $false
 $sshOpts = @("-i", $sshKey, "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=NUL", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes")
-for ($i = 0; $i -lt 40; $i++) {
+$leaseFile = "C:\ProgramData\VMware\vmnetdhcp.leases"
+for ($i = 0; $i -lt 50; $i++) {
   Start-Sleep 3
   $ipOut = & $vmrun -T ws getGuestIPAddress $vmx 2>$null
   if ($LASTEXITCODE -eq 0 -and $ipOut -match '^\d+\.\d+\.\d+\.\d+$') {
@@ -192,19 +210,31 @@ for ($i = 0; $i -lt 40; $i++) {
   } else {
     $macLine = (Select-String -Path $vmx -Pattern 'ethernet0\.generatedAddress\s*=\s*"([^"]+)"' -ErrorAction SilentlyContinue)
     if ($macLine) {
-      $mac = $macLine.Matches[0].Groups[1].Value.ToLower().Replace(":", "-")
-      $arpHit = (& arp.exe -a | Select-String $mac | Select-Object -First 1)
-      if ($arpHit -and $arpHit.Line -match '(\d+\.\d+\.\d+\.\d+)') {
-        $guestIp = $Matches[1]
+      $macColon = $macLine.Matches[0].Groups[1].Value.ToLower()
+      if (Test-Path $leaseFile) {
+        $leaseText = Get-Content $leaseFile -Raw -ErrorAction SilentlyContinue
+        $blocks = [regex]::Matches($leaseText, 'lease\s+(\d+\.\d+\.\d+\.\d+)\s*\{[^}]*hardware\s+ethernet\s+([0-9a-fA-F:]+);', [System.Text.RegularExpressions.RegexOptions]::Singleline)
+        foreach ($b in $blocks) {
+          if ($b.Groups[2].Value.ToLower() -eq $macColon) {
+            $guestIp = $b.Groups[1].Value
+          }
+        }
+      }
+      if (-not $guestIp) {
+        $macDash = $macColon.Replace(":", "-")
+        $arpHit = (& arp.exe -a | Select-String $macDash | Select-Object -First 1)
+        if ($arpHit -and $arpHit.Line -match '(\d+\.\d+\.\d+\.\d+)') {
+          $guestIp = $Matches[1]
+        }
       }
     }
   }
   if ($guestIp) {
     & ssh.exe @sshOpts "root@$guestIp" "true" 2>$null
-    if ($LASTEXITCODE -eq 0) { break }
+    if ($LASTEXITCODE -eq 0) { $sshReady = $true; break }
   }
 }
-if (-not $guestIp) { throw "120 秒内未获取到客机 IP 或 SSH 未就绪" }
+if (-not $sshReady) { throw "150 秒内未获取到客机 IP 或 SSH 未就绪（当前 IP: $guestIp）" }
 Write-Host "  OK  客机 SSH 已就绪：$guestIp"
 
 Write-Host "== [6/7] 注入脚本与 mihomo，执行 build-debian13-golden.sh..."
