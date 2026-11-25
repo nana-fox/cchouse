@@ -209,6 +209,18 @@ class TestCchouseV2(unittest.TestCase):
             self.assertTrue(state_f.is_file())
             state = json.loads(state_f.read_text(encoding="utf-8"))
             self.assertEqual(state["route"], "vmware-linux")
+            self.assertIn("ram_gb", payload["host"])
+            # 验证 --set-step / --set-status 可推进 state.json
+            cp2 = subprocess.run(
+                [sys.executable, "-I", str(PREFLIGHT), "--route", "vmware-linux", "--state", str(state_f),
+                 "--set-step", "step1_route", "--set-status", "HUMAN_WAIT", "--next-action", "wait_user_proxy"],
+                capture_output=True,
+                text=True,
+            )
+            state2 = json.loads(state_f.read_text(encoding="utf-8"))
+            self.assertEqual(state2["step"], "step1_route")
+            self.assertEqual(state2["status"], "HUMAN_WAIT")
+            self.assertEqual(state2["next_action"], "wait_user_proxy")
 
     def test_image_builder_scripts_and_seed_iso(self):
         bash_exe = find_bash()

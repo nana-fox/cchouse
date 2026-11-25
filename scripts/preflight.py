@@ -5,11 +5,13 @@
   python3 -I scripts/preflight.py [--route auto|macos-tart|vmware-linux] [--env <instance.env>] [--state <state.json>]
 """
 import argparse
+import ctypes
 import datetime
 import json
 import os
 import platform
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -49,6 +51,55 @@ def find_tart():
         if cand and os.path.isfile(cand):
             return cand
     return None
+
+
+def detect_ram_gb():
+    sys_name = platform.system()
+    try:
+        if sys_name == "Darwin":
+            out = subprocess.check_output(["sysctl", "-n", "hw.memsize"], text=True).strip()
+            return round(int(out) / (1024 ** 3), 1)
+        if sys_name == "Linux":
+            for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+                if line.startswith("MemTotal:"):
+                    kb = int(line.split()[1])
+                    return round(kb / (1024 ** 2), 1)
+        if sys_name == "Windows":
+            class MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+            stat = MEMORYSTATUSEX()
+            stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
+                return round(stat.ullTotalPhys / (1024 ** 3), 1)
+    except Exception:
+        return None
+    return None
+
+
+def tart_home_dir():
+    env_home = os.environ.get("TART_HOME", "").strip()
+    if env_home and os.path.isdir(env_home):
+        return Path(env_home)
+    return Path.home() / ".tart"
+
+
+def has_tart_cached_image():
+    th = tart_home_dir()
+    for sub in ("cache/OCIs", "vms"):
+        d = th / sub
+        if d.is_dir() and any(d.iterdir()):
+            return True
+    return False
 
 
 def check_lf_endings(directory):
@@ -129,11 +180,14 @@ def main():
     parser.add_argument("--route", choices=("auto", "macos-tart", "vmware-linux"), default="auto")
     parser.add_argument("--env", dest="env_path", default=None)
     parser.add_argument("--state", dest="state_path", default=None)
+    parser.add_argument("--set-step", dest="set_step", default=None)
+    parser.add_argument("--set-status", dest="set_status", default=None)
+    parser.add_argument("--next-action", dest="set_next_action", default=None)
     args = parser.parse_args()
 
     sys_name = platform.system()
     arch = detect_arch()
-    disk_gb = round(shutil.disk_usage(ROOT).free / (1024 ** 3), 1)
+    ram_gb = detect_ram_gb()
     tart_path = find_tart()
     vmrun_path = find_vmrun()
 
@@ -145,10 +199,16 @@ def main():
     else:
         route = args.route
 
+    disk_probe_path = tart_home_dir() if (route == "macos-tart" and tart_home_dir().exists()) else ROOT
+    disk_gb = round(shutil.disk_usage(disk_probe_path).free / (1024 ** 3), 1)
+
     errors = []
     warnings = []
     status = "PREFLIGHT_OK"
     next_action = "proceed_to_render"
+
+    if ram_gb is not None and ram_gb < 16:
+        warnings.append(f"LOW_RAM: 当前内存 {ram_gb} GB，建议 ≥ 16 GB")
 
     crlf_files = check_lf_endings(ROOT / "guest-linux")
     if crlf_files:
@@ -161,8 +221,16 @@ def main():
             status = "HUMAN_WAIT"
             errors.append("MISSING_TART: 未检测到 tart，请先执行 brew install cirruslabs/cli/tart")
             next_action = "install_tart"
-        if disk_gb < 50:
-            warnings.append(f"LOW_DISK: 当前可用磁盘 {disk_gb} GB，Tart macOS 客机建议 ≥ 50 GB")
+        tart_cached = has_tart_cached_image()
+        if disk_gb < 30 and not tart_cached:
+            status = "HUMAN_WAIT"
+            errors.append(
+                f"INSUFFICIENT_DISK: Tart 目标卷剩余 {disk_gb} GB 且本地无缓存底包（拉取 macOS 镜像需 ≥ 30 GB），"
+                "请清理空间或将 TART_HOME 指向外置 SSD"
+            )
+            next_action = "free_disk_or_set_tart_home"
+        elif disk_gb < 50:
+            warnings.append(f"LOW_DISK: Tart 目标卷剩余 {disk_gb} GB，建议 ≥ 50 GB（本地有缓存底包可继续）")
     elif route == "vmware-linux":
         if sys_name == "Darwin" and arch == "arm64":
             warnings.append(
@@ -190,12 +258,18 @@ def main():
     if not ok and status == "PREFLIGHT_OK":
         status = "PREFLIGHT_FAILED"
 
+    if args.set_status:
+        status = args.set_status
+    if args.set_next_action:
+        next_action = args.set_next_action
+
     result = {
         "ok": ok,
         "status": status,
         "host": {
             "os": sys_name,
             "arch": arch,
+            "ram_gb": ram_gb,
             "disk_free_gb": disk_gb,
             "python": platform.python_version(),
             "tart_found": bool(tart_path),
@@ -210,6 +284,8 @@ def main():
     if args.state_path:
         state_file = Path(args.state_path)
         state_file.parent.mkdir(parents=True, exist_ok=True)
+        if os.name != "nt":
+            os.chmod(state_file.parent, 0o700)
         prev = {}
         if state_file.is_file():
             try:
@@ -217,11 +293,16 @@ def main():
             except Exception:
                 prev = {}
         completed = list(prev.get("completed_steps", []))
-        if ok and "step0_preflight" not in completed:
-            completed.append("step0_preflight")
+        cur_step = args.set_step or (
+            prev.get("step", "step0_preflight")
+            if (ok and prev.get("step") not in (None, "step0_preflight"))
+            else "step0_preflight"
+        )
+        if ok and cur_step not in completed and status != "HUMAN_WAIT":
+            completed.append(cur_step)
         state_payload = {
             "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            "step": prev.get("step", "step0_preflight") if (ok and prev.get("step") not in (None, "step0_preflight")) else "step0_preflight",
+            "step": cur_step,
             "status": status,
             "route": route,
             "ok": ok,
@@ -229,6 +310,8 @@ def main():
             "next_action": next_action,
         }
         state_file.write_text(json.dumps(state_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        if os.name != "nt":
+            os.chmod(state_file, 0o600)
 
     print(json.dumps(result, ensure_ascii=False, indent=2))
     sys.exit(0 if ok else 1)

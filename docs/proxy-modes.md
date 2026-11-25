@@ -4,10 +4,10 @@
 
 ## 支持的出口模式
 
-| 模式 | `EXIT_MODE` | 适用场景 | 必填代理参数 |
-|---|---|---|---|
-| **单节点模式** | `single` | 海外直连、或手里已有 1 个干净固定出口节点（加密协议 VPS / 可直连 ISP） | `SINGLE_TYPE`、`SINGLE_SERVER`（及 `SINGLE_SERVER_IP`）、`SINGLE_PORT` 及对应协议认证项 |
-| **两跳链式模式** | `chain` | 国内无法直连 ISP 代理，需要「前置节点 → 固定 ISP」两跳容灾（兼容 v1 `ex01`/`ex02`） | `WEBSHARE_*` + `FRONT_*` + `NODE_*`（见 `instance.env.example`） |
+| 模式 | `EXIT_MODE` | 支持路线 | 适用场景 | 必填代理参数 |
+|---|---|---|---|---|
+| **单节点模式** | `single` | **仅 v2 Linux（VMware）** | 海外直连、或手里已有 1 个干净固定出口节点（加密协议 VPS / 可直连 ISP） | `SINGLE_TYPE`、`SINGLE_SERVER`（及 `SINGLE_SERVER_IP`）、`SINGLE_PORT` 及对应协议认证项 |
+| **两跳链式模式** | `chain` | **v1 macOS（Tart） & v2 Linux** | 国内无法直连 ISP 代理，需要「前置节点 → 固定 ISP」两跳容灾 | `WEBSHARE_*` + `FRONT_*` + `NODE_*`（见 `instance.env.example`） |
 
 ### 单节点支持的协议（`SINGLE_TYPE`）
 

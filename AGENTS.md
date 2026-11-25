@@ -4,11 +4,13 @@
 
 ## 6 步状态机（按序执行，支持 `state.json` 断点续跑）
 
+> 默认 `<private>` 根目录：macOS 为 `~/Library/Application Support/cchouse`（权限 `700`），Windows 为 `%LOCALAPPDATA%\cchouse`。确定 `<TAG>` 前可将状态写入 `<private>/state.json`，后续步骤用 `python3 -I scripts/preflight.py --state <private>/state.json --set-step <step> --set-status <status>` 推进，勿手改 JSON。
+
 0. **环境自检**：运行 `python3 -I scripts/preflight.py --state <private>/state.json`（Windows 无 Python 先跑 `powershell -ExecutionPolicy Bypass -File scripts/preflight.ps1`）。按输出的 JSON `next_action` 推进，不要猜环境。
-1. **前提与路线确认**（未满足则停在 `HUMAN_WAIT`）：
-   - 确认用户已自备外部代理，选择 `EXIT_MODE=single` 或 `chain`（及是否开启 `STRIPE_EXIT_MODE`）。
-   - Windows / Intel Mac 自动锁定 **VMware + Debian 13**；Apple Silicon Mac 询问用户选 **Tart + macOS（推荐）** 还是 **VMware + Debian 13**。
-   - 若本机缺 VMware / 未开 BIOS 虚拟化，写入 `HUMAN_WAIT` 并停下来等用户装完继续。
+1. **前提与路线确认**（未满足则用 `--set-status HUMAN_WAIT` 停下等人）：
+   - 确认用户已自备外部代理，选择 `EXIT_MODE=single`（仅 v2 Linux）或 `chain`（v1 macOS 仅支持 `chain` 且 `STRIPE_EXIT_MODE` 为 `front`/`tmh-chain`）。
+   - Windows / Intel Mac 自动锁定 **VMware + Debian 13**；Apple Silicon Mac 走 **Tart + macOS**。
+   - 若本机缺 VMware / 未开 BIOS 虚拟化 / 磁盘严重不足，写入 `HUMAN_WAIT` 并停下来等用户处理完继续。
 2. **按路线读文档**：见下方路由表，只加载当前路线所需文档。
 3. **凭据与渲染**：引导用户在私有目录填好 `instance.env`（`chmod 600`），运行 `python3 -I scripts/preflight.py --env <instance.env>` 校验后，执行 `python3 -I scripts/render.py <instance.env> <private>/rendered`。
 4. **部署与首次启动**：严格按对应路线 Runbook 执行；注入完成后立即删除 `<private>/rendered` 和临时 ISO。

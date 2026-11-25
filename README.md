@@ -9,15 +9,15 @@
 
 把下面这句话发给你的 AI Agent（Codex、Claude Code、Cursor、Antigravity 等）：
 
-> 帮我拉取 `https://github.com/nana-fox/cchouse`（建议固定到最新 release tag），严格按根目录 `AGENTS.md` 的 6 步状态机运行 `preflight` 检查我的电脑环境和代理前提，引导我选择路线、安装并完成 `--fail-closed` 验收。
+> 帮我拉取 `https://github.com/nana-fox/cchouse`（当前使用 `main` 分支或指定 commit；首个正式 release tag 将在 v2 黄金镜像发布后提供），严格按根目录 `AGENTS.md` 的 6 步状态机运行 `preflight` 检查我的电脑环境和代理前提，引导我选择路线、安装并完成 `--fail-closed` 验收。
 
 ---
 
 ## 前提条件（所有路线通用）
 
 1. **必须自备外部 IP 代理**（`cchouse` 不提供代理）：
-   - **单节点模式（`EXIT_MODE=single`）**：1 个固定出口节点（SOCKS5 / HTTP / VLESS / Trojan / Shadowsocks / SSH；不支持 Hysteria2 / TUIC 等纯 UDP 协议）。
-   - **链式模式（`EXIT_MODE=chain`）**：前置节点（自建 VPS / CF 前置 / 机场）→ 固定 ISP 出口；若所用 ISP 屏蔽 Stripe（如 Webshare），可额外开启 `STRIPE_EXIT_MODE`。
+   - **单节点模式（`EXIT_MODE=single`）**：1 个固定出口节点（SOCKS5 / HTTP / VLESS / Trojan / Shadowsocks / SSH；不支持 Hysteria2 / TUIC 等纯 UDP 协议）。**注：当前仅支持 v2 Linux（VMware）路线。**
+   - **链式模式（`EXIT_MODE=chain`）**：前置节点（自建 VPS / CF 前置 / 机场）→ 固定 ISP 出口（**v1 macOS Tart 与 v2 Linux 均支持**）；若所用 ISP 屏蔽 Stripe（如 Webshare），可额外开启 `STRIPE_EXIT_MODE`（v1 macOS 必须为 `front` 或 `tmh-chain`）。
    - 详细配置见 [docs/proxy-modes.md](docs/proxy-modes.md)。
 2. **本机硬件建议**：内存 ≥ 16 GB；磁盘剩余空间（Tart macOS 客机 ≥ 50 GB，VMware Debian 13 客机 ≥ 25 GB）。
 

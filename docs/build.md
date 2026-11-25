@@ -24,7 +24,7 @@
 1. **出口**：一个没被别的账号用过的固定 ISP IP。先在客机外用 ipinfo / ip-api 查归属地、运营商、是否标为 proxy，把**归属地时区**记下来作为 `TIMEZONE`，ipinfo 的 `org` 第一段（如 `AS33659`）作为 `EXPECTED_EGRESS_ASN`。
    再多查几家地理库（ip-api、db-ip、ipapi.is、ip2location），**优先选各家结果都在同一时区的 IP**；有分歧的要记下来，见 [architecture.md#已知限制](architecture.md#已知限制)。
 2. **入口**（v1 macOS 路线当前仅支持 `EXIT_MODE=chain`，`STRIPE_EXIT_MODE` 为 `front` 或 `tmh-chain`）：在自建前置上给这台环境加一个 UUID（`xray-front-client add <tag>`，REALITY 和经 Cloudflare 两个入口同时生效，见 [front.md](front.md)）；将 `FRONT_*` 与 `FRONT_CF_*`（服务器 IP、域名、WS 路径，取自部署前置时保存的私有配置记录，见 [front.md](front.md)）填进 `instance.env`，缺了 `render.py` 会直接报错；备用的两个机场入口（WS+TLS 一个、Reality 一个）。国内直连不通 FRONT 时，实际在用的是 `Front-CF`，部署后确认 `Fixed-ISP` 与 `Stripe` 两组选中的都是它。
-3. 按 [README 快速上手](../README.md#快速上手) 建私有目录，填 `instance.env`。`EXPECTED_EGRESS_IP` = 出口 IP。
+3. 按 [README 快速上手](../README.md#快速上手命令行) 建私有目录，填 `instance.env`。`EXPECTED_EGRESS_IP` = 出口 IP。
 4. 生成宿主到客机的 SSH 密钥：`ssh-keygen -t ed25519 -N '' -f "$D/id_ed25519"`。
 5. 生成 claude 账户密码，存进私有目录（600）和密码管理器：
    `python3 -I -c 'import secrets,string as s;print("".join(secrets.choice(s.ascii_letters+s.digits) for _ in range(20)))' > "$D/claude-password.txt"`
