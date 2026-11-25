@@ -988,6 +988,46 @@ class TestCchouseV2(unittest.TestCase):
             chk = subprocess.run([bash_exe, "-n", str(ROOT / "scripts" / "verify-linux.sh")], capture_output=True, text=True, encoding="utf-8", errors="replace")
             self.assertEqual(chk.returncode, 0, chk.stderr)
 
+    def test_cloud_ova_workflow_and_ovf_template(self):
+        import xml.etree.ElementTree as ET
+
+        wf = (ROOT / ".github" / "workflows" / "build-ova.yml").read_text(encoding="utf-8")
+        self.assertIn("workflow_dispatch:", wf)
+        self.assertNotIn("\n  pull_request:", wf)
+        self.assertNotIn("\n  push:", wf)
+        for marker in (
+            "/dev/kvm",
+            "build-debian13-golden.sh",
+            "subformat=streamOptimized",
+            "tar --format=ustar",
+            "actions/upload-artifact@v4",
+            "cchouse-debian13-amd64.ovf.tmpl",
+        ):
+            self.assertIn(marker, wf)
+        self.assertNotIn("gh release", wf)
+
+        ovf_text = (ROOT / "guest-linux" / "image-builder" / "cchouse-debian13-amd64.ovf.tmpl").read_text(encoding="utf-8")
+        rendered = (
+            ovf_text.replace("__VMDK_FILE__", "cchouse-debian13-amd64-disk1.vmdk")
+            .replace("__VMDK_SIZE__", "123456")
+            .replace("__DISK_CAPACITY__", "25769803776")
+        )
+        root = ET.fromstring(rendered)
+        ns = {
+            "ovf": "http://schemas.dmtf.org/ovf/envelope/1",
+            "rasd": "http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/CIM_ResourceAllocationSettingData",
+        }
+        disk = root.find(".//ovf:Disk", ns)
+        self.assertIsNotNone(disk)
+        self.assertIn("streamOptimized", disk.attrib.get(f"{{{ns['ovf']}}}format", ""))
+        nic_items = [
+            it for it in root.findall(".//ovf:Item", ns)
+            if (it.findtext("rasd:ResourceType", default="", namespaces=ns) == "10")
+        ]
+        self.assertEqual(len(nic_items), 1)
+        self.assertEqual(nic_items[0].findtext("rasd:ResourceSubType", default="", namespaces=ns), "VmxNet3")
+        self.assertEqual(nic_items[0].findtext("rasd:AutomaticAllocation", default="", namespaces=ns), "false")
+
 
 if __name__ == "__main__":
     unittest.main()
