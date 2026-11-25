@@ -60,7 +60,7 @@ def detect_vmnet8_cidr():
                 "| ForEach-Object { \"$($_.IPAddress)/$($_.PrefixLength)\" }"
             )
             out = subprocess.check_output(
-                ["powershell", "-NoProfile", "-Command", ps], text=True, timeout=5
+                ["powershell", "-NoProfile", "-Command", ps], text=True, timeout=15
             ).strip()
             if out and "/" in out:
                 return str(ipaddress.ip_network(out, strict=False))
@@ -310,15 +310,31 @@ def main():
         if disk_gb < 25:
             warnings.append(f"LOW_DISK: 当前可用磁盘 {disk_gb} GB，Debian 13 客机建议 ≥ 25 GB")
 
+    detected_vmnet = detect_vmnet8_cidr() if route == "vmware-linux" else None
     if args.env_path:
         env_errors, env_warnings = validate_env_file(args.env_path, route)
+        if route == "vmware-linux" and detected_vmnet:
+            try:
+                env_vmnet = render_mod.load_env(args.env_path).get("VMNET_CIDR", "").strip()
+                if env_vmnet:
+                    env_net = str(ipaddress.ip_network(env_vmnet, strict=False))
+                    if env_net != detected_vmnet:
+                        env_errors.append(
+                            f"VMNET_MISMATCH: instance.env 中 VMNET_CIDR={env_net} 与本机 VMnet8 实际网段 {detected_vmnet} 不一致，"
+                            "请修改后再渲染，否则 firstboot 会锁死宿主 SSH"
+                        )
+            except Exception:
+                pass
         errors.extend(env_errors)
         warnings.extend(env_warnings)
         if env_errors and status != "HUMAN_WAIT":
             status = "ENV_INVALID"
             next_action = "fix_instance_env"
     elif not errors:
-        next_action = "confirm_route_and_fill_instance_env"
+        if args.route == "auto" and sys_name == "Darwin" and arch == "arm64":
+            next_action = "choose_route"
+        else:
+            next_action = "confirm_route_and_fill_instance_env"
 
     ok = len(errors) == 0
     if not ok and status == "PREFLIGHT_OK":
@@ -329,7 +345,6 @@ def main():
     if args.set_next_action:
         next_action = args.set_next_action
 
-    detected_vmnet = detect_vmnet8_cidr() if route == "vmware-linux" else None
     result = {
         "ok": ok,
         "status": status,

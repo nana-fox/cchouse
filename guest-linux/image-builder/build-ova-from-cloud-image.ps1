@@ -7,7 +7,7 @@
 param(
   [string]$WorkDir = "$env:USERPROFILE\cchouse-ova-build",
   [string]$ProxyUrl = "",
-  [string]$CloudImageUrl = "https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-amd64.qcow2",
+  [string]$CloudImageUrl = "https://cloud.debian.org/images/cloud/trixie/20261123-2671/debian-13-generic-amd64-20261123-2671.qcow2",
   [string]$CloudImageSha512 = "562a4614952657a6ab8a89cda56eaf1bc85c8dfea51155184267bb6b6361eff215baf6afa2f8c2c8c2bad328ac6c30eead80664286ef4c8538368aeb7f87104f",
   [string]$MihomoVersion = "v1.19.19",
   [string]$MihomoSha256 = "d066f77fd9210d5f280877d4e35fd84f4711c43bd8905335946b9b0b1f128094",

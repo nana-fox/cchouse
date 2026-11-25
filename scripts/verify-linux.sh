@@ -167,7 +167,7 @@ done
 expect "mihomo 以专用用户 $MIHOMO_USER 运行" "$(guest "ps -eo user=,comm= | awk '\$2==\"mihomo\"{print \$1; exit}'")" "$MIHOMO_USER"
 expect "SSH 禁止密码登录" "$(guest "awk '/^PasswordAuthentication/{print \$2}' /etc/ssh/sshd_config.d/100-$TAG.conf 2>/dev/null")" "no"
 expect "Claude Code CLI 可执行（claude --version）" "$(guest "claude --version >/dev/null 2>&1 && echo ok || echo missing")" "ok"
-expect "Claude Code 自动更新已禁用" "$(guest "grep -c 'DISABLE_AUTOUPDATER=1' /etc/profile.d/cchouse-claude.sh 2>/dev/null || true" | tr -d ' ')" "1"
+expect "Claude Code 自动更新已禁用（profile.d + managed-settings.json）" "$(guest "grep -q 'DISABLE_AUTOUPDATER=1' /etc/profile.d/cchouse-claude.sh 2>/dev/null && grep -q 'DISABLE_AUTOUPDATER' /etc/claude-code/managed-settings.json 2>/dev/null && echo ok || echo missing")" "ok"
 
 if [ "$FAIL_CLOSED" = 1 ]; then
   log "-- 断网测试（停 cchouse-mihomo）"

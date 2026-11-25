@@ -100,11 +100,7 @@ scripts/verify-linux.sh "<PRIVATE_DIR>/instance.env" --fail-closed
 
 ---
 
-## 首次 Windows / Fusion 实机验证清单（定稿前必测）
+## 桌面操作提示（`v2.0.0-preview.2` 起）
 
-1. `vmrun connectNamedDevice <vmx> ethernet0` 在 Workstation Pro 与 Fusion Pro 上是否均可用。
-2. Linux `mihomo` 开启 TUN（`device: cchouse0`、`auto-redirect: false`）时，与独立 `table inet cchouse_guard`（正向放行 `oifname "cchouse0"`）的共存与重载行为。
-3. Win11 开启 VBS / 内存完整性下 VMware 17.x 的启动速度与交互流畅度。
-4. VMware 导入同一 `.ova` 两次后，网卡 MAC 与 BIOS UUID 是否自动重新生成。
-5. `cchouse-firstboot.service` 在 `network-pre.target` 之前执行时，光驱设备节点（`/dev/disk/by-label/CCHOUSE`）的 udev 就绪时机。
-6. Claude Code npm tarball 离线安装（`npm install -g --offline`）在 Debian 13 下的依赖完整性。
+- 黄金镜像内置思源黑体、`fcitx5` 简体拼音、`tint2` 底部任务栏、`lxterminal` 与 `vmware-user-suid-wrapper`（双向剪贴板 + 窗口自适应分辨率）。
+- 默认英文键盘，按 **`Ctrl + Space`** 或 **轻按左 `Shift`** 一键切换中英文；桌面右键菜单提供 Chromium、终端、切换输入法与安全关机入口。

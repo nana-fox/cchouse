@@ -59,10 +59,10 @@ tart clone cchouse-debian13-arm64 "<VM_NAME>"
 3. **正常开机并获取 IP**：
    ```bash
    tart run "<VM_NAME>" &
-   # 黄金镜像已配置 ClientIdentifier=mac，优先默认 DHCP 解析；若装有 tart-guest-agent 亦可用 --resolver=agent，或查看 /var/db/dhcpd_leases 顶部
-   tart ip "<VM_NAME>" --wait 30 || tart ip --resolver=agent "<VM_NAME>" --wait 30 || head -n 30 /var/db/dhcpd_leases
+   # 黄金镜像（preview.2 起）已配置 ClientIdentifier=mac，优先默认 DHCP 解析；若未命中可查看 /var/db/dhcpd_leases 顶部
+   tart ip "<VM_NAME>" --wait 30 || head -n 30 /var/db/dhcpd_leases
    ```
-   将拿到的 IP 写入 `instance.env` 的 `GUEST_IP`，并将客机 SSH 主机公钥写入 `<PRIVATE_DIR>/known_hosts`。
+   将拿到的 IP 写入 `instance.env` 的 `GUEST_IP`，在客机桌面 `lxterminal` 执行 `cat /etc/ssh/ssh_host_ed25519_key.pub` 核对主机公钥并写入 `<PRIVATE_DIR>/known_hosts`。
 
 ---
 
@@ -80,4 +80,4 @@ tart clone "<VM_NAME>" "<VM_NAME>-clean-$(date +%Y%m%d)"
 
 随后打开客机桌面 → Chromium 打开 `file:///usr/local/<TAG>/check.html` 核对全绿，再登录 `claude.ai` 或客机终端执行 `claude`（**OAuth 链接只能在客机 Chromium 内打开，严禁复制到宿主浏览器**）。
 
-> **桌面操作提示**：黄金镜像内置思源黑体与 `fcitx5` 简体拼音，默认英文键盘，**轻按左 `Shift`** 或 **`Option + Space`**（Windows 为 `Ctrl + Space`）一键切换中英文；底部 `tint2` 任务栏可还原最小化窗口并查看右下角输入法图标与出口时间；桌面右键菜单提供浏览器、终端与安全关机入口。
+> **桌面操作提示（`v2.0.0-preview.2` 起）**：黄金镜像内置思源黑体与 `fcitx5` 简体拼音，默认英文键盘，**轻按左 `Shift`** 或 **`Ctrl + Space`** 一键切换中英文；底部 `tint2` 任务栏可还原最小化窗口并查看右下角输入法图标与出口时间；桌面右键菜单提供浏览器、终端与安全关机入口。

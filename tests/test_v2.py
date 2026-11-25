@@ -310,8 +310,9 @@ class TestCchouseV2(unittest.TestCase):
             # 4) 默认全断服务不得含 ConditionPathExists（稳态每次开机必加载），且具备完整中文桌面与 Tart 剪贴板/DHCP 支持
             builder_sh = (ROOT / "guest-linux" / "image-builder" / "build-debian13-golden.sh").read_text(encoding="utf-8")
             self.assertNotIn("ConditionPathExists=!/var/lib/cchouse/firstboot.done", builder_sh)
-            for marker in ("fonts-noto-cjk", "fcitx5-chinese-addons", "tint2", "lxterminal", "spice-vdagent", "xclip", "xset s off -dpms", "ClientIdentifier=mac"):
+            for marker in ("fonts-noto-cjk", "fcitx5-chinese-addons", "dbus-user-session", "vmware-user-suid-wrapper", "tint2", "lxterminal", "spice-vdagent", "xclip", "xset s off -dpms", "ClientIdentifier=mac"):
                 self.assertIn(marker, builder_sh)
+            self.assertNotIn("1=Alt+space", builder_sh)
             # 5) firstboot sudoers 不得含通配符 *
             fb_sh = (ROOT / "guest-linux" / "firstboot.sh").read_text(encoding="utf-8")
             sudo_block = fb_sh.split("/etc/sudoers.d/cchouse-verify")[1].split("EOF")[1]

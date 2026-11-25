@@ -75,6 +75,10 @@ XKBLAYOUT="${GUEST_KEYBOARD}"
 XKBVARIANT=""
 XKBOPTIONS=""
 EOF
+if [ -f /home/claude/.config/fcitx5/profile ] && [ -n "$GUEST_KEYBOARD" ]; then
+  sed -i "s/^Default Layout=us$/Default Layout=${GUEST_KEYBOARD}/; s/^Name=keyboard-us$/Name=keyboard-${GUEST_KEYBOARD}/" /home/claude/.config/fcitx5/profile
+  chown claude:claude /home/claude/.config/fcitx5/profile
+fi
 
 # 5. 锁定静态 resolv.conf，防止 VMware NAT DHCP 下发 vmnet .2 绕过 TUN dns-hijack
 cat >/etc/NetworkManager/conf.d/98-cchouse-static-dns.conf <<'EOF'

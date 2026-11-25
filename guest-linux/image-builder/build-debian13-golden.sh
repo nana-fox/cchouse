@@ -22,7 +22,7 @@ elif [ "$TARGET_HYPERVISOR" = "tart" ]; then
 fi
 apt-get update
 apt-get install -y --no-install-recommends \
-  openbox xorg lightdm tint2 lxterminal x11-xserver-utils xclip \
+  openbox xorg lightdm dbus-user-session tint2 lxterminal x11-xserver-utils xclip \
   chromium \
   fonts-noto-cjk fonts-noto-color-emoji \
   fcitx5 fcitx5-chinese-addons fcitx5-frontend-gtk3 fcitx5-frontend-gtk4 fcitx5-module-xorg \
@@ -100,8 +100,7 @@ EnumerateSkipFirst=False
 
 [Hotkey/TriggerKeys]
 0=Control+space
-1=Alt+space
-2=Shift_L
+1=Shift_L
 
 [Hotkey/EnumerateForwardKeys]
 0=Control+Shift_L
@@ -170,9 +169,11 @@ EOF
 cat >/home/claude/.config/openbox/autostart <<'EOF'
 xset s off -dpms s noblank &
 xsetroot -solid "#2b2f3a" &
+command -v vmware-user-suid-wrapper >/dev/null 2>&1 && vmware-user-suid-wrapper &
 command -v spice-vdagent >/dev/null 2>&1 && spice-vdagent &
 tint2 &
 fcitx5 -d &
+[ -f /etc/issue.d/cchouse.issue ] && lxterminal -e sh -c 'cat /etc/issue.d/cchouse.issue /var/lib/cchouse/firstboot.log 2>/dev/null; exec bash' &
 chromium --start-maximized --no-first-run --disable-session-crashed-bubble &
 lxterminal &
 EOF

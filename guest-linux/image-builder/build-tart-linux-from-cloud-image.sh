@@ -5,7 +5,7 @@ set -euo pipefail
 
 VM_NAME="${VM_NAME:-cchouse-debian13-arm64}"
 WORK_DIR="${WORK_DIR:-$HOME/.cache/cchouse-tart-linux-build}"
-CLOUD_IMAGE_URL="${CLOUD_IMAGE_URL:-https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-arm64.raw}"
+CLOUD_IMAGE_URL="${CLOUD_IMAGE_URL:-https://cloud.debian.org/images/cloud/trixie/20261123-2671/debian-13-generic-arm64-20261123-2671.raw}"
 CLOUD_IMAGE_SHA512="${CLOUD_IMAGE_SHA512:-056644b92b6e70c96b8f6bd4b9c5635d61d8193f768489dd62ee33dd7251055ead9db6c83619345beae146f8782e5877a660590320c060471814ee0e88246495}"
 MIHOMO_VERSION="${MIHOMO_VERSION:-v1.19.19}"
 MIHOMO_SHA256="${MIHOMO_SHA256:-5035df7d6ae01ab33090fe612ec1b98ccc68917f03a97fb62ed474dc0b99cdcc}"
