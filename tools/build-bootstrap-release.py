@@ -34,9 +34,13 @@ def readme_commands(version, mac_hash, windows_hash):
 
 
 def build(version, commit, output):
-    if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?", version):
-        raise ValueError("version must be a full Release tag such as v2.0.0-preview.3")
     commit = run_git("rev-parse", "--verify", "--end-of-options", f"{commit}^{{commit}}").decode().strip()
+    source_version = run_git("show", f"{commit}:VERSION").decode("ascii").strip()
+    if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?", source_version):
+        raise ValueError("VERSION must contain a full Release tag such as v2.0.0-preview.4")
+    if version is not None and version != source_version:
+        raise ValueError(f"requested version {version} does not match frozen VERSION {source_version}")
+    version = source_version
     # The Windows entry point accepts only VirtualBox. A pre-#39 ZIP is unusable.
     run_git("cat-file", "-e", f"{commit}:guest-linux/virtualbox-manifest.json")
     templates = [run_git("show", f"{commit}:scripts/{name}").decode("utf-8-sig").replace("\r\n", "\n")
@@ -66,7 +70,7 @@ def build(version, commit, output):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--version", required=True)
+    parser.add_argument("--version", help="optional assertion against VERSION in the frozen commit")
     parser.add_argument("--commit", required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()

@@ -104,9 +104,28 @@ python -I scripts/doctor.py --env "$env:LOCALAPPDATA\cchouse\<TAG>\instance.env"
 
 **包内内容与安全说明**：
 
-- 诊断包默认包含 `manifest.json`（采集清单与缺失原因）、`host-info.json`（系统版本、CPU 架构、`tart`/`VBoxManage`/SSH 版本）、`preflight.json` 与仅含非敏感结构字段的 `env-summary.json`。
-- 加 `--vm-ssh` 时会额外尝试采集 `guest/firstboot.log`、`guest/verify-linux.json`、`guest/mihomo-status.txt` 与 `guest/nft-ruleset.txt`；若客机不可达或某项无权限读取，脚本依然正常生成 zip，并在 `manifest.json` 的 `missing` 字段写明缺哪一项及原因。
+- 诊断包包含当前安装器版本、采集清单和缺失原因。安装记录提供已导入镜像的版本、SHA-256 和构建提交。包内还有宿主和 preflight 信息，并在提供 `--env` 时附上脱敏配置摘要。
+- 加 `--vm-ssh` 时尝试采集客机构建身份、首启日志、验收、mihomo 状态与防火墙规则。客机不可达时仍生成 zip，并在 `manifest.json` 的 `missing` 字段说明缺项。
 - **不会打包 `instance.env` 原文或私钥文件**：所有写入 zip 的文本与 JSON 都会经过统一脱敏，自动抹除 `instance.env` 中的密码、UUID、密钥、节点地址、用户名/密码 URL、Authorization 头与 PEM 私钥块。即便如此，发给外部前仍建议先粗略扫一眼包内文件确认无额外个人备注。
+
+## Mac 一键安装后的诊断与卸载
+
+将 `<工作目录>` 换成引导脚本输出的工作目录，`cc01` 换成实际标签。用安装器准备的 Python，Tart 优先沿用安装时的可执行文件。
+
+```bash
+root="$HOME/Library/Application Support/cchouse/bootstrap"
+python="$root/tools/python-3.12.16-20261124/bin/python3"
+command -v tart >/dev/null || export PATH="$root/tools/tart-2.42.0/Contents/MacOS:$PATH"
+cd '<工作目录>'
+
+# 导出脱敏诊断包
+"$python" -I scripts/doctor.py --env "$HOME/Library/Application Support/cchouse/cc01/instance.env"
+
+# 预览并卸载实例
+"$python" -I scripts/cchouse.py remove --tag cc01
+```
+
+实例尚未生成 `instance.env` 时可省略 `--env`。使用自定义私有目录时，卸载也要传入原 `--private-dir`。
 
 ## Windows 一键安装后的诊断与卸载
 

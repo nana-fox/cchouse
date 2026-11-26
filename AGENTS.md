@@ -1,49 +1,45 @@
-# cchouse · 给 AI Agent 的执行手册
+# cchouse · AI Agent 执行手册
 
-先读本文件，再按路线只读对应文档。**不要同时混读两个系统的安装手册。**
+## 用公开版本安装
 
-## 6 步状态机（按序执行，支持 `state.json` 断点续跑）
+1. 根据宿主选择 [README 快速开始](README.md#快速开始) 的对应命令。Apple Silicon Mac 使用 Tart + Debian 13 arm64，Windows x64 使用 VirtualBox + Debian 13 amd64。Intel Mac 暂不支持。只读本次路线的文档。
+2. 原样运行锁定版本的命令。它先校验引导脚本，再准备私有运行环境并运行 `up`。让用户在无回显提示中输入自备的 SOCKS5 或 HTTP(S) 节点。VLESS、Trojan、Shadowsocks 及两跳配置按 [进阶文档](docs/proxy-modes.md) 操作。
+3. 失败时读取该实例的 `state.json`，核对 `status`、`failed_step`、`next_action` 及退出码。使用安装器输出的工作目录和私有 Python 运行 `scripts/doctor.py`。先检查脱敏结果，按失败步骤排查，再重跑同一个锁定命令。默认私有根为 macOS 的 `~/Library/Application Support/cchouse` 或 Windows 的 `%LOCALAPPDATA%\cchouse`，默认标签为 `cc01`。
+4. 自动验收须退出 0 且状态为 `DONE`。随后把桌面 `check.html` 核对与账号登录交给用户。Stripe 连通性 WARN 可接受。
 
-> 默认 `<private>` 根目录：macOS 为 `~/Library/Application Support/cchouse`（权限 `700`），Windows 为 `%LOCALAPPDATA%\cchouse`。确定 `<TAG>` 前可将状态写入 `<private>/state.json`，后续步骤用 `python3 -I scripts/preflight.py --state <private>/state.json --set-step <step> --set-status <status>` 推进，勿手改 JSON。
+## 安装器命令
 
-0. **环境自检**：运行 `python3 -I scripts/preflight.py --state <private>/state.json`（Windows 无 Python 先跑 `powershell -ExecutionPolicy Bypass -File scripts/preflight.ps1`）。按输出的 JSON `next_action` 推进，不要猜环境。
-1. **前提与路线确认**（未满足则用 `--set-status HUMAN_WAIT` 停下等人）：
-   - 确认用户已自备外部代理，选择 `EXIT_MODE=single`（仅 v2 Linux）或 `chain`（v1 macOS 仅支持 `chain` 且 `STRIPE_EXIT_MODE` 为 `front`/`tmh-chain`）。
-   - Intel Mac 暂不支持。Windows 上 `cchouse up` 默认使用 VirtualBox + NAT，沿用同一份 Debian 13 amd64 客机镜像。Apple Silicon Mac 优先推荐 **Tart + Debian 13 arm64**（`tart-linux`，轻量、支持 `single`/`chain`），需 macOS 原生桌面/Safari 高拟真时走 **Tart + macOS**（`macos-tart`，v1）。
-   - 若未开 BIOS 虚拟化 / 磁盘严重不足，写入 `HUMAN_WAIT` 并停下来等用户处理完继续。
-2. **按路线读文档**：见下方路由表，只加载当前路线所需文档。
-3. **凭据与渲染**：引导用户在私有目录填好 `instance.env`（`chmod 600`），运行 `python3 -I scripts/preflight.py --env <instance.env>` 校验后，执行 `python3 -I scripts/render.py <instance.env> <private>/rendered`。
-4. **部署与首次启动**：严格按对应路线 Runbook 执行；注入完成后立即删除 `<private>/rendered` 和临时 ISO。
-5. **自动验收与人工交接**：运行 `verify.sh --fail-closed`（macOS）或 `verify-linux.sh --fail-closed`（Linux）。**只有退出码为 0 才算部署成功**，随后将桌面 `check.html` 核对与账号登录交给用户。
-
-## 路由表
-
-| 任务 | 只读这些文件 |
+| 操作 | 入口 |
 |---|---|
-| 配置单节点 / 链式代理与 Stripe 分流 | [docs/proxy-modes.md](docs/proxy-modes.md) |
-| Windows（`cchouse up` VirtualBox + Debian 13） | [docs/install-virtualbox-linux.md](docs/install-virtualbox-linux.md) |
-| Apple Silicon Mac（Tart + Debian 13 arm64，轻量首选） | [docs/install-tart-linux.md](docs/install-tart-linux.md) |
-| Apple Silicon Mac（Tart + macOS，v1 高拟真） | [docs/build.md](docs/build.md) |
-| 自建前置、加 UUID（链式模式） | [docs/front.md](docs/front.md) |
-| 手动安装、目录结构与 AI Agent 安装话术 | [docs/manual-install.md](docs/manual-install.md) |
-| 验收与手工核对项 | [docs/verify.md](docs/verify.md) |
-| 换出口、快照重建、排障与远程交接 | [docs/operations.md](docs/operations.md) |
+| 安装或续跑 | 首页对应平台的锁定命令。维护入口为 `scripts/cchouse.py up --tag <TAG>` |
+| 预览并卸载 | `scripts/cchouse.py remove --tag <TAG>`。自定义过 `--private-dir` 时也传原路径。核对归属清单后再确认 |
+| 导出诊断 | `scripts/doctor.py`。有私有配置时加 `--env <instance.env>`，有状态记录时可加 `--state <state.json>`，客机正在运行时可加 `--vm-ssh` |
+| 查版本 | `scripts/cchouse.py --version`。无需节点或实例 |
 
-## 硬红线（绝对禁止）
+用引导准备的私有 Python 加 `-I` 执行这些脚本。具体路径及故障处理见 [运维手册](docs/operations.md)。
 
-- **绝不为了“恢复联网”去放宽防火墙（`pf`/`nftables`）、添加 `DIRECT` 规则、或改走宿主代理**。断网是保护生效，必须排查代理本身。
-- **绝不编造凭据、不扫描宿主其他代理软件偷配置、不 `cat` 或在终端/日志/提交中打印 `instance.env` 真实值**；明文渲染产物与 seed ISO 用完即删。
-- **绝不替用户登录、注册、订阅或付款**；必须提醒用户：**Claude Code 的 OAuth 登录链接只能在客机浏览器里打开，严禁复制到宿主浏览器**。
-- **绝不把 Claude Code 预装进待分发的 `.ova` 镜像**（由宿主拉官方 npm tarball 核对 integrity 后拷入客机离线安装）。
-- **Linux `nftables.conf` 绝不写 `flush ruleset`**（否则会清掉 `mihomo` 自建的 TUN 表），只操作独立的 `table inet cchouse_guard`。
+## 必须交给人的检查点（`HUMAN_WAIT`）
 
-## 必须停下来交给人的检查点（`HUMAN_WAIT`）
+- **出口与凭据**。出口由用户选择。公开引导的链接由用户无回显输入，进阶安装的凭据由用户填写在私有 `instance.env` 中，macOS 文件权限为 `600`。渲染前运行 `preflight.py --env`。
+- **宿主前提**。虚拟化未开启或安装卷空间不足时等用户处理。VirtualBox 由 `up` 安装。Windows 启用 VBS 时说明性能影响，不建议关闭 VBS。
+- **桌面验收与登录**。自动验收退出 0 后，用户在客机桌面核对 `check.html` 并自行登录。Claude Code 的 OAuth 授权链接只能在客机浏览器里打开，严禁复制到宿主浏览器。
 
-1. **填凭据与选出口**：出口节点参数由人写入私有 `instance.env`。
-2. **开启 BIOS 虚拟化**：按宿主机提示开启。VirtualBox 的安装交给 `cchouse up`。Win11 开着 VBS 时告知性能影响，**不要建议用户关闭 VBS**。
-3. **最终验收与登录**：自动验收退出码 `0` 后，由人在客机桌面核对 `check.html` 全绿并自行登录。
+## 硬红线
 
-## 维护与开发补充规则
+- 禁止为恢复联网放宽 `pf` 或 `nftables`、添加 `DIRECT` 或改走宿主代理。断网时排查代理链路。
+- 禁止编造凭据、扫描宿主其他代理软件获取配置、打开或输出 `instance.env` 原文。日志、公开 Issue、PR、Release 与提交不得泄露真实凭据、用户身份和节点信息。离线注入后立即删除明文渲染目录和临时 seed ISO。
+- 禁止代用户登录、注册、订阅或付款。
+- 禁止在待分发的 `.ova` 镜像预装 Claude Code。由宿主下载官方 npm 包、核对 integrity 后离线注入。
+- Linux `nftables.conf` 禁止使用 `flush ruleset`。只操作独立的 `table inet cchouse_guard`，保留 mihomo 自建的 TUN 表。
+- 只操作本次任务和安装记录能确认归属的 VM、快照、私有目录及缓存。隔离测试先验证虚拟机库存和缓存确实独立。
 
-- **v1（macOS Tart）安全约束**：改 `pf`/`mihomo` 前先后台跑 `guard.sh`（退出前勿删 `/tmp/<TAG>`）；客机不调用 `python3`；前置 `xray` 不可随手升至 `26.10.21+`；关机用 `host/stop-vm.sh`；脚本兼容 macOS bash 3.2；改模板后跑 `scripts/import-existing.py` 核对；已登录快照记入 `RECOVERY_SNAPSHOT` 且不可克隆多台；剪贴板探针先校准 `LC_ALL=en_US.UTF-8`；远程交接先撤权再整理。
-- **改模板或脚本后**：跑 `python3 -I -m unittest discover -s tests` 并在实际环境跑通 `verify --fail-closed`，同步记录 [CHANGELOG.md](CHANGELOG.md)。
+## 开发与发布
+
+- 源码维护、手动渲染和导入见 [进阶安装](docs/manual-install.md)，验收详见 [verify.md](docs/verify.md)。修改模板或脚本后跑 `python3 -I -m unittest discover -s tests`，在相关真实宿主运行 `verify-linux.sh --fail-closed`，并更新 [CHANGELOG](CHANGELOG.md)。
+- PR 需通过 Linux、macOS、Windows 的单元测试及 Bash/PowerShell 检查，共四项 CI。文档小改通过 CI 即可审合。安装流程、脚本或镜像变更须附对应真机证据，包含退出码、状态、验收结果和清理核对。
+- 发布按 [引导制品手册](docs/bootstrap-release.md) 从冻结提交读取 `VERSION`，固定源码、引导脚本与镜像的 SHA-256。同一公开 tag 的字节永远不替换。修复发布问题要用新版本。草稿资产在核对前保持草稿。
+- 发版验收要求 Mac 和 Windows 各连续两轮公开文档盲装，每轮从全新会话及干净测试环境开始，自动验收 0 FAIL，并真实打开客机桌面。涉及增强组件时，附实际窗口缩放与双向剪贴板证据。
+
+## v1 macOS 维护
+
+v1 Tart + macOS 已冻结，见 [维护手册](docs/build.md)。仅支持 `EXIT_MODE=chain`，`STRIPE_EXIT_MODE` 为 `front` 或 `tmh-chain`。改 `pf` 或 mihomo 前先后台运行 `guard.sh`，退出前保留 `/tmp/<TAG>`。客机不调用 `python3`。前置 xray 不可随意升至 `26.10.21+`。关机用 `host/stop-vm.sh`，脚本兼容 macOS bash 3.2。改模板后用 `scripts/import-existing.py` 核对，并跑 `verify.sh --fail-closed`。已登录快照记入 `RECOVERY_SNAPSHOT`，禁止克隆多台。剪贴板探针先校准 `LC_ALL=en_US.UTF-8`。远程交接先撤权再整理。

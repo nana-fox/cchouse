@@ -50,15 +50,13 @@ When prompted, paste your node link. The input is hidden. If VirtualBox is missi
 
 ### Apple Silicon Mac
 
-Install [Homebrew](https://brew.sh), Git, and Python 3, then run `brew install cirruslabs/cli/tart`.
+Requires Apple Silicon (M series) and macOS 13.0 Ventura or later. Open Terminal and run this one line to install `v2.0.0-preview.3`. The bootstrap verifies and prepares a private Python and Tart if needed.
 
 ```bash
-git clone https://github.com/nana-fox/cchouse.git
-cd cchouse
-python3 -I scripts/cchouse.py up --tag cc01
+f=$(mktemp -t cchouse-bootstrap) && curl -fsSLo "$f" https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.3/bootstrap-macos.sh && printf '%s  %s\n' '60a6fe7495320cb61f487ff99bf2063e56c5c23cdcc18f3b477bfaf3f0654f9f' "$f" | shasum -a 256 -c - && /bin/bash "$f" --cleanup-bootstrap
 ```
 
-When prompted, paste your node link.
+When prompted, paste your SOCKS5 or HTTP(S) node link. The input is hidden.
 
 ### Open the guest and sign in
 
@@ -68,7 +66,7 @@ After the automated checks pass, open the network check page on the VM desktop (
 
 > The authorization link shown when you sign in to Claude Code must also be opened in the browser inside the VM. Do not copy it into the browser on your own computer.
 
-To run each step yourself, or to have an AI agent install it for you, see [docs/manual-install.md](docs/manual-install.md).
+For AI-assisted installation, see [AGENTS.md](AGENTS.md). For manual configuration, see the [advanced installation guide](docs/manual-install.md).
 
 ---
 
@@ -91,12 +89,10 @@ The guest is always Debian 13 + Chromium + Claude Code. A Linux computer is not 
 
 ## What you need
 
-- **One node** (cchouse does not provide one). SOCKS5, HTTP(S), VLESS, Trojan, and Shadowsocks are supported. UDP protocols such as Hysteria2, TUIC, and WireGuard are not. A node with a fixed IP and a stable region is best.
+- **One SOCKS5 or HTTP(S) node**. Bring a node with a fixed IP and a stable region. See the [advanced proxy guide](docs/proxy-modes.md) for VLESS, Trojan, Shadowsocks, and two-hop routing.
 - **The computer**: 16 GB of memory recommended. Allow at least **7 GB** of free space on Windows (**10 GB** recommended), or at least **9 GB** on Apple Silicon (**12 GB** recommended), including the downloads.
 
 > **About Stripe**: some nodes block the payment service Stripe. That only affects paying on the claude.ai website. It does not affect signing in or day-to-day use. The installer warns you and does not stop the install. The check only tests whether Stripe can be reached. It does not mean a payment will succeed. You can add a node used only for payment. See [docs/proxy-modes.md](docs/proxy-modes.md).
-
-Want the two-hop chain, "front node → fixed exit"? See [docs/proxy-modes.md](docs/proxy-modes.md) (advanced).
 
 ---
 
@@ -141,22 +137,14 @@ Installer downloads follow the proxy settings of the host network. When a downlo
 
 Wait 1–2 minutes, then rerun the same command from Quick start. The installer resumes and runs verification again. If the guest is already shut down, start that same guest in the VM app first.
 
-If it still fails, add a direct rule for the node’s own IPv4 address before the host Clash catch-all rule, for example `IP-CIDR,<node IPv4>/32,DIRECT,no-resolve`, then rerun the original install command. Put that direct rule only in Clash on the host.
+If it still fails, check whether the node is reachable and export a diagnostic package using the instructions below.
 
 </details>
 
 <details>
 <summary><b>Something went wrong during install. What now?</b></summary>
 
-Export a redacted diagnostic package with the `instance.env` the install created. If the guest is already running, add `--vm-ssh` so the tool can try to collect guest diagnostics. The Mac example uses the default directory and the tag `cc01`.
-
-```bash
-python3 -I scripts/doctor.py --env "$HOME/Library/Application Support/cchouse/cc01/instance.env"
-```
-
-On Windows, use the [diagnostic instructions for one-line installs](docs/operations.md#windows-一键安装后的诊断与卸载).
-
-If the install has not created `instance.env` yet, omit `--env` and collect the host diagnostics first.
+Use the Python and source that the bootstrap prepared to export a redacted diagnostic package. Follow the instructions for [Mac](docs/operations.md#mac-一键安装后的诊断与卸载) or [Windows](docs/operations.md#windows-一键安装后的诊断与卸载).
 
 **Unzip and check the package before you open a public issue.** Confirm that no credentials or personal information remain, then attach it to an [issue](https://github.com/nana-fox/cchouse/issues). See [docs/operations.md](docs/operations.md).
 
@@ -166,13 +154,7 @@ If the install has not created `instance.env` yet, omit `--env` and collect the 
 
 ## Uninstall
 
-On Mac, wait for installation to finish, then run this from the cloned cchouse folder. Replace `cc01` with the `--tag` you used to install.
-
-```bash
-python3 -I scripts/cchouse.py remove --tag cc01
-```
-
-On Windows, use the [uninstall instructions for one-line installs](docs/operations.md#windows-一键安装后的诊断与卸载). If you installed with `--private-dir`, supply the same path when uninstalling.
+Wait for installation to finish, then follow the `remove` instructions for [Mac](docs/operations.md#mac-一键安装后的诊断与卸载) or [Windows](docs/operations.md#windows-一键安装后的诊断与卸载). Use the original instance tag and include the original `--private-dir` if you supplied one.
 
 The installer lists the VM, clean snapshot, private folder, and temporary plaintext it can verify before asking for confirmation. Enter cancels by default. Use `--yes` to skip confirmation. On VirtualBox, uninstall powers the VM off and then runs `VBoxManage unregistervm --delete` for the VM whose name matches the install record exactly. If an older installation lacks a record that verifies ownership, check the VM in your virtualization app and follow the manual cleanup instructions.
 

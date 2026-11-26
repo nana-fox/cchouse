@@ -82,6 +82,10 @@ try {
   $python = Join-Path $pythonHome 'python.exe'
   Push-Location -LiteralPath $code
   try {
+    $cliVersion = & $python -I 'scripts/cchouse.py' --version
+    if ($LASTEXITCODE -ne 0 -or $cliVersion -cne "cchouse $version") {
+      throw 'Source package version does not match the bootstrap Release.'
+    }
     Write-Host "正在启动 cchouse up。重跑同一条首页命令可续跑。工作目录：$code"
     & $python -I 'scripts/cchouse.py' up --tag cc01 --vm-backend virtualbox
     $exitCode = $LASTEXITCODE

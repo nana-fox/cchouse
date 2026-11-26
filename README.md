@@ -50,15 +50,13 @@ $f = "$env:TEMP\cchouse-bootstrap-$([guid]::NewGuid().ToString('N')).ps1"; iwr h
 
 ### Apple Silicon Mac
 
-先装 [Homebrew](https://brew.sh)、Git 和 Python 3，再运行 `brew install cirruslabs/cli/tart`。
+需要 Apple Silicon（M 系列）及 macOS 13.0 Ventura 或更新版本。打开「终端」，运行下面这一行安装 `v2.0.0-preview.3`。引导脚本会校验并准备私有 Python 和所需的 Tart。
 
 ```bash
-git clone https://github.com/nana-fox/cchouse.git
-cd cchouse
-python3 -I scripts/cchouse.py up --tag cc01
+f=$(mktemp -t cchouse-bootstrap) && curl -fsSLo "$f" https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.3/bootstrap-macos.sh && printf '%s  %s\n' '60a6fe7495320cb61f487ff99bf2063e56c5c23cdcc18f3b477bfaf3f0654f9f' "$f" | shasum -a 256 -c - && /bin/bash "$f" --cleanup-bootstrap
 ```
 
-按提示粘贴自己的节点链接。
+按提示粘贴自己的 SOCKS5 或 HTTP(S) 节点链接，输入不会回显。
 
 ### 打开客机并登录
 
@@ -68,7 +66,7 @@ python3 -I scripts/cchouse.py up --tag cc01
 
 > 登录 Claude Code 时弹出的授权链接，也只能在虚拟机里的浏览器打开，不要复制到你本机的浏览器。
 
-想手动控制每一步，或者让 AI Agent 代你装：见 [docs/manual-install.md](docs/manual-install.md)。
+让 AI Agent 协助安装见 [AGENTS.md](AGENTS.md)。手动配置见 [进阶安装](docs/manual-install.md)。
 
 ---
 
@@ -91,12 +89,10 @@ python3 -I scripts/cchouse.py up --tag cc01
 
 ## 你需要准备什么
 
-- **一个节点**（cchouse 不提供节点）。支持 SOCKS5、HTTP(S)、VLESS、Trojan、Shadowsocks；不支持 Hysteria2、TUIC、WireGuard 这类走 UDP 的协议。最好是固定 IP、地区稳定的节点。
+- **一个 SOCKS5 或 HTTP(S) 节点**。请自备固定 IP、地区稳定的节点。VLESS、Trojan、Shadowsocks 和两跳代理见 [进阶出口配置](docs/proxy-modes.md)。
 - **电脑配置**：建议内存 16 GB。含所需下载，Windows 安装卷至少剩余 **7 GB**（建议 **10 GB**），Apple Silicon 至少 **9 GB**（建议 **12 GB**）。
 
 > **关于 Stripe**：有些节点会拦截付款服务 Stripe。这只影响在 claude.ai 网页上付款，不影响登录和日常使用；安装时会提示你，但不会拦着你装。这只检查能否连通，不代表付款一定成功。需要的话可以加一个付款专用节点，见 [docs/proxy-modes.md](docs/proxy-modes.md)。
-
-想用"前置节点 → 固定出口"的两跳链式代理？见 [docs/proxy-modes.md](docs/proxy-modes.md)（进阶）。
 
 ---
 
@@ -141,22 +137,14 @@ Stripe 不通只影响在 claude.ai 网页上付款。已经订阅的、或在�
 
 等 1–2 分钟，再重跑快速开始里的同一条安装命令。安装器会续跑并重新验收。如果客机已经关机，先在虚拟机软件中启动同一台客机。
 
-如果仍失败，可以在宿主 Clash 的兜底规则前为节点本身的 IPv4 地址加一条直连规则，例如 `IP-CIDR,<节点IPv4>/32,DIRECT,no-resolve`，然后重跑原安装命令。直连规则只配置在宿主 Clash。
+如果仍失败，请检查节点连通性，并按下一节导出诊断包。
 
 </details>
 
 <details>
 <summary><b>装的时候出错了怎么办？</b></summary>
 
-用安装时生成的 `instance.env` 导出脱敏诊断包。已启动的客机可加 `--vm-ssh`，让工具尝试采集客机诊断信息。以下 Mac 示例使用默认目录和标签 `cc01`。
-
-```bash
-python3 -I scripts/doctor.py --env "$HOME/Library/Application Support/cchouse/cc01/instance.env"
-```
-
-Windows 请按[一键安装后的诊断说明](docs/operations.md#windows-一键安装后的诊断与卸载)操作。
-
-如果安装还未生成 `instance.env`，可省略 `--env` 参数，先采集宿主诊断。
+用引导脚本准备的 Python 和源码导出脱敏诊断包。见 [Mac](docs/operations.md#mac-一键安装后的诊断与卸载) 与 [Windows](docs/operations.md#windows-一键安装后的诊断与卸载) 操作说明。
 
 **发公开 Issue 前请先解压检查**，确认没有残留的凭据或个人信息，再附到 [Issue](https://github.com/nana-fox/cchouse/issues) 里。详见 [docs/operations.md](docs/operations.md)。
 
@@ -166,13 +154,7 @@ Windows 请按[一键安装后的诊断说明](docs/operations.md#windows-一键
 
 ## 卸载
 
-在 Mac 上，等安装命令结束后，在克隆的 cchouse 目录运行。把 `cc01` 换成安装时使用的 `--tag`。
-
-```bash
-python3 -I scripts/cchouse.py remove --tag cc01
-```
-
-Windows 请按[一键安装后的卸载说明](docs/operations.md#windows-一键安装后的诊断与卸载)操作。安装时指定过 `--private-dir`，卸载时也传同一路径。
+等安装命令结束，再按 [Mac](docs/operations.md#mac-一键安装后的诊断与卸载) 或 [Windows](docs/operations.md#windows-一键安装后的诊断与卸载) 说明运行 `remove`。请使用安装时的标签。指定过 `--private-dir` 时也传入原路径。
 
 安装器会先列出它能确认归属的虚拟机、干净快照、私有目录和临时明文，再询问是否删除。回车默认取消，`--yes` 会跳过确认。在 VirtualBox 中，卸载会先关机，再用 `VBoxManage unregistervm --delete` 删除安装记录里名字精确匹配的那一台。旧安装缺少能验证归属的记录时，请在虚拟机软件中核对后，按提示手动清理。
 

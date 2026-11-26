@@ -14,11 +14,7 @@ tart_sha='a95dda214b5f676298430d665a8174992e6b300dd20c653385b60481ae819ddf'
 stage=''
 lock=''
 bootstrap_to_remove=''
-if [ "${1:-}" = "--cleanup-bootstrap" ]; then
-  case "${0##*/}" in
-    cchouse-bootstrap.*) bootstrap_to_remove="$0" ;;
-  esac
-fi
+tag="${CCHOUSE_TAG:-cc01}"
 cleanup() {
   if [ -n "$stage" ]; then rm -rf -- "$stage"; fi
   if [ -n "$lock" ]; then rmdir -- "$lock"; fi
@@ -28,8 +24,33 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --cleanup-bootstrap)
+      case "${0##*/}" in
+        cchouse-bootstrap.*) bootstrap_to_remove="$0" ;;
+      esac
+      shift
+      ;;
+    --tag)
+      if [ "$#" -lt 2 ]; then echo '--tag 需要一个实例名。' >&2; exit 2; fi
+      tag="$2"
+      shift 2
+      ;;
+    *) echo '用法：bootstrap-macos.sh [--tag <实例名>]' >&2; exit 2 ;;
+  esac
+done
+if [[ ! "$tag" =~ ^[a-z][a-z0-9_-]{1,15}$ ]]; then
+  echo '实例名须以小写字母开头，共 2–16 位，可用小写字母、数字、下划线和短横线。' >&2
+  exit 2
+fi
 if [ "$(uname -s)" != Darwin ] || [ "$(sysctl -n hw.optional.arm64 2>/dev/null || true)" != 1 ]; then
   echo '此安装入口需要 Apple Silicon Mac。' >&2
+  exit 1
+fi
+macos_version="$(sw_vers -productVersion)"
+if [ "${macos_version%%.*}" -lt 13 ]; then
+  echo '此安装入口需要 macOS 13.0（Ventura）或更新版本。' >&2
   exit 1
 fi
 if [[ ! "$source_sha" =~ ^[0-9a-f]{64}$ ]]; then
@@ -109,5 +130,9 @@ lock=''
 export PATH="$python_home/bin:$PATH"
 export PYTHONUTF8=1
 cd "$code"
+if [ "$("$python_home/bin/python3" -I scripts/cchouse.py --version)" != "cchouse $version" ]; then
+  echo '源码包版本与引导脚本不一致。请使用对应版本的 Release 引导脚本。' >&2
+  exit 1
+fi
 echo "正在启动 cchouse up。重跑同一条首页命令可续跑。工作目录：$code"
-"$python_home/bin/python3" -I scripts/cchouse.py up --tag cc01
+"$python_home/bin/python3" -I scripts/cchouse.py up --tag "$tag"

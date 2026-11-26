@@ -175,6 +175,8 @@ class TestDoctorBundle(unittest.TestCase):
             def fake_ssh(_env, remote_cmd, timeout=10):
                 if remote_cmd == "true":
                     return 0, "", "", None
+                if remote_cmd == "cat /etc/cchouse-image-release":
+                    return 0, "SOURCE_COMMIT=abcdef1\nARCH=arm64\nHYPERVISOR=tart\n", "", None
                 if "firstboot.log" in remote_cmd:
                     return 0, fake_firstboot, "", None
                 if "cchouse-mihomo.service" in remote_cmd:
@@ -224,6 +226,7 @@ class TestDoctorBundle(unittest.TestCase):
                     "guest/verify-linux.json",
                     "guest/mihomo-status.txt",
                     "guest/nft-ruleset.txt",
+                    "guest/image-release.json",
                 ):
                     self.assertIn(expected, names)
 
@@ -238,6 +241,8 @@ class TestDoctorBundle(unittest.TestCase):
 
                 # 确认非敏感结构字段未被误杀且 JSON 仍合法
                 verify_data = json.loads(zf.read("guest/verify-linux.json").decode("utf-8"))
+                self.assertEqual(json.loads(zf.read("guest/image-release.json"))["SOURCE_COMMIT"], "abcdef1")
+                self.assertEqual(json.loads(zf.read("manifest.json"))["cchouse_version"], (ROOT / "VERSION").read_text().strip())
                 self.assertEqual(verify_data["result"]["pass"], 18)
                 self.assertEqual(verify_data["result"]["fail"], 0)
                 mihomo_txt = zf.read("guest/mihomo-status.txt").decode("utf-8")
