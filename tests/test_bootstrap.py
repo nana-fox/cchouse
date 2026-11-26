@@ -100,7 +100,7 @@ class MacBootstrapTests(unittest.TestCase):
                 command.write_text(f"#!/bin/sh\n{body}\n")
                 command.chmod(0o700)
             script = root / "bootstrap.sh"
-            script.write_text((ROOT / "scripts/bootstrap-macos.sh").read_text()
+            script.write_text((ROOT / "scripts/bootstrap-macos.sh").read_text(encoding="utf-8")
                               .replace("@CCHOUSE_VERSION@", "v2.0.0-preview.3").replace("@CCHOUSE_SHA256@", "a" * 64))
             run = subprocess.run(
                 ["/bin/bash", script], env=dict(os.environ, HOME=td, PATH=f"{binary}:/usr/bin:/bin:/usr/sbin:/sbin"),
@@ -129,7 +129,7 @@ exit $LASTEXITCODE
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             script = root / "bootstrap.ps1"
-            script.write_text((ROOT / "scripts/bootstrap-windows.ps1").read_text()
+            script.write_text((ROOT / "scripts/bootstrap-windows.ps1").read_text(encoding="utf-8")
                               .replace("@CCHOUSE_VERSION@", "v2.0.0-preview.3").replace("@CCHOUSE_SHA256@", "a" * 64),
                               encoding="utf-8-sig")
             system32 = root / "System32" / "OpenSSH"
