@@ -273,14 +273,19 @@ def _create_windows_lnk_files(specs):
         "}\n"
     )
     payload_b64 = base64.b64encode(json.dumps(specs, ensure_ascii=False).encode("utf-8")).decode("ascii")
+    cmd_b64 = base64.b64encode(ps_script.encode("utf-16-le")).decode("ascii")
     env = dict(os.environ, CCHOUSE_LNK_JSON_B64=payload_b64)
-    subprocess.run(
-        ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_script],
+    proc = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", cmd_b64],
         env=env,
-        check=True,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
     )
+    if proc.returncode != 0:
+        raise subprocess.CalledProcessError(proc.returncode, proc.args, stderr=proc.stderr)
 
 
 def _windows_create(tag, state, home=None):
