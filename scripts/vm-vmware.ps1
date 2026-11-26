@@ -9,6 +9,7 @@ param(
   [string]$CcOva = "",
   [string]$CcVmName = "",
   [string]$CcVmDir = "",
+  [ValidateSet("yes", "no")] [string]$CcReplaceExisting = "no",
   [string]$CcSeedIso = "",
   [string]$CcKey = "",
   [string]$CcKnownHosts = "",
@@ -163,9 +164,13 @@ function New-CchouseSnapshot([string]$vmxPath, [string]$name) {
 function Remove-CchouseVM([string]$vmxPath) {
   if (-not (Test-Path -LiteralPath $vmxPath -PathType Leaf)) { return }
   $vmr = Get-CchouseVmrun
+  $vmxPath = (Get-Item -LiteralPath $vmxPath).FullName
   $running = & $vmr -T ws list
   if ($LASTEXITCODE -ne 0) { throw "vmrun list failed" }
-  if ($running -contains $vmxPath) {
+  $runningPaths = $running | Select-Object -Skip 1 | Where-Object { $_.Trim() } | ForEach-Object {
+    [System.IO.Path]::GetFullPath($_.Trim())
+  }
+  if ($runningPaths -icontains $vmxPath) {
     & $vmr -T ws stop $vmxPath hard
     if ($LASTEXITCODE -ne 0) { throw "vmrun stop failed for $vmxPath" }
   }
@@ -181,7 +186,8 @@ if ($CcOp) {
   switch ($CcOp) {
     "exists" { if (Test-Path $CcVmx) { exit 0 } else { exit 1 } }
     "import" {
-      if (Test-Path $CcVmx) {
+      if (Test-Path -LiteralPath $CcVmx) {
+        if ($CcReplaceExisting -ne "yes") { throw "Existing VMX is not owned by this install: $CcVmx" }
         $vmr = Get-CchouseVmrun
         & $vmr -T ws stop $CcVmx hard 2>$null | Out-Null
         & $vmr -T ws deleteVM $CcVmx 2>$null | Out-Null

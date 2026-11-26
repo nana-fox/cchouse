@@ -142,6 +142,8 @@ class TestRemove(unittest.TestCase):
                 rc, text = self.remove(yes=True, purge=True)
                 self.assertEqual(rc, 1, text)
                 self.assertIn("手动清理", text)
+                if overrides.get("vm_backend") == "virtualbox":
+                    self.assertIn("此版本暂不支持卸载 VirtualBox 实例，请在 VirtualBox 中手动删除", text)
                 self.assertTrue(self.private.exists())
                 self.assertIn(self.vm_name, self.inventory)
         self.mock_run.assert_not_called()
@@ -227,6 +229,39 @@ class TestRemove(unittest.TestCase):
         self.mock_run.assert_not_called()
 
 
+@unittest.skipIf(os.name == "nt", "requires Bash wrapper")
+class TestTartDeleteScript(unittest.TestCase):
+    def test_stops_running_guest_or_clean_clone_before_delete(self):
+        for name, list_fails in (("claude-cc01", False), ("claude-cc01-clean", False), ("claude-cc01", True)):
+            with self.subTest(name=name, list_fails=list_fails), tempfile.TemporaryDirectory() as tmp:
+                log = Path(tmp) / "calls"
+                tart = Path(tmp) / "tart"
+                tart.write_text(r"""#!/bin/bash
+printf '%s\n' "$*" >> "$TEST_TART_CALLS"
+case "$1" in
+  stop) exit 0 ;;
+  list)
+    if [ "$TEST_LIST_FAILS" = "yes" ]; then exit 1; fi
+    printf 'local %s 26 GB 3 GB today stopped\n' "$TEST_VM_NAME"
+    ;;
+  delete) exit 0 ;;
+  *) exit 2 ;;
+esac
+""", encoding="utf-8")
+                tart.chmod(0o700)
+                result = subprocess.run(
+                    ["bash", str(ROOT / "scripts" / "vm-tart.sh"), "delete", name],
+                    env=dict(os.environ, PATH=f"{tmp}{os.pathsep}{os.environ['PATH']}",
+                             TEST_TART_CALLS=str(log), TEST_VM_NAME=name, TEST_LIST_FAILS="yes" if list_fails else "no"),
+                    capture_output=True, text=True, timeout=10,
+                )
+                expected = [f"stop {name}", "list --source local"]
+                if not list_fails:
+                    expected.append(f"delete {name}")
+                self.assertEqual(log.read_text(encoding="utf-8").splitlines(), expected)
+                self.assertEqual(result.returncode, int(list_fails), result.stderr)
+
+
 @unittest.skipUnless(os.name == "nt", "requires Windows PowerShell")
 class TestVmwareDeleteScript(unittest.TestCase):
     def test_stops_and_deletes_only_the_exact_vmx(self):
@@ -239,7 +274,9 @@ function Invoke-FakeVmrun {
   if ($args[2] -eq 'list') {
     'Total running VMs: 2'
     $env:OTHER_VMX
-    $env:TEST_VMX
+    $testPath = Split-Path -Parent $env:TEST_VMX
+    $testName = Split-Path -Leaf $env:TEST_VMX
+    '  ' + $testPath.ToUpperInvariant() + '/unused/../' + $testName.ToUpperInvariant() + '  '
     return
   }
   if ($args[3] -cne $env:TEST_VMX) { throw "Unexpected VMX" }

@@ -995,7 +995,8 @@ def vm_exists(ctx):
 
 def step_import(ctx):
     # 只重建 up 自己建过的虚拟机；同名的既有虚拟机（可能已登录）绝不覆盖
-    if not ctx.state.get("vm_created_by_up") and vm_exists(ctx):
+    owned = ctx.state.get("vm_created_by_up") is True
+    if not owned and vm_exists(ctx):
         raise StepError(
             f"已存在同名虚拟机 {ctx.vm_name}（非本次 up 创建），为避免覆盖已登录环境不会删除；"
             "请换 --tag，或确认无用后自行删除再运行"
@@ -1009,13 +1010,14 @@ def step_import(ctx):
             print(f"  本机已有黄金镜像 {ctx.golden_name}，直接克隆（热缓存）")
         else:
             ctx.tart("import", ctx.golden_name, ctx.image_path)
+        ctx.tart("clone" if owned else "clone-new", ctx.golden_name, ctx.vm_name)
         ctx.state.update(vm_created_by_up=True, vm_name=ctx.vm_name, vm_backend=ctx.backend, golden_name=ctx.golden_name)
         ctx.save_state()
-        ctx.tart("clone", ctx.golden_name, ctx.vm_name)
         return existed
+    ctx.vmware("import", Vmx=ctx.vmx, Ova=ctx.image_path, VmName=ctx.vm_name, VmDir=ctx.private_dir / "vm",
+               ReplaceExisting="yes" if owned else "no")
     ctx.state.update(vm_created_by_up=True, vm_name=ctx.vm_name, vm_backend=ctx.backend)
     ctx.save_state()
-    ctx.vmware("import", Vmx=ctx.vmx, Ova=ctx.image_path, VmName=ctx.vm_name, VmDir=ctx.private_dir / "vm")
     if not ctx.dry_run:
         update_env_value(ctx.env_path, "VMX_PATH", _env_quote_double(ctx.vmx))
     return False
@@ -1338,6 +1340,8 @@ def cmd_remove(args):
             return 0
 
         backend = state.get("vm_backend")
+        if backend == "virtualbox" and backend not in REMOVE_BACKENDS:
+            raise StepError("此版本暂不支持卸载 VirtualBox 实例，请在 VirtualBox 中手动删除")
         snapshot = state.get("clean_snapshot")
         owned = state.get("vm_created_by_up") is True
         recorded_vm = state.get("vm_name")
