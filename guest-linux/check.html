@@ -4,18 +4,20 @@
 body{font:15px system-ui,-apple-system,sans-serif;max-width:720px;margin:40px auto;padding:0 20px;color:#1d1d1f}
 h1{font-size:22px;margin:0 0 4px}
 #verdict{font-size:20px;font-weight:600;padding:16px 20px;border-radius:12px;margin:20px 0;background:#f2f2f7}
-#verdict.ok{background:#d9f7e1;color:#0a6b2c}#verdict.bad{background:#fde2e1;color:#a3140e}
+#verdict.pending{background:#fff4cc;color:#705000}#verdict.ok{background:#d9f7e1;color:#0a6b2c}#verdict.bad{background:#fde2e1;color:#a3140e}
 table{border-collapse:collapse;width:100%}td{padding:8px 6px;border-bottom:1px solid #e5e5ea;vertical-align:top}
 td:first-child{width:28px;font-size:18px}.dim{color:#86868b;font-size:13px}button{font-size:14px;padding:6px 14px}
 </style></head><body>
 <h1>Network Check</h1>
 <div class="dim">Checks this browser's public IP and settings before you sign in anywhere.</div>
-<div id="verdict">Checking…</div>
+<div id="verdict" class="pending" role="status">正在检查网络…</div>
 <table id="rows"></table>
 <p><button onclick="location.reload()">Check again</button></p>
 <script>
 const EXPECT_IP = "<EXPECTED_EGRESS_IP>", EXPECT_TZ = "<TIMEZONE>", EXPECT_ASN = "<EXPECTED_EGRESS_ASN>";
 const rows = document.getElementById("rows"), results = [];
+const ipinfoURL = "https://ipinfo.io/json", ipqueryURL = "https://api.ipquery.io/?format=json";
+const ipifyURL = "https://api.ipify.org?format=json";
 function row(ok, name, detail){
   results.push(ok);
   const tr = rows.insertRow();
@@ -23,7 +25,54 @@ function row(ok, name, detail){
   const td = tr.insertCell(); td.textContent = name;
   if (detail){ const d=document.createElement("div"); d.className="dim"; d.textContent=detail; td.appendChild(d); }
 }
-async function getJSON(url){ const r = await fetch(url, {cache:"no-store"}); return r.json(); }
+function egressInfo(data){
+  if (typeof data?.ip !== "string" || !data.ip ||
+      typeof data.timezone !== "string" || !data.timezone ||
+      typeof data.org !== "string" || !/^AS\d+\b/.test(data.org)) return null;
+  return data;
+}
+function ipqueryInfo(data){
+  return egressInfo({
+    ip: data?.ip,
+    timezone: data?.location?.timezone,
+    city: data?.location?.city,
+    region: data?.location?.state,
+    country: data?.location?.country_code,
+    org: [data?.isp?.asn, data?.isp?.org].filter(Boolean).join(" ")
+  });
+}
+async function getJSON(url, deadline){
+  if (deadline.aborted) return null;
+  try {
+    const signal = AbortSignal.any([deadline, AbortSignal.timeout(6000)]);
+    const response = await fetch(url, {cache:"no-store", signal});
+    return response.ok ? await response.json() : null;
+  } catch {
+    return null;
+  }
+}
+async function probeEgress(){
+  // Chromium can open this page while the guest's proxy is still starting.
+  const budget = 30000, end = performance.now() + budget;
+  const deadline = AbortSignal.timeout(budget);
+  let info = null, ip2 = "";
+  for (const delay of [0, 2000, 4000, 8000]){
+    const remaining = end - performance.now();
+    if (deadline.aborted || remaining <= 0) break;
+    if (delay) await new Promise(resolve => setTimeout(resolve, Math.min(delay, remaining)));
+    if (!info) {
+      info = ipqueryInfo(await getJSON(ipqueryURL, deadline)) ||
+        egressInfo(await getJSON(ipinfoURL, deadline));
+    }
+    // ipify provides an independent IP check. It cannot satisfy the ASN or time zone checks.
+    if (!ip2) {
+      const second = await getJSON(ipifyURL, deadline);
+      if (typeof second?.ip === "string") ip2 = second.ip;
+    }
+    if (info && ip2) break;
+  }
+  return {info: info || {}, ip2};
+}
 function webrtcIPs(ms){
   return new Promise(res => {
     const ips = new Set();
@@ -36,9 +85,7 @@ function webrtcIPs(ms){
 }
 const isPrivate = ip => /^(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|198\.18\.)/.test(ip);
 (async () => {
-  let info = {}, ip2 = "";
-  try { info = await getJSON("https://ipinfo.io/json"); } catch(e){}
-  try { ip2 = (await getJSON("https://api.ipify.org?format=json")).ip; } catch(e){}
+  const [{info, ip2}, ips] = await Promise.all([probeEgress(), webrtcIPs(4000)]);
   row(info.ip === EXPECT_IP, "Public IP", (info.ip || "unreachable") + (info.city ? ` — ${info.city}, ${info.region}, ${info.country} (${info.org})` : ""));
   row(ip2 === EXPECT_IP, "Public IP (second source)", ip2 || "unreachable");
   row((info.org || "").split(" ")[0] === EXPECT_ASN, "IP network (ISP)", info.org || "unknown");
@@ -46,10 +93,10 @@ const isPrivate = ip => /^(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[0
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
   row(tz === EXPECT_TZ, "Browser time zone", tz);
   row(/^en-US/.test(navigator.language), "Browser language", navigator.languages.join(", "));
-  const leaked = [...await webrtcIPs(4000)].filter(ip => !isPrivate(ip) && ip !== EXPECT_IP);
+  const leaked = [...ips].filter(ip => !isPrivate(ip) && ip !== EXPECT_IP);
   row(leaked.length === 0, "WebRTC leak", leaked.length ? "Other public IP exposed: " + leaked.join(", ") : "No other public IP exposed");
   const v = document.getElementById("verdict");
   if (results.every(Boolean)){ v.className = "ok"; v.textContent = "All good — you can sign in."; }
-  else { v.className = "bad"; v.textContent = "Do NOT sign in. Something is wrong — ask the admin."; }
+  else { v.className = "bad"; v.textContent = "Do NOT sign in. 稍后刷新或运行 verify-linux.sh --fail-closed。"; }
 })();
 </script></body></html>
