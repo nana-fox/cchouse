@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="420" viewBox="0 0 900 420" role="img" aria-labelledby="title description" xml:lang="zh-CN">
+  <title id="title">cchouse 网络原理</title>
+  <desc id="description">隔离虚拟机位于你的电脑内，通过你的节点访问 Claude。虚拟机不能访问你电脑的网络。节点断开时，虚拟机断网，你的电脑照常上网。</desc>
+  <defs>
+    <marker id="forward" markerWidth="12" markerHeight="12" refX="11" refY="6" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M1 1L11 6L1 11Z" fill="#195489"/>
+    </marker>
+    <marker id="blocked" markerWidth="12" markerHeight="12" refX="11" refY="6" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M1 1L11 6L1 11Z" fill="#ad3039"/>
+    </marker>
+  </defs>
+
+  <rect x="1" y="1" width="898" height="418" rx="24" fill="#ffffff" stroke="#cdd9e5" stroke-width="2"/>
+  <rect x="32" y="31" width="448" height="326" rx="18" fill="#f3f7fb" stroke="#8199b1" stroke-width="2"/>
+
+  <rect x="64" y="85" width="303" height="104" rx="14" fill="#ffffff" stroke="#195489" stroke-width="2"/>
+  <g fill="none" stroke="#195489" stroke-width="3" marker-end="url(#forward)">
+    <path d="M367 137H535"/>
+    <path d="M707 137H749"/>
+  </g>
+  <rect x="541" y="104" width="166" height="66" rx="14" fill="#eef5fc" stroke="#195489" stroke-width="2"/>
+  <rect x="755" y="104" width="111" height="66" rx="14" fill="#eef5fc" stroke="#195489" stroke-width="2"/>
+
+  <path d="M216 189V246" fill="none" stroke="#ad3039" stroke-width="3" stroke-dasharray="7 6" marker-end="url(#blocked)"/>
+  <circle cx="216" cy="218" r="15" fill="#f3f7fb"/>
+  <rect x="64" y="252" width="303" height="56" rx="14" fill="#fff0f0" stroke="#ad3039" stroke-width="2"/>
+
+  <path d="M32 371H868" stroke="#d9e3ed" stroke-width="1"/>
+  <g font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, system-ui, sans-serif" fill="#172c42">
+    <text x="54" y="64" font-size="22" font-weight="700">你的电脑</text>
+    <text x="216" y="128" text-anchor="middle" font-size="22" font-weight="700">隔离虚拟机</text>
+    <text x="216" y="157" text-anchor="middle" font-size="18" fill="#3b566e">Chromium + Claude Code</text>
+    <text x="426" y="122" text-anchor="middle" font-size="17" font-weight="700" fill="#164b79">唯一出口</text>
+    <text x="624" y="144" text-anchor="middle" font-size="19" font-weight="700">你自己的节点</text>
+    <text x="811" y="144" text-anchor="middle" font-size="19" font-weight="700">Claude</text>
+
+    <text x="216" y="227" text-anchor="middle" font-size="24" font-weight="700" fill="#ad3039">✕</text>
+    <text x="238" y="224" font-size="17" font-weight="700" fill="#8a2630">堵死</text>
+    <text x="216" y="287" text-anchor="middle" font-size="19" font-weight="700" fill="#8a2630">你电脑的网络</text>
+    <text x="54" y="338" font-size="17" fill="#354e65">你的电脑照常上网，不受影响</text>
+
+    <text x="450" y="400" text-anchor="middle" font-size="18" font-weight="700" fill="#8a2630">节点断了＝虚拟机断网，不会改走你电脑的网络</text>
+  </g>
+</svg>
