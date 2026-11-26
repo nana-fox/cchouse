@@ -10,6 +10,7 @@ import ctypes
 import datetime
 import ipaddress
 import json
+import math
 import os
 import platform
 import re
@@ -152,6 +153,97 @@ def find_tart_linux_golden_images(th=None):
             ):
                 found.append(entry.name)
     return found
+
+
+# 2026-11-26 只读实测 Mac Tart 完整安装（du，GiB = 1024**3；tart list 的 Size 为四舍五入的整数 GB）：
+#   镜像缓存目录 1109405696（1.033 GiB，含 .tvm 与 Claude Code 包）
+#   黄金镜像 cchouse-debian13-arm64-v2.0.0-preview.2 2268217344（2.112 GiB，Size 2 GB）
+#   客机 2781511680（2.590 GiB，Size 3 GB）
+#   干净快照 2674987008（2.491 GiB，Size 3 GB）
+#   合计 8834121728 字节 = 8.227 GiB。至少 9 GB 是向上取整；建议 12 GB 再留约 3 GB 给客机磁盘增长。
+# 门槛按十进制 GB 向上取整。默认 ~/.tart 与缓存目录同卷。
+BYTES_PER_GB = 1_000_000_000
+TART_LINUX_DISK_MIN_GB = 9
+TART_LINUX_DISK_RECOMMENDED_GB = 12
+# Windows 只按 VirtualBox 实测。来源：status-w7.md 2026-11-26 12:01 DISK_MEASURED。
+# GTR，VirtualBox 7.2.22，HVCI 开，正式 OVA。NTFS 实际分配：
+#   缓存 + 客机 + 干净快照 = 5924945920 字节
+#   安装前后该卷可用空间减少 6196707328 字节（约 5.8 GiB，十进制 6.197 GB）
+# 与 Mac 相同：按十进制 GB 向上取整（6.197 → 7），建议值再留约 3 GB（10）。
+VIRTUALBOX_DISK_MIN_GB = 7
+VIRTUALBOX_DISK_RECOMMENDED_GB = 10
+
+
+def default_install_dir():
+    """安装器写入缓存和 Windows 客机的目录。不创建。"""
+    sys_name = platform.system()
+    if sys_name == "Darwin":
+        return Path.home() / "Library" / "Application Support" / "cchouse"
+    if sys_name == "Windows":
+        base = os.environ.get("LOCALAPPDATA")
+        return (Path(base) if base else (Path.home() / "AppData" / "Local")) / "cchouse"
+    return Path.home() / ".local" / "share" / "cchouse"
+
+
+def existing_volume_path(path):
+    """返回 path，若不存在则返回最近的已存在父目录。不创建任何目录。"""
+    cur = Path(path).expanduser()
+    while not cur.exists():
+        parent = cur.parent
+        if parent == cur:
+            return Path.home()
+        cur = parent
+    if cur.is_dir():
+        return cur
+    return cur.parent
+
+
+def install_disk_probe_path(route, tart_home=None):
+    """安装占用所在卷上的一个已存在目录，供 shutil.disk_usage 使用。"""
+    if route in ("macos-tart", "tart-linux"):
+        home = tart_home if tart_home is not None else tart_home_dir()
+        return existing_volume_path(home)
+    return existing_volume_path(default_install_dir())
+
+
+def disk_requirement_gb(route):
+    """返回 (最低 GB, 建议 GB, 是否为估算)。tart-linux 与 Windows 都是实测。macos-tart 沿用单独的 30/50 GB 规则。"""
+    if route == "tart-linux":
+        return TART_LINUX_DISK_MIN_GB, TART_LINUX_DISK_RECOMMENDED_GB, False
+    if route == "virtualbox-linux":
+        return VIRTUALBOX_DISK_MIN_GB, VIRTUALBOX_DISK_RECOMMENDED_GB, False
+    return None, None, False
+
+
+def assess_install_disk(free_gb, route):
+    """低于实测最低值返回错误，低于建议值只返回警告。"""
+    minimum, recommended, _estimate = disk_requirement_gb(route)
+    if minimum is None:
+        return [], []
+    free_display = math.floor(free_gb * 10) / 10
+    if free_gb < minimum:
+        if route == "tart-linux":
+            need = (
+                f"完整安装至少需要 {minimum} GB（镜像缓存、黄金镜像、客机和干净快照）。"
+                "请清理空间或把 TART_HOME 指到更大的卷。"
+            )
+        else:
+            need = (
+                f"完整安装至少需要 {minimum} GB（含下载的镜像）。"
+                "请清理该卷空间后再安装。"
+            )
+        return [(
+            f"INSUFFICIENT_DISK: 安装目录所在卷剩余 {free_display:.1f} GB，{need}"
+        )], []
+    if free_gb < recommended:
+        if route == "tart-linux":
+            hint = f"建议至少 {recommended} GB，以便客机磁盘继续增长。"
+        else:
+            hint = f"建议至少 {recommended} GB。"
+        return [], [(
+            f"LOW_DISK: 安装目录所在卷剩余 {free_display:.1f} GB，可以安装。{hint}"
+        )]
+    return [], []
 
 
 def expected_image_for_route(route, manifest_path=None):
@@ -427,8 +519,11 @@ def main():
         route = args.route
 
     resolved_tart_home = tart_home_dir(tart_path) if route in ("macos-tart", "tart-linux") else None
-    disk_probe_path = resolved_tart_home if (resolved_tart_home is not None and resolved_tart_home.exists()) else ROOT
-    disk_gb = round(shutil.disk_usage(disk_probe_path).free / (1024 ** 3), 1)
+    disk_probe_path = install_disk_probe_path(route, resolved_tart_home)
+    # The legacy macOS guest keeps its existing 30/50 GiB rules.
+    disk_unit = 1024 ** 3 if route == "macos-tart" else BYTES_PER_GB
+    disk_gb = shutil.disk_usage(disk_probe_path).free / disk_unit
+    disk_min_gb, disk_recommended_gb, disk_estimate = disk_requirement_gb(route)
 
     errors = []
     warnings = []
@@ -453,15 +548,15 @@ def main():
         if disk_gb < 30 and not tart_cached:
             status = "HUMAN_WAIT"
             errors.append(
-                f"INSUFFICIENT_DISK: Tart 目标卷剩余 {disk_gb} GB 且本地无缓存底包（拉取 macOS 镜像需 ≥ 30 GB），"
+                f"INSUFFICIENT_DISK: Tart 目标卷剩余 {disk_gb:.1f} GB 且本地无缓存底包（拉取 macOS 镜像需 ≥ 30 GB），"
                 "请清理空间或将 TART_HOME 指向外置 SSD"
             )
             next_action = "free_disk_or_set_tart_home"
         elif disk_gb < 50:
             if tart_cached:
-                warnings.append(f"LOW_DISK: Tart 目标卷剩余 {disk_gb} GB，建议 ≥ 50 GB（检测到本地缓存底包，可基于 CoW 克隆继续）")
+                warnings.append(f"LOW_DISK: Tart 目标卷剩余 {disk_gb:.1f} GB，建议 ≥ 50 GB（检测到本地缓存底包，可基于 CoW 克隆继续）")
             else:
-                warnings.append(f"LOW_DISK: Tart 目标卷剩余 {disk_gb} GB，建议 ≥ 50 GB（首次拉取镜像空间较紧张，建议预留余量或使用外置 TART_HOME）")
+                warnings.append(f"LOW_DISK: Tart 目标卷剩余 {disk_gb:.1f} GB，建议 ≥ 50 GB（首次拉取镜像空间较紧张，建议预留余量或使用外置 TART_HOME）")
     elif route == "tart-linux":
         if sys_name != "Darwin" or arch != "arm64":
             errors.append("TART_REQUIRES_APPLE_SILICON: tart-linux 仅支持 Apple Silicon macOS")
@@ -469,11 +564,12 @@ def main():
             status = "HUMAN_WAIT"
             errors.append("MISSING_TART: 未检测到 tart，请先执行 brew install cirruslabs/cli/tart")
             next_action = "install_tart"
-        if disk_gb < 15:
-            warnings.append(f"LOW_DISK: Tart 目标卷剩余 {disk_gb} GB，Debian 13 arm64 客机建议 ≥ 15 GB")
-    elif route == "virtualbox-linux":
-        if disk_gb < 25:
-            warnings.append(f"LOW_DISK: 当前可用磁盘 {disk_gb} GB，Debian 13 客机建议 ≥ 25 GB")
+    disk_errors, disk_warnings = assess_install_disk(disk_gb, route)
+    errors.extend(disk_errors)
+    warnings.extend(disk_warnings)
+    if disk_errors and status == "PREFLIGHT_OK":
+        status = "PREFLIGHT_FAILED"
+        next_action = "free_disk"
 
     stripe_check = None
     if args.env_path:
@@ -523,7 +619,10 @@ def main():
             "os": sys_name,
             "arch": arch,
             "ram_gb": ram_gb,
-            "disk_free_gb": disk_gb,
+            "disk_free_gb": round(disk_gb, 1),
+            "disk_min_gb": disk_min_gb,
+            "disk_recommended_gb": disk_recommended_gb,
+            "disk_estimate": disk_estimate,
             "python": platform.python_version(),
             "tart_found": bool(tart_path),
             "tart_home": str(resolved_tart_home) if resolved_tart_home is not None else None,

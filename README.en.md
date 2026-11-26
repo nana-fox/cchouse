@@ -36,14 +36,21 @@ cchouse uses only the one node you configure, sets the VM's time zone, language,
 
 ## Quick start
 
-This page matches image `v2.0.0-preview.2`. The installer downloads the file from the in-repo image manifest and checks it. [Image size and SHA-256](guest-linux/image-manifest.json)
+The installer downloads and verifies the matching guest image and official Claude Code package. [Image manifest](guest-linux/image-manifest.json)
 
-**Step 1: Install the base tools and the VM software** (one time)
+### Windows (x64)
 
-- On an **Apple Silicon Mac**, install [Homebrew](https://brew.sh), Git, and Python 3, then run `brew install cirruslabs/cli/tart`.
-- On **Windows (x64)**, install [Git for Windows](https://git-scm.com/download/win), Python 3 (run it as `py -3` in PowerShell), and the OpenSSH client (Windows Settings → Optional features). Confirm that CPU virtualization is enabled in the BIOS. Then install VMware Workstation Pro (the download needs a Broadcom account). The installer uses its `vmrun.exe` and `ovftool.exe`.
+Open Windows PowerShell and run this one line to install `v2.0.0-preview.3`.
 
-**Step 2: Run the installer and paste a single-node link**
+```powershell
+$f = "$env:TEMP\cchouse-bootstrap-$([guid]::NewGuid().ToString('N')).ps1"; iwr https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.3/bootstrap-windows.ps1 -UseBasicParsing -OutFile $f -ErrorAction Stop; if ((Get-FileHash $f -Algorithm SHA256).Hash -ne 'd7cb9db54405efa36d8f0624f691a455fe52128d72e08eb9ad2238450ce39576') { throw 'SHA-256 mismatch' }; Unblock-File -LiteralPath $f; powershell -NoProfile -ExecutionPolicy RemoteSigned -File $f -CleanupBootstrap
+```
+
+When prompted, paste your node link. The input is hidden. If VirtualBox is missing, the installer installs it automatically. Click **Yes** once when Windows asks for User Account Control (UAC) approval.
+
+### Apple Silicon Mac
+
+Install [Homebrew](https://brew.sh), Git, and Python 3, then run `brew install cirruslabs/cli/tart`.
 
 ```bash
 git clone https://github.com/nana-fox/cchouse.git
@@ -51,13 +58,11 @@ cd cchouse
 python3 -I scripts/cchouse.py up --tag cc01
 ```
 
-In Windows PowerShell, run `py -3 -I scripts/cchouse.py up --tag cc01`.
+When prompted, paste your node link.
 
-When prompted, paste the node link. The input is hidden. The installer applies and displays the exit time zone and expected exit IP, then continues through automated verification. The installer downloads and checks the image and the official Claude Code package in the background over the host network, and at the same time finishes configuration and its own checks. On Apple Silicon Mac and on Windows it creates the guest (importing the image or cloning an existing golden image), injects the configuration offline, deletes the plaintext config files, reboots onto the network, runs `verify-linux.sh --fail-closed`, and saves a clean snapshot after that passes. [Manual install](docs/manual-install.md)
+### Open the guest and sign in
 
-If installation fails, it stops on the step that failed. Fix the cause it prints, then rerun the same command from the same directory. Keep the same `--tag` and any custom directory arguments. The installer resumes from the saved steps and the downloads it has already checked.
-
-**Step 3: Open the VM desktop, and sign in only after every network check passes**
+The installer configures the guest and runs automated checks, then saves a clean snapshot. If a step fails, fix the issue shown and rerun your platform's original command. Verified downloads and completed steps are reused.
 
 After the automated checks pass, open the network check page on the VM desktop (the picture above). After every network check passes, sign in to Claude in **the browser inside the VM**. That page checks the network only. It does not say anything about the account.
 
@@ -72,7 +77,7 @@ To run each step yourself, or to have an AI agent install it for you, see [docs/
 | Your computer | VM software | Status |
 |---|---|---|
 | Apple Silicon Mac (M series) | Tart | ✅ Public `v2.0.0-preview.2` cold install finished on a Mac mini |
-| Windows (x64) | VMware Workstation Pro | ✅ `preview.2` passed real-machine import and desktop verification |
+| Windows (x64) | VirtualBox | `preview.3` pending validation |
 | Intel Mac | — | Not supported for now |
 
 The guest is always Debian 13 + Chromium + Claude Code. A Linux computer is not supported as the host.
@@ -80,14 +85,13 @@ The guest is always Debian 13 + Chromium + Claude Code. A Linux computer is not 
 **First install with an empty cache** (includes the image and Claude Code downloads)
 
 - **Apple Silicon Mac**: a public `v2.0.0-preview.2` empty-cache install on a Mac mini took **2 minutes 15 seconds**, covering the download, automated verification, and saving a clean snapshot. The download went through the host proxy. The image averaged 20.67 MiB/s, and Claude Code averaged 16.31 MiB/s.
-- **Windows (VMware)**: `v2.0.0-preview.2` took about **3 minutes 5 seconds** from import through a passing desktop verification. The image is about 1.58 GB. A full empty-cache run that includes the download has not been measured yet.
 
 ---
 
 ## What you need
 
 - **One node** (cchouse does not provide one). SOCKS5, HTTP(S), VLESS, Trojan, and Shadowsocks are supported. UDP protocols such as Hysteria2, TUIC, and WireGuard are not. A node with a fixed IP and a stable region is best.
-- **The computer**: 16 GB of memory or more, and 25 GB of free disk or more, is recommended.
+- **The computer**: 16 GB of memory recommended. Allow at least **7 GB** of free space on Windows (**10 GB** recommended), or at least **9 GB** on Apple Silicon (**12 GB** recommended), including the downloads.
 
 > **About Stripe**: some nodes block the payment service Stripe. That only affects paying on the claude.ai website. It does not affect signing in or day-to-day use. The installer warns you and does not stop the install. The check only tests whether Stripe can be reached. It does not mean a payment will succeed. You can add a node used only for payment. See [docs/proxy-modes.md](docs/proxy-modes.md).
 
@@ -134,7 +138,7 @@ Installer downloads follow the proxy settings of the host network. When a downlo
 <details>
 <summary><b>Clash TUN is on, and the first exit check fails?</b></summary>
 
-Wait 1–2 minutes, then rerun the install command from Quick start in the same directory, with the same `--tag`. The installer resumes and runs verification again. If the guest is already shut down, start that same guest in the VM app first.
+Wait 1–2 minutes, then rerun the same command from Quick start. The installer resumes and runs verification again. If the guest is already shut down, start that same guest in the VM app first.
 
 If it still fails, add a direct rule for the node’s own IPv4 address before the host Clash catch-all rule, for example `IP-CIDR,<node IPv4>/32,DIRECT,no-resolve`, then rerun the original install command. Put that direct rule only in Clash on the host.
 
@@ -143,15 +147,13 @@ If it still fails, add a direct rule for the node’s own IPv4 address before th
 <details>
 <summary><b>Something went wrong during install. What now?</b></summary>
 
-Export a redacted diagnostic package with the `instance.env` the install created. If the guest is already running, add `--vm-ssh` so the tool can try to collect guest diagnostics. The commands below use the default directory and the tag `cc01`.
+Export a redacted diagnostic package with the `instance.env` the install created. If the guest is already running, add `--vm-ssh` so the tool can try to collect guest diagnostics. The Mac example uses the default directory and the tag `cc01`.
 
 ```bash
 python3 -I scripts/doctor.py --env "$HOME/Library/Application Support/cchouse/cc01/instance.env"
 ```
 
-```powershell
-py -3 -I scripts/doctor.py --env "$env:LOCALAPPDATA\cchouse\cc01\instance.env"
-```
+On Windows, use the [diagnostic instructions for one-line installs](docs/operations.md#windows-一键安装后的诊断与卸载).
 
 If the install has not created `instance.env` yet, omit `--env` and collect the host diagnostics first.
 
@@ -159,26 +161,19 @@ If the install has not created `instance.env` yet, omit `--env` and collect the 
 
 </details>
 
-<details>
-<summary><b>Why does VMware require a Broadcom account?</b></summary>
-
-VMware is free for personal use now, but the vendor requires a Broadcom account before you can download it. That step cannot be skipped today. We are evaluating alternatives that do not require an account. Tart, used on Apple Silicon Mac, does not require one.
-
-</details>
-
 ---
 
 ## Uninstall
 
-Once the install command has finished, run this from the cloned cchouse folder. Replace `cc01` with the `--tag` you used to install.
+On Mac, wait for installation to finish, then run this from the cloned cchouse folder. Replace `cc01` with the `--tag` you used to install.
 
 ```bash
 python3 -I scripts/cchouse.py remove --tag cc01
 ```
 
-In Windows PowerShell, use `py -3 -I scripts/cchouse.py remove --tag cc01`. If you installed with `--private-dir`, pass the same path when uninstalling.
+On Windows, use the [uninstall instructions for one-line installs](docs/operations.md#windows-一键安装后的诊断与卸载). If you installed with `--private-dir`, supply the same path when uninstalling.
 
-The installer lists the VM, clean snapshot, private folder, and temporary plaintext it can verify before asking for confirmation. Enter cancels by default. Use `--yes` to skip confirmation. Deleting a VMware VM also deletes all its built-in snapshots. On VirtualBox, uninstall powers the VM off and then runs `VBoxManage unregistervm --delete` for the VM whose name matches the install record exactly. If an older installation lacks a record that verifies ownership, check the VM in your virtualization app and follow the manual cleanup instructions.
+The installer lists the VM, clean snapshot, private folder, and temporary plaintext it can verify before asking for confirmation. Enter cancels by default. Use `--yes` to skip confirmation. On VirtualBox, uninstall powers the VM off and then runs `VBoxManage unregistervm --delete` for the VM whose name matches the install record exactly. If an older installation lacks a record that verifies ownership, check the VM in your virtualization app and follow the manual cleanup instructions.
 
 The golden image and downloads stay in place by default so other instances can reuse them. If you no longer need them, add `--purge-cache` to list the associated Tart golden image and recognized downloads with their sizes for removal. The installer reports what remains and how to clean it up manually.
 

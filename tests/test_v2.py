@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """cchouse v1 兼容与 v2 (Linux/EXIT_MODE/preflight) 单元测试。"""
+import contextlib
+import io
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -8,6 +11,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 RENDER = ROOT / "scripts" / "render.py"
@@ -226,6 +230,92 @@ class TestCchouseV2(unittest.TestCase):
             self.assertEqual(state2["step"], "step1_route")
             self.assertEqual(state2["status"], "HUMAN_WAIT")
             self.assertEqual(state2["next_action"], "wait_user_proxy")
+
+    def test_install_disk_thresholds_match_measured_footprint(self):
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import preflight as preflight_mod
+
+        # Mac Tart 只读实测：缓存 + 黄金镜像 + 客机 + 干净快照。最低值不得低于这次占用。
+        measured = 1109405696 + 2268217344 + 2781511680 + 2674987008
+        self.assertEqual(measured, 8834121728)
+        self.assertGreaterEqual(preflight_mod.TART_LINUX_DISK_MIN_GB, measured / preflight_mod.BYTES_PER_GB)
+        self.assertEqual(preflight_mod.TART_LINUX_DISK_MIN_GB, 9)
+        self.assertEqual(preflight_mod.TART_LINUX_DISK_RECOMMENDED_GB, 12)
+        self.assertGreater(
+            preflight_mod.TART_LINUX_DISK_RECOMMENDED_GB,
+            preflight_mod.TART_LINUX_DISK_MIN_GB,
+        )
+
+        # Windows 只按 VirtualBox 实测。与 Mac 一样按十进制 GB 向上取整，再留约 3 GB。
+        vbox_kept = 1770708992 + 4154236928
+        vbox_drop = 6196707328
+        self.assertEqual(vbox_kept, 5924945920)
+        self.assertEqual(math.ceil(vbox_drop / 1_000_000_000), 7)
+        self.assertEqual(preflight_mod.VIRTUALBOX_DISK_MIN_GB, 7)
+        self.assertEqual(preflight_mod.VIRTUALBOX_DISK_RECOMMENDED_GB, 10)
+        self.assertEqual(preflight_mod.disk_requirement_gb("virtualbox-linux"), (7, 10, False))
+
+        below, _warn = preflight_mod.assess_install_disk(8.9, "tart-linux")
+        self.assertTrue(any("INSUFFICIENT_DISK" in item and "至少需要 9 GB" in item for item in below))
+        self.assertEqual(_warn, [])
+        between_err, between_warn = preflight_mod.assess_install_disk(9.0, "tart-linux")
+        self.assertEqual(between_err, [])
+        self.assertTrue(any("LOW_DISK" in item and "建议至少 12 GB" in item for item in between_warn))
+        self.assertFalse(any("估算" in item for item in between_warn))
+        ok_err, ok_warn = preflight_mod.assess_install_disk(12.0, "tart-linux")
+        self.assertEqual((ok_err, ok_warn), ([], []))
+
+        win_below, win_warn = preflight_mod.assess_install_disk(7 - 1 / preflight_mod.BYTES_PER_GB, "virtualbox-linux")
+        self.assertTrue(any("INSUFFICIENT_DISK" in item and "至少需要 7 GB" in item for item in win_below))
+        self.assertFalse(any("估算" in item for item in win_below))
+        self.assertEqual(win_warn, [])
+        win_mid_err, win_mid_warn = preflight_mod.assess_install_disk(7.0, "virtualbox-linux")
+        self.assertEqual(win_mid_err, [])
+        self.assertTrue(any("建议至少 10 GB" in item for item in win_mid_warn))
+        self.assertFalse(any("估算" in item for item in win_mid_warn))
+        win_ok_err, win_ok_warn = preflight_mod.assess_install_disk(10.0, "virtualbox-linux")
+        self.assertEqual((win_ok_err, win_ok_warn), ([], []))
+
+        # v1 macOS 客机仍走 30/50 GB，不套用 Debian 实测值。
+        self.assertEqual(preflight_mod.assess_install_disk(1.0, "macos-tart"), ([], []))
+
+        with tempfile.TemporaryDirectory() as td:
+            missing = Path(td) / "not-created" / "cchouse"
+            found = preflight_mod.existing_volume_path(missing)
+            self.assertEqual(found, Path(td))
+            self.assertFalse(missing.exists())
+            self.assertFalse((Path(td) / "not-created").exists())
+
+        ps1 = (ROOT / "scripts" / "preflight.ps1").read_text(encoding="utf-8")
+        self.assertIn("$diskMinGb = 7", ps1)
+        self.assertIn("$diskRecommendedGb = 10", ps1)
+        self.assertIn("/ 1000000000.0", ps1)
+        self.assertIn("至少需要 $diskMinGb GB", ps1)
+        self.assertIn("建议至少 $diskRecommendedGb GB", ps1)
+        self.assertIn("disk_estimate = $false", ps1)
+        self.assertNotIn("估算", ps1)
+
+    def test_virtualbox_preflight_reads_install_volume_and_reports_disk_failure(self):
+        sys.path.insert(0, str(ROOT / "scripts"))
+        import preflight as preflight_mod
+
+        with tempfile.TemporaryDirectory() as td:
+            parent = Path(td)
+            target = parent / "missing" / "cchouse"
+            output = io.StringIO()
+            with mock.patch.object(sys, "argv", ["preflight.py", "--route", "virtualbox-linux"]), \
+                    mock.patch.object(preflight_mod, "default_install_dir", return_value=target), \
+                    mock.patch.object(preflight_mod.shutil, "disk_usage", return_value=mock.Mock(free=6_999_999_999)) as usage, \
+                    contextlib.redirect_stdout(output), self.assertRaises(SystemExit) as exit_info:
+                preflight_mod.main()
+            self.assertEqual(exit_info.exception.code, 1)
+            usage.assert_called_once_with(parent)
+            self.assertFalse(target.exists())
+            result = json.loads(output.getvalue())
+            self.assertEqual(result["next_action"], "free_disk")
+            self.assertEqual(result["host"]["disk_min_gb"], 7)
+            self.assertEqual(result["host"]["disk_recommended_gb"], 10)
+            self.assertTrue(any(error.startswith("INSUFFICIENT_DISK:") for error in result["errors"]))
 
     def test_tart_cached_image_ignores_deployed_vms(self):
         sys.path.insert(0, str(ROOT / "scripts"))
