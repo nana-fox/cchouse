@@ -317,6 +317,25 @@ try {
     Assert-Equal "remove powers off then unregisters only the verified UUID" (
       $commands -join "|"
     ) "controlvm $fixtureUuid poweroff|wait $fixtureUuid|unregistervm $fixtureUuid --delete"
+
+    if ($env:OS -eq "Windows_NT") {
+      $prefix = '\\?\'
+      foreach ($prefixedProviderPath in @($false, $true)) {
+        $commands.Clear()
+        $vm.Registered = $true
+        $vm.Config = $config.Replace('\', '/').ToUpperInvariant()
+        $removeDir = $vmDir
+        if ($prefixedProviderPath) {
+          $removeDir = $prefix + $removeDir
+        } else {
+          $vm.Config = $prefix + $vm.Config
+        }
+        Remove-CchouseVBoxVM -Name $fixtureName -VmDir $removeDir
+        Assert-Equal "Windows remove normalizes extended paths ($prefixedProviderPath)" (
+          $commands -join "|"
+        ) "controlvm $fixtureUuid poweroff|wait $fixtureUuid|unregistervm $fixtureUuid --delete"
+      }
+    }
   }
 
   $serial = Join-Path $tmp "logs\hostkey.serial"

@@ -59,11 +59,18 @@ if [ -z "${STRIPE_EXIT_MODE:-}" ]; then
   fi
 fi
 
+PY_CMD=""
+if command -v py >/dev/null 2>&1; then
+  PY_CMD="py -3 -I"
+elif command -v python3 >/dev/null 2>&1 && [[ "$(command -v python3)" != *WindowsApps* ]]; then
+  PY_CMD="python3 -I"
+fi
+
 # NAT 端口转发（VirtualBox）时 GUEST_IP 仍是 127.0.0.1，宿主端口不是 22。
 # instance.env 可写 SSH_PORT；不写则保持直连客机的 22。
 if [ "$GUEST_LOCAL" = 1 ]; then
   # verify-linux-native.py 已建立严格校验主机密钥的 SSH 会话。各探针仍以 claude 用户执行。
-  guest() { /bin/sh -c "$1" </dev/null; }
+  guest() { timeout --kill-after=2s 25s /bin/sh -c "$1" </dev/null; }
 else
 SSH_PORT="${SSH_PORT:-22}"
 case "$SSH_PORT" in
@@ -131,11 +138,32 @@ if [ "$needs_win_ssh_path" = 1 ]; then
   SSH_KNOWN_HOSTS="$(win_ssh_path "$SSH_KNOWN_HOSTS")"
 fi
 
-SSH_OPTS=(-F none -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=\"$SSH_KNOWN_HOSTS\"" -p "$SSH_PORT")
+SSH_OPTS=(-n -T -F none -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=\"$SSH_KNOWN_HOSTS\"" -p "$SSH_PORT")
 # scp 的端口是 -P；-p 在 scp 里表示保留时间戳，不能复用 SSH_OPTS。
 SCP_OPTS=(-F none -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=\"$SSH_KNOWN_HOSTS\"" -P "$SSH_PORT")
-guest() { "$SSH_BIN" "${SSH_OPTS[@]}" "claude@$GUEST_IP" "$@"; }
-guest_scp() { "$SCP_BIN" "${SCP_OPTS[@]}" "$@"; }
+# ConnectTimeout 只限制握手。SSH 已连接但探针不返回时也要结束宿主子进程。
+run_ssh_probe() {
+  local seconds="$1"
+  shift
+  if [ -n "$PY_CMD" ]; then
+    $PY_CMD -c 'import subprocess, sys
+try:
+    sys.exit(subprocess.run(sys.argv[2:], stdin=subprocess.DEVNULL, timeout=float(sys.argv[1])).returncode)
+except subprocess.TimeoutExpired:
+    print("SSH probe exceeded " + sys.argv[1] + " seconds", file=sys.stderr)
+    sys.exit(124)
+except OSError as exc:
+    print(exc, file=sys.stderr)
+    sys.exit(125)' "$seconds" "$@"
+  elif command -v timeout >/dev/null 2>&1; then
+    timeout --kill-after=2s "$seconds" "$@" </dev/null
+  else
+    echo "SSH 探测超时控制需要 Python 3 或 timeout" >&2
+    return 125
+  fi
+}
+guest() { run_ssh_probe 30 "$SSH_BIN" "${SSH_OPTS[@]}" "claude@$GUEST_IP" "$@"; }
+guest_scp() { run_ssh_probe 30 "$SCP_BIN" "${SCP_OPTS[@]}" "$@"; }
 
 # 单测探针：正常验收不设置。退出码 86，避免被当成验收通过。
 # VERIFY_LINUX_TRANSPORT_PROBE_EXEC=1 时才真正调用 ssh/scp（假二进制）。默认只打印参数。
@@ -145,7 +173,7 @@ if [ "${VERIFY_LINUX_TRANSPORT_PROBE:-}" = 1 ]; then
   printf 'SSH_OPTS=%s\n' "${SSH_OPTS[*]}"
   printf 'SCP_OPTS=%s\n' "${SCP_OPTS[*]}"
   if [ "${VERIFY_LINUX_TRANSPORT_PROBE_EXEC:-}" = 1 ]; then
-    "$SSH_BIN" "${SSH_OPTS[@]}" "claude@$GUEST_IP" true
+    guest true
     guest_scp -- "probe-local" "claude@${GUEST_IP}:probe-remote"
   fi
   exit 86
@@ -246,12 +274,6 @@ egress_root() {
   printf '%s' "$ip"
 }
 
-PY_CMD=""
-if command -v py >/dev/null 2>&1; then
-  PY_CMD="py -3 -I"
-elif command -v python3 >/dev/null 2>&1 && [[ "$(command -v python3)" != *WindowsApps* ]]; then
-  PY_CMD="python3 -I"
-fi
 json_field() {
   if [ -n "$PY_CMD" ]; then
     $PY_CMD -c 'import sys,json

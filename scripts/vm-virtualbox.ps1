@@ -397,6 +397,19 @@ function Get-CchouseRegisteredVBoxUuid {
   return $vmUuid
 }
 
+function ConvertTo-CchouseVBoxFullPath {
+  param([string]$Path)
+  if ([System.IO.Path]::DirectorySeparatorChar -eq '\') {
+    $Path = $Path.Replace('/', '\')
+    if ($Path.StartsWith('\\?\UNC\', [System.StringComparison]::OrdinalIgnoreCase)) {
+      $Path = '\\' + $Path.Substring(8)
+    } elseif ($Path -match '^\\\\\?\\[a-z]:\\') {
+      $Path = $Path.Substring(4)
+    }
+  }
+  return [System.IO.Path]::GetFullPath($Path)
+}
+
 function Remove-CchouseVBoxVM {
   param([string]$Name, [string]$VmDir)
   if ($Name -cnotmatch '^claude-[a-z][a-z0-9_-]{1,15}$') { throw "VM name is not an exact instance name" }
@@ -422,8 +435,8 @@ function Remove-CchouseVBoxVM {
       break
     }
   }
-  $expected = Join-Path (Join-Path $VmDir $Name) "$Name.vbox"
-  if (-not $cfg -or [System.IO.Path]::GetFullPath($cfg) -ine [System.IO.Path]::GetFullPath($expected)) {
+  $expected = [System.IO.Path]::Combine((ConvertTo-CchouseVBoxFullPath $VmDir), $Name, "$Name.vbox")
+  if (-not $cfg -or (ConvertTo-CchouseVBoxFullPath $cfg) -ine $expected) {
     throw "registered VM config is outside the recorded instance: $Name"
   }
 

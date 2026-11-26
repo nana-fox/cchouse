@@ -180,6 +180,29 @@ class TestRemove(unittest.TestCase):
         self.assertIn(str(vm_dir / f"{self.vm_name}.vbox"), text)
         self.assertTrue(self.image.is_file())
 
+    @unittest.skipUnless(os.name == "nt", "Windows extended paths")
+    def test_virtualbox_accepts_prefixed_state_with_default_remove(self):
+        prefix = "\\\\?\\"
+        self.write_state(
+            vm_backend="virtualbox", clean_snapshot="cchouse-clean",
+            private_dir=(prefix + str(self.private).removeprefix(prefix)).replace("\\", "/").swapcase(),
+            cache_dir=prefix + str(self.cache).removeprefix(prefix),
+        )
+        rc, text = self.remove(yes=True)
+        self.assertEqual(rc, 0, text)
+        self.assertFalse(self.private.exists())
+        self.assertEqual(self.mock_run.call_args.args[0][-5], str(self.private / "vm").removeprefix(prefix))
+
+    @unittest.skipUnless(os.name == "nt", "Windows extended paths")
+    def test_virtualbox_accepts_plain_state_with_explicit_prefixed_path(self):
+        prefix = "\\\\?\\"
+        plain = str(self.private).removeprefix(prefix)
+        self.write_state(vm_backend="virtualbox", clean_snapshot="cchouse-clean", private_dir=plain)
+        rc, text = self.remove(yes=True, private_dir=prefix + plain)
+        self.assertEqual(rc, 0, text)
+        self.assertFalse(self.private.exists())
+        self.assertEqual(self.mock_run.call_args.args[0][-5], str(Path(plain) / "vm"))
+
     def test_virtualbox_cancel_after_preview_keeps_instance(self):
         self.write_state(vm_backend="virtualbox", clean_snapshot="cchouse-clean")
         with mock.patch("builtins.input", return_value="") as confirm:

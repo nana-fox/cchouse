@@ -89,12 +89,25 @@ class WindowsNativeVerifyTests(unittest.TestCase):
             self.assertIn(str(identity.resolve()), args)
             self.assertIn(f'UserKnownHostsFile="{known_hosts.resolve().as_posix()}"', args)
             self.assertIn("StrictHostKeyChecking=yes", args)
+            self.assertIn("ServerAliveInterval=5", args)
+            self.assertEqual(run.call_args.kwargs["timeout"], verify.VERIFY_TIMEOUT_SECONDS)
             self.assertEqual(args[-4:], ["-p", "49732", "claude@127.0.0.1", "bash -s -- --guest-local --fail-closed"])
             self.assertIn("export EXPECTED_EGRESS_IP=203.0.113.9\n", payload)
             self.assertIn("export CCHOUSE_HOSTKEY_TRUST=accept-new\n", payload)
             self.assertIn("restore_mihomo", payload)
             for value in ("test-proxy-secret", "test-uuid-secret", str(identity), str(known_hosts)):
                 self.assertNotIn(value, payload)
+
+    def test_ssh_timeout_exits_nonzero_without_printing_command(self):
+        timeout = subprocess.TimeoutExpired(["ssh", "internal command"], verify.VERIFY_TIMEOUT_SECONDS)
+        with tempfile.TemporaryDirectory() as td, mock.patch.object(
+            sys, "argv", ["verify-linux-native.py", str(Path(td) / "instance.env"), "--fail-closed"],
+        ), mock.patch.object(verify.render, "load_env", return_value={}), mock.patch.object(
+            verify, "verify", side_effect=timeout,
+        ), mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+            self.assertEqual(verify.main(), 124)
+            self.assertIn("已终止", err.getvalue())
+            self.assertNotIn("internal command", err.getvalue())
 
     def test_invalid_forward_port_exits_before_openssh(self):
         with mock.patch.object(verify.subprocess, "run") as run, self.assertRaisesRegex(ValueError, "SSH_PORT"):
