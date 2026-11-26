@@ -1,6 +1,7 @@
 # VirtualBox (Windows) guest lifecycle for scripts/cchouse.py up.
 # Cc-prefixed parameters stay out of a dot-sourced caller's scope.
 # NAT only. No add-on package, no host-only adapter, no bridged NIC.
+# Host public keys come from the guest serial log.
 # Do not print credentials.
 param(
   [ValidateSet("", "install", "import", "firstboot", "boot", "snapshot", "exists")] [string]$CcOp = "",
@@ -15,11 +16,13 @@ param(
   [int]$CcFirstbootSeconds = 56,
   [int]$CcSshPort = 0,
   [string]$CcInstaller = "",
-  [string]$CcSha256 = ""
+  [string]$CcSha256 = "",
+  [string]$CcHostKeyLog = ""
 )
 
-$script:CchouseSystem32Ssh = "C:\Windows\System32\OpenSSH\ssh.exe"
-$script:CchouseSystem32Keyscan = "C:\Windows\System32\OpenSSH\ssh-keyscan.exe"
+$script:CchouseHostKeyHelper = Join-Path $PSScriptRoot "windows-hostkey.ps1"
+if (-not (Test-Path -LiteralPath $script:CchouseHostKeyHelper)) { throw "windows-hostkey.ps1 not found" }
+. $script:CchouseHostKeyHelper
 
 function Get-CchouseVBoxManage {
   if ($env:CCHOUSE_VBOXMANAGE -and (Test-Path -LiteralPath $env:CCHOUSE_VBOXMANAGE)) {
@@ -245,8 +248,20 @@ function Resolve-CchouseFirstbootStop {
   throw "firstboot shutdown timed out"
 }
 
+function Enable-CchouseVBoxSerialLog {
+  param([string]$Name, [string]$HostKeyLog)
+  if ([string]::IsNullOrWhiteSpace($HostKeyLog)) { return }
+  Initialize-CchouseHostKeyLog -Path $HostKeyLog
+  # COM1 (0x3F8 IRQ 4) is /dev/ttyS0 in the guest. File mode needs the VM powered off.
+  Invoke-CchouseVBox -CcArgumentList @(
+    "modifyvm", $Name,
+    "--uart1", "0x3F8", "4",
+    "--uartmode1", "file", $HostKeyLog
+  )
+}
+
 function Import-CchouseVBoxOva {
-  param([string]$OvaPath, [string]$Name, [string]$DestDir, [int]$SshPort)
+  param([string]$OvaPath, [string]$Name, [string]$DestDir, [int]$SshPort, [string]$HostKeyLog)
   if (-not (Test-Path -LiteralPath $OvaPath)) { throw "OVA not found" }
   Assert-CchouseSshPort -Port $SshPort
   $vbm = Get-CchouseVBoxManage
@@ -275,11 +290,12 @@ function Import-CchouseVBoxOva {
     "--audio-enabled", "off",
     "--usb-ohci", "off"
   )
+  Enable-CchouseVBoxSerialLog -Name $Name -HostKeyLog $HostKeyLog
   Write-Host "VBOX_IMPORTED=$Name"
 }
 
 function Invoke-CchouseVBoxFirstboot {
-  param([string]$Name, [string]$SeedIso, [int]$Seconds)
+  param([string]$Name, [string]$SeedIso, [int]$Seconds, [string]$HostKeyLog)
   if (-not (Test-Path -LiteralPath $SeedIso)) { throw "seed.iso not found" }
   $vbm = Get-CchouseVBoxManage
   $ide = Get-CchouseIdeController $Name
@@ -291,6 +307,7 @@ function Invoke-CchouseVBoxFirstboot {
     "--type", "dvddrive",
     "--medium", $SeedIso
   )
+  Enable-CchouseVBoxSerialLog -Name $Name -HostKeyLog $HostKeyLog
   Write-Host "Starting offline firstboot (headless, ${Seconds}s)..."
   Start-CchouseVmDetached $Name
   Start-Sleep -Seconds $Seconds
@@ -315,7 +332,8 @@ function Invoke-CchouseVBoxBoot {
     [string]$KeyPath,
     [string]$KnownHostsPath,
     [string]$IpFile,
-    [int]$SshPort
+    [int]$SshPort,
+    [string]$HostKeyLog
   )
   Assert-CchouseSshPort -Port $SshPort
   $vbm = Get-CchouseVBoxManage
@@ -330,22 +348,28 @@ function Invoke-CchouseVBoxBoot {
   }
   & $vbm modifyvm $Name --cableconnected1 on
   if ($LASTEXITCODE -ne 0) { throw "enable NIC failed" }
+  # Read the serial log while the VM is off. A running VM may lock the file.
+  Enable-CchouseVBoxSerialLog -Name $Name -HostKeyLog $HostKeyLog
+  $serialText = Read-CchouseSerialText -Path $HostKeyLog
+  $trust = Resolve-CchouseHostKeyTrust -SerialText $serialText -HostName "127.0.0.1" -Port $SshPort
+  if ($trust.Pinned) {
+    Write-CchouseKnownHostsFile -Path $KnownHostsPath -Line $trust.KnownHostsLine
+  }
   Write-Host "Detached seed.iso; starting networked VM (detached)..."
   Start-CchouseVmDetached $Name
 
   if (-not (Test-Path -LiteralPath $script:CchouseSystem32Ssh)) { throw "System32 OpenSSH ssh.exe not found" }
-  if (-not (Test-Path -LiteralPath $script:CchouseSystem32Keyscan)) { throw "System32 OpenSSH ssh-keyscan.exe not found" }
   if ($KeyPath -and (Test-Path -LiteralPath $KeyPath)) {
     & icacls.exe $KeyPath /inheritance:r /grant:r "${env:USERNAME}:(R,W)" | Out-Null
   }
-  $sshOpts = @(
-    "-F", "none", "-p", "$SshPort", "-i", $KeyPath,
-    "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=NUL",
-    "-o", "LogLevel=ERROR", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes"
-  )
   $ok = $false
-  for ($i = 0; $i -lt 60; $i++) {
-    Start-Sleep -Seconds 3
+  $startedAt = Get-Date
+  while (-not (Test-CchouseSshDeadlineReached -StartedAt $startedAt -LimitSeconds $script:CchouseSshWaitSeconds)) {
+    $remaining = [int][Math]::Floor($script:CchouseSshWaitSeconds - ((Get-Date) - $startedAt).TotalSeconds)
+    if ($remaining -lt 1) { break }
+    $sleepFor = [int][Math]::Min(3, $remaining)
+    if ($sleepFor -lt 1) { break }
+    Start-Sleep -Seconds $sleepFor
     $info = @(Get-CchouseShowvminfoLines -Name $Name)
     $listener = Get-CchouseLoopbackListenerCommand -Port $SshPort
     $present = $null -ne $listener
@@ -354,20 +378,29 @@ function Invoke-CchouseVBoxBoot {
       throw "SSH forward 127.0.0.1:${SshPort} is not owned by $Name"
     }
     if ($decision -ne "probe") { continue }
-    & $script:CchouseSystem32Ssh @sshOpts "claude@127.0.0.1" "true" 2>$null | Out-Null
-    if ($LASTEXITCODE -eq 0) { $ok = $true; break }
+    $pinned = [bool]$trust.Pinned
+    if (-not $pinned) {
+      if (-not (Test-CchouseOwnForward -Lines $info -Port $SshPort -ListenerCommand ([string]$listener))) {
+        throw "SSH forward 127.0.0.1:${SshPort} is not owned by $Name; refusing to record a host key"
+      }
+    }
+    $timeout = $remaining
+    if ($timeout -gt 5) { $timeout = 5 }
+    $verify = @(Get-CchouseSshVerifyOptions -KnownHostsPath $KnownHostsPath -Pinned:$pinned -ConnectTimeout $timeout)
+    $sshOpts = @("-F", "none", "-p", "$SshPort", "-i", $KeyPath) + $verify
+    if (Invoke-CchouseSshTrue -Target "claude@127.0.0.1" -SshOption $sshOpts) {
+      $ok = $true
+      break
+    }
   }
   if (-not $ok) { throw "Timed out waiting for SSH on 127.0.0.1:$SshPort" }
-
-  $info = @(Get-CchouseShowvminfoLines -Name $Name)
-  $listener = Get-CchouseLoopbackListenerCommand -Port $SshPort
-  if (-not (Test-CchouseOwnForward -Lines $info -Port $SshPort -ListenerCommand $listener)) {
-    throw "SSH forward 127.0.0.1:${SshPort} is not owned by $Name; refusing to record a host key"
+  if (-not $trust.Pinned) {
+    $recorded = ""
+    if (Test-Path -LiteralPath $KnownHostsPath) {
+      $recorded = [System.IO.File]::ReadAllText($KnownHostsPath).Trim()
+    }
+    if (-not $recorded) { throw "ssh did not record a host key" }
   }
-  $scan = @(& $script:CchouseSystem32Keyscan -p $SshPort -t ed25519 127.0.0.1 2>$null)
-  $scanText = (@($scan) -join "`n").Trim()
-  if (-not $scanText) { throw "ssh-keyscan returned no host key" }
-  [System.IO.File]::WriteAllText($KnownHostsPath, ($scanText + "`n"), [System.Text.UTF8Encoding]::new($false))
   [System.IO.File]::WriteAllText($IpFile, "127.0.0.1", [System.Text.UTF8Encoding]::new($false))
   Write-Host "GUEST_IP=127.0.0.1"
 }
@@ -389,9 +422,9 @@ if ($CcOp) {
       exit 1
     }
     "install" { Install-CchouseVirtualBox $CcInstaller $CcSha256 }
-    "import" { Import-CchouseVBoxOva $CcOva $CcVmName $CcVmDir $CcSshPort }
-    "firstboot" { Invoke-CchouseVBoxFirstboot $CcVmName $CcSeedIso $CcFirstbootSeconds }
-    "boot" { Invoke-CchouseVBoxBoot $CcVmName $CcSeedIso $CcKey $CcKnownHosts $CcIpFile $CcSshPort }
+    "import" { Import-CchouseVBoxOva $CcOva $CcVmName $CcVmDir $CcSshPort $CcHostKeyLog }
+    "firstboot" { Invoke-CchouseVBoxFirstboot $CcVmName $CcSeedIso $CcFirstbootSeconds $CcHostKeyLog }
+    "boot" { Invoke-CchouseVBoxBoot $CcVmName $CcSeedIso $CcKey $CcKnownHosts $CcIpFile $CcSshPort $CcHostKeyLog }
     "snapshot" { New-CchouseVBoxSnapshot $CcVmName $CcSnapshot }
   }
   exit 0

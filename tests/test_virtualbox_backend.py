@@ -270,8 +270,10 @@ class TestVirtualBoxScript(unittest.TestCase):
         src = PS1.read_text(encoding="utf-8")
         self.assertIn("ADDLOCAL=VBoxApplication", src)
         self.assertIn("127.0.0.1", src)
-        self.assertIn(r"C:\Windows\System32\OpenSSH\ssh.exe", src)
-        self.assertIn(r"C:\Windows\System32\OpenSSH\ssh-keyscan.exe", src)
+        self.assertIn("windows-hostkey.ps1", src)
+        self.assertIn("CchouseSshWaitSeconds", src)
+        self.assertNotIn("ssh-keyscan", src)
+        self.assertNotIn("StrictHostKeyChecking=no", src)
         self.assertIn("emptydrive", src)
         self.assertNotIn("extpack", src.lower())
         self.assertNotIn("Extension_Pack", src)
@@ -284,7 +286,11 @@ class TestVirtualBoxScript(unittest.TestCase):
         self.assertNotIn("$CcSshPort = 2222", src)
         self.assertIn("CcSha256 is required", src)
         self.assertIn("firstboot shutdown timed out", src)
-        self.assertLess(src.rfind("Test-CchouseOwnForward"), src.rfind("CchouseSystem32Keyscan"))
+        boot = src.split("function Invoke-CchouseVBoxBoot", 1)[1].split("function New-CchouseVBoxSnapshot", 1)[0]
+        self.assertLess(boot.find("Resolve-CchouseHostKeyTrust"), boot.find("Start-CchouseVmDetached"))
+        self.assertLess(boot.rfind("Test-CchouseOwnForward"), boot.rfind("Get-CchouseSshVerifyOptions"))
+        firstboot = src.split("function Invoke-CchouseVBoxFirstboot", 1)[1].split("function Invoke-CchouseVBoxBoot", 1)[0]
+        self.assertLess(firstboot.find("Enable-CchouseVBoxSerialLog"), firstboot.find("Start-CchouseVmDetached"))
         self.assertLess(src.rfind("Resolve-CchouseFirstbootStop"), src.find("HARD_POWEROFF=1"))
         self.assertLess(src.find("HARD_POWEROFF=1"), src.find("FIRSTBOOT_STOPPED=OK"))
         self.assertNotIn("Wait-CchousePowerOff $Name 20 | Out-Null", src)
@@ -302,6 +308,39 @@ class TestVirtualBoxScript(unittest.TestCase):
         self.assertNotIn("MISSING_VMWARE", proc.stdout)
         payload = json.loads(proc.stdout)
         self.assertNotIn("MISSING_VMWARE", " ".join(payload.get("errors") or []))
+
+    def test_windows_hostkey_comes_from_serial_not_keyscan(self):
+        helper = (ROOT / "scripts" / "windows-hostkey.ps1").read_text(encoding="utf-8")
+        vmware = (ROOT / "scripts" / "vm-vmware.ps1").read_text(encoding="utf-8")
+        firstboot = (ROOT / "guest-linux" / "firstboot.sh").read_text(encoding="utf-8")
+        uploader = (ROOT / "tools" / "e2e" / "run-gtr.sh").read_text(encoding="utf-8")
+        for name, src in (("helper", helper), ("vmware", vmware), ("firstboot", firstboot)):
+            self.assertNotIn("ssh-keyscan", src, name)
+        self.assertIn(r"C:\Windows\System32\OpenSSH\ssh.exe", helper)
+        self.assertIn("$script:CchouseSshWaitSeconds = 180", helper)
+        self.assertIn("accept-new", helper)
+        self.assertIn("ConnectionAttempts=1", helper)
+        self.assertIn("ConnectTimeout=$ConnectTimeout", helper)
+        self.assertNotIn("StrictHostKeyChecking=no", helper)
+        ssh_fn = helper.split("function Invoke-CchouseSshTrue", 1)[1].split("function ", 1)[0]
+        self.assertLess(ssh_fn.find("Test-CchouseHostKeyMismatch"), ssh_fn.find("return"))
+        self.assertNotIn("ssh-keyscan", vmware)
+        self.assertNotIn("StrictHostKeyChecking=no", vmware)
+        self.assertNotIn("& ssh.exe", vmware)
+        self.assertIn("windows-hostkey.ps1", vmware)
+        self.assertIn("CchouseSystem32Ssh", vmware)
+        boot = vmware.split("function Invoke-CchouseBoot", 1)[1].split("function New-CchouseSnapshot", 1)[0]
+        self.assertLess(boot.find("Get-CchouseHostKeyFromSerialText"), boot.find("Start-VmDetached"))
+        self.assertLess(boot.find("getGuestIPAddress"), boot.find("Get-CchouseSshVerifyOptions"))
+        self.assertIn("CCHOUSE_HOSTKEY", firstboot)
+        self.assertIn("/dev/ttyS0", firstboot)
+        self.assertIn("timeout 2", firstboot)
+        self.assertIn("ssh_host_ed25519_key.pub", firstboot)
+        self.assertNotIn("ssh_host_ed25519_key >/dev/ttyS0", firstboot)
+        self.assertNotIn("cat /etc/ssh/ssh_host_ed25519_key", firstboot)
+        self.assertIn("windows-hostkey.ps1", uploader)
+        tart = (ROOT / "scripts" / "vm-tart.sh").read_text(encoding="utf-8")
+        self.assertIn("ssh-keyscan", tart)
 
 
 if __name__ == "__main__":

@@ -476,6 +476,12 @@ class TestUpPipeline(unittest.TestCase):
                 self.assertIn("https://mirror.example/cc/cchouse-debian13-", out)
                 self.assertIn(marker, out)
                 self.assertIn("verify-linux.sh", out)
+                if backend == "tart":
+                    self.assertNotIn("-CcHostKeyLog", out)
+                else:
+                    self.assertIn("-CcHostKeyLog", out)
+                    self.assertIn("hostkey.serial", out)
+                    self.assertNotIn("ssh-keyscan", out)
                 self.assertFalse((priv / "state.json").exists())
                 self.assertFalse((priv / "seed.iso").exists())
                 self.assertFalse((Path(td) / "cache").exists())

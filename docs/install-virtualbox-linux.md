@@ -29,11 +29,11 @@ VirtualBox 基础包装从 Oracle 官网下载，版本和 SHA-256 写在 `guest
 |---|---|---|
 | `VMNET_CIDR` | `10.0.2.0/24` | VirtualBox NAT 网段，写进客机 SSH 白名单 / mihomo 排除 |
 | `GUEST_IP` | `127.0.0.1` | 宿主只通过回环端口转发连接，不是客机内网地址 `10.0.2.15` |
-| `SSH_PORT` | `2222`–`2421` 中按 tag 选一个空闲端口 | 宿主只绑定 `127.0.0.1:<SSH_PORT>` → 客机 `22`。同一 tag 若 `instance.env` 里已有仍空闲的端口则沿用。探测 SSH 前会核对这台虚拟机的转发规则和监听进程，对不上就不写入 `known_hosts` |
+| `SSH_PORT` | `2222`–`2421` 中按 tag 选一个空闲端口 | 宿主只绑定 `127.0.0.1:<SSH_PORT>` → 客机 `22`。同一 tag 若 `instance.env` 里已有仍空闲的端口则沿用。探测 SSH 前会核对这台虚拟机的转发规则和监听进程 |
 | `GUEST_IF` | `enp0s3` | VirtualBox NAT 网卡在客机里的名字 |
 | `ROUTER_IP` | 不改 | 仍是家里的路由器。验收把它当作必须拦截的地址 |
 
-Windows 上 SSH 使用 `C:\Windows\System32\OpenSSH\ssh.exe`（以及同目录的 `ssh-keyscan.exe`）。不要改用 `C:\Program Files\OpenSSH\ssh.exe`。
+Windows 上 SSH 使用 `C:\Windows\System32\OpenSSH\ssh.exe`。`C:\Program Files\OpenSSH\ssh.exe` 会忽略 `ConnectTimeout`。`ssh-keyscan.exe` 在开启 HVCI 时会卡住，这条路径不再调用它。首启时客机把 ed25519 主机公钥写到串口日志 `logs/hostkey.serial`，宿主用这一行写入 `known_hosts`。日志里没有这一行时，先确认 `127.0.0.1:<SSH_PORT>` 是这台虚拟机的转发，再用 `ssh.exe -o StrictHostKeyChecking=accept-new` 做第一次连接。等待上限 180 秒，主机密钥对不上就停止。
 
 开启 BIOS 虚拟化。Windows 11 开着 VBS 时 VirtualBox 可能更慢，**不要为了提速关闭 VBS**。缺 VMware 本身不是 `cchouse up` 的 `HUMAN_WAIT`。单独运行 `preflight.py` 且不传 `--vm-backend virtualbox` 时，没有 `vmrun` 仍会报告 `MISSING_VMWARE`。
 

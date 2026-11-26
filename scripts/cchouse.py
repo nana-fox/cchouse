@@ -881,6 +881,7 @@ class UpContext:
         self.rendered = private_dir / "rendered"
         self.seed_iso = private_dir / "seed.iso"
         self.logs = private_dir / "logs"
+        self.hostkey_log = self.logs / "hostkey.serial"
         self.ip_file = private_dir / "guest_ip.txt"
         self.ssh_key = private_dir / "id_ed25519"
         self.known_hosts = private_dir / "known_hosts"
@@ -1278,6 +1279,7 @@ def step_import(ctx):
             VmName=ctx.vm_name,
             VmDir=ctx.private_dir / "vm",
             SshPort=str(ctx.vbox_ssh_port),
+            HostKeyLog=str(ctx.hostkey_log),
         )
         return False
     ctx.vmware("import", Vmx=ctx.vmx, Ova=ctx.image_path, VmName=ctx.vm_name, VmDir=ctx.private_dir / "vm",
@@ -1297,9 +1299,15 @@ def step_firstboot(ctx):
     if ctx.backend == "tart":
         ctx.tart("firstboot", ctx.vm_name, ctx.seed_iso, ctx.ssh_key, ctx.logs / "tart-firstboot.log")
     elif ctx.backend == "virtualbox":
-        ctx.virtualbox("firstboot", VmName=ctx.vm_name, SeedIso=ctx.seed_iso, FirstbootSeconds="56")
+        ctx.virtualbox(
+            "firstboot",
+            VmName=ctx.vm_name,
+            SeedIso=ctx.seed_iso,
+            FirstbootSeconds="56",
+            HostKeyLog=str(ctx.hostkey_log),
+        )
     else:
-        ctx.vmware("firstboot", Vmx=ctx.vmx, SeedIso=ctx.seed_iso)
+        ctx.vmware("firstboot", Vmx=ctx.vmx, SeedIso=ctx.seed_iso, HostKeyLog=str(ctx.hostkey_log))
     return False
 
 
@@ -1319,10 +1327,19 @@ def step_boot(ctx):
             KnownHosts=ctx.known_hosts,
             IpFile=ctx.ip_file,
             SshPort=str(ctx.vbox_ssh_port),
+            HostKeyLog=str(ctx.hostkey_log),
         )
         ctx.delete_plaintext()
     else:
-        ctx.vmware("boot", Vmx=ctx.vmx, SeedIso=ctx.seed_iso, Key=ctx.ssh_key, KnownHosts=ctx.known_hosts, IpFile=ctx.ip_file)
+        ctx.vmware(
+            "boot",
+            Vmx=ctx.vmx,
+            SeedIso=ctx.seed_iso,
+            Key=ctx.ssh_key,
+            KnownHosts=ctx.known_hosts,
+            IpFile=ctx.ip_file,
+            HostKeyLog=str(ctx.hostkey_log),
+        )
         ctx.delete_plaintext()
     if ctx.dry_run:
         return False

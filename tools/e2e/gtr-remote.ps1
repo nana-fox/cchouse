@@ -18,6 +18,7 @@ $vmx = Join-Path $vmDir "$VmName\$VmName.vmx"
 $keyPath = Join-Path $RunDir "id_ed25519"
 $khPath = Join-Path $RunDir "known_hosts"
 $ipFile = Join-Path $RunDir "guest_ip.txt"
+$hostKeyLog = Join-Path $RunDir "hostkey.serial"
 
 function Find-GitBash {
   foreach ($p in @(
@@ -70,11 +71,11 @@ switch ($Action) {
   }
 
   "firstboot" {
-    Invoke-CchouseFirstboot $vmx (Join-Path $RunDir "seed.iso") 55
+    Invoke-CchouseFirstboot $vmx (Join-Path $RunDir "seed.iso") 55 $hostKeyLog
   }
 
   "reboot" {
-    $ip = Invoke-CchouseBoot $vmx (Join-Path $RunDir "seed.iso") $keyPath $khPath $ipFile
+    $ip = Invoke-CchouseBoot $vmx (Join-Path $RunDir "seed.iso") $keyPath $khPath $ipFile $hostKeyLog
     $envFile = Join-Path $RunDir "gtr-verify.env"
     Add-Content -Path $envFile -Value "`nGUEST_IP=$ip" -Encoding UTF8
   }

@@ -918,6 +918,16 @@ async function check(fixtures) {
         self.assertIn("BUILD_HOST=", tart_builder)
         self.assertIn("/var/db/dhcpd_leases", tart_builder)
 
+    def test_firstboot_publishes_ed25519_hostkey_on_serial(self):
+        fb = (ROOT / "guest-linux" / "firstboot.sh").read_text(encoding="utf-8")
+        publish = fb.split("ssh-keygen -A", 1)[1].split("GUEST_HOSTNAME", 1)[0]
+        self.assertIn("CCHOUSE_HOSTKEY", publish)
+        self.assertIn("ssh_host_ed25519_key.pub", publish)
+        self.assertIn("timeout 2", publish)
+        self.assertIn("/dev/ttyS0", publish)
+        self.assertNotIn("ssh_host_ed25519_key >/dev/ttyS0", publish)
+        self.assertNotIn("cat ", publish)
+
     def test_linux_single_optional_stripe_node_full_chain(self):
         with tempfile.TemporaryDirectory() as td:
             # 1) EXIT_MODE=single + STRIPE_EXIT_MODE=node 全链路（config.yaml + nftables.conf + preflight）
