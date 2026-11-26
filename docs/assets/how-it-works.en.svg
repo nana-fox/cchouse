@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="420" viewBox="0 0 900 420" role="img" aria-labelledby="title description" xml:lang="en">
+  <title id="title">How cchouse routes traffic</title>
+  <desc id="description">An isolated virtual machine runs inside your computer and reaches Claude through your own proxy node. The path to your computer’s network is blocked. If the node goes offline, the VM goes offline and your computer stays online.</desc>
+  <defs>
+    <marker id="forward" markerWidth="12" markerHeight="12" refX="11" refY="6" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M1 1L11 6L1 11Z" fill="#195489"/>
+    </marker>
+    <marker id="blocked" markerWidth="12" markerHeight="12" refX="11" refY="6" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M1 1L11 6L1 11Z" fill="#ad3039"/>
+    </marker>
+  </defs>
+
+  <rect x="1" y="1" width="898" height="418" rx="24" fill="#ffffff" stroke="#cdd9e5" stroke-width="2"/>
+  <rect x="32" y="31" width="448" height="326" rx="18" fill="#f3f7fb" stroke="#8199b1" stroke-width="2"/>
+
+  <rect x="64" y="85" width="303" height="104" rx="14" fill="#ffffff" stroke="#195489" stroke-width="2"/>
+  <g fill="none" stroke="#195489" stroke-width="3" marker-end="url(#forward)">
+    <path d="M367 137H535"/>
+    <path d="M707 137H749"/>
+  </g>
+  <rect x="541" y="104" width="166" height="66" rx="14" fill="#eef5fc" stroke="#195489" stroke-width="2"/>
+  <rect x="755" y="104" width="111" height="66" rx="14" fill="#eef5fc" stroke="#195489" stroke-width="2"/>
+
+  <path d="M216 189V246" fill="none" stroke="#ad3039" stroke-width="3" stroke-dasharray="7 6" marker-end="url(#blocked)"/>
+  <circle cx="216" cy="218" r="15" fill="#f3f7fb"/>
+  <rect x="64" y="252" width="303" height="56" rx="14" fill="#fff0f0" stroke="#ad3039" stroke-width="2"/>
+
+  <path d="M32 371H868" stroke="#d9e3ed" stroke-width="1"/>
+  <g font-family="PingFang SC, Microsoft YaHei, Noto Sans CJK SC, system-ui, sans-serif" fill="#172c42">
+    <text x="54" y="64" font-size="22" font-weight="700">Your computer</text>
+    <text x="216" y="128" text-anchor="middle" font-size="22" font-weight="700">Isolated virtual machine</text>
+    <text x="216" y="157" text-anchor="middle" font-size="18" fill="#3b566e">Chromium + Claude Code</text>
+    <text x="426" y="122" text-anchor="middle" font-size="17" font-weight="700" fill="#164b79">Only exit</text>
+    <text x="624" y="144" text-anchor="middle" font-size="19" font-weight="700">Your proxy node</text>
+    <text x="811" y="144" text-anchor="middle" font-size="19" font-weight="700">Claude</text>
+
+    <text x="216" y="227" text-anchor="middle" font-size="24" font-weight="700" fill="#ad3039">✕</text>
+    <text x="238" y="224" font-size="17" font-weight="700" fill="#8a2630">Blocked</text>
+    <text x="216" y="287" text-anchor="middle" font-size="19" font-weight="700" fill="#8a2630">Your computer’s network</text>
+    <text x="54" y="338" font-size="17" fill="#354e65">Your computer stays online as usual</text>
+
+    <text x="450" y="400" text-anchor="middle" font-size="18" font-weight="700" fill="#8a2630">If the node goes offline, the VM goes offline without using your computer’s network.</text>
+  </g>
+</svg>
