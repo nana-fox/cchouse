@@ -40,20 +40,20 @@ cchouse 的做法：只走你配置的那一个节点，把虚拟机的时区、
 
 ### Windows（x64）
 
-打开 Windows PowerShell，运行下面这一行安装 `v2.0.0-preview.3`。
+打开 Windows PowerShell，运行下面这一行安装 `v2.0.0-preview.4`。
 
 ```powershell
-$f = "$env:TEMP\cchouse-bootstrap-$([guid]::NewGuid().ToString('N')).ps1"; iwr https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.3/bootstrap-windows.ps1 -UseBasicParsing -OutFile $f -ErrorAction Stop; if ((Get-FileHash $f -Algorithm SHA256).Hash -ne 'd7cb9db54405efa36d8f0624f691a455fe52128d72e08eb9ad2238450ce39576') { throw 'SHA-256 mismatch' }; Unblock-File -LiteralPath $f; powershell -NoProfile -ExecutionPolicy RemoteSigned -File $f -CleanupBootstrap
+$f = "$env:TEMP\cchouse-bootstrap-$([guid]::NewGuid().ToString('N')).ps1"; iwr https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.4/bootstrap-windows.ps1 -UseBasicParsing -OutFile $f -ErrorAction Stop; if ((Get-FileHash $f -Algorithm SHA256).Hash -ne '0e3a7b438485a614635b99d9ea4045ca5afe17cdecd8f6b5c9aad9c6ec87cc46') { throw 'SHA-256 mismatch' }; Unblock-File -LiteralPath $f; powershell -NoProfile -ExecutionPolicy RemoteSigned -File $f -CleanupBootstrap
 ```
 
 按提示粘贴自己的节点链接，输入不会回显。缺少 VirtualBox 时，安装器会自动安装。Windows 弹出用户账户控制（UAC）提示时，点一次「是」。
 
 ### Apple Silicon Mac
 
-需要 Apple Silicon（M 系列）及 macOS 13.0 Ventura 或更新版本。打开「终端」，运行下面这一行安装 `v2.0.0-preview.3`。引导脚本会校验并准备私有 Python 和所需的 Tart。
+需要 Apple Silicon（M 系列）及 macOS 13.0 Ventura 或更新版本。打开「终端」，运行下面这一行安装 `v2.0.0-preview.4`。引导脚本会校验并准备私有 Python 和所需的 Tart。
 
 ```bash
-f=$(mktemp -t cchouse-bootstrap) && curl -fsSLo "$f" https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.3/bootstrap-macos.sh && printf '%s  %s\n' '60a6fe7495320cb61f487ff99bf2063e56c5c23cdcc18f3b477bfaf3f0654f9f' "$f" | shasum -a 256 -c - && /bin/bash "$f" --cleanup-bootstrap
+f=$(mktemp -t cchouse-bootstrap) && curl -fsSLo "$f" https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.4/bootstrap-macos.sh && printf '%s  %s\n' '59a1a0059635438b085dc172b49c950325c7811a1e3e40cfc0ac089009badb97' "$f" | shasum -a 256 -c - && /bin/bash "$f" --cleanup-bootstrap
 ```
 
 按提示粘贴自己的 SOCKS5 或 HTTP(S) 节点链接，输入不会回显。

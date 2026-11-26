@@ -40,20 +40,20 @@ The installer downloads and verifies the matching guest image and official Claud
 
 ### Windows (x64)
 
-Open Windows PowerShell and run this one line to install `v2.0.0-preview.3`.
+Open Windows PowerShell and run this one line to install `v2.0.0-preview.4`.
 
 ```powershell
-$f = "$env:TEMP\cchouse-bootstrap-$([guid]::NewGuid().ToString('N')).ps1"; iwr https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.3/bootstrap-windows.ps1 -UseBasicParsing -OutFile $f -ErrorAction Stop; if ((Get-FileHash $f -Algorithm SHA256).Hash -ne 'd7cb9db54405efa36d8f0624f691a455fe52128d72e08eb9ad2238450ce39576') { throw 'SHA-256 mismatch' }; Unblock-File -LiteralPath $f; powershell -NoProfile -ExecutionPolicy RemoteSigned -File $f -CleanupBootstrap
+$f = "$env:TEMP\cchouse-bootstrap-$([guid]::NewGuid().ToString('N')).ps1"; iwr https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.4/bootstrap-windows.ps1 -UseBasicParsing -OutFile $f -ErrorAction Stop; if ((Get-FileHash $f -Algorithm SHA256).Hash -ne '0e3a7b438485a614635b99d9ea4045ca5afe17cdecd8f6b5c9aad9c6ec87cc46') { throw 'SHA-256 mismatch' }; Unblock-File -LiteralPath $f; powershell -NoProfile -ExecutionPolicy RemoteSigned -File $f -CleanupBootstrap
 ```
 
 When prompted, paste your node link. The input is hidden. If VirtualBox is missing, the installer installs it automatically. Click **Yes** once when Windows asks for User Account Control (UAC) approval.
 
 ### Apple Silicon Mac
 
-Requires Apple Silicon (M series) and macOS 13.0 Ventura or later. Open Terminal and run this one line to install `v2.0.0-preview.3`. The bootstrap verifies and prepares a private Python and Tart if needed.
+Requires Apple Silicon (M series) and macOS 13.0 Ventura or later. Open Terminal and run this one line to install `v2.0.0-preview.4`. The bootstrap verifies and prepares a private Python and Tart if needed.
 
 ```bash
-f=$(mktemp -t cchouse-bootstrap) && curl -fsSLo "$f" https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.3/bootstrap-macos.sh && printf '%s  %s\n' '60a6fe7495320cb61f487ff99bf2063e56c5c23cdcc18f3b477bfaf3f0654f9f' "$f" | shasum -a 256 -c - && /bin/bash "$f" --cleanup-bootstrap
+f=$(mktemp -t cchouse-bootstrap) && curl -fsSLo "$f" https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.4/bootstrap-macos.sh && printf '%s  %s\n' '59a1a0059635438b085dc172b49c950325c7811a1e3e40cfc0ac089009badb97' "$f" | shasum -a 256 -c - && /bin/bash "$f" --cleanup-bootstrap
 ```
 
 When prompted, paste your SOCKS5 or HTTP(S) node link. The input is hidden.
