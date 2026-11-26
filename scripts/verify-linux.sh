@@ -73,9 +73,13 @@ fi
 # cchouse.py 在 Windows 上把 System32\OpenSSH 加到 PATH 前面。Git Bash 启动时仍把
 # /usr/bin 放在最前，/usr/bin/ssh 会盖住无扩展名 shim；C:\Program Files\OpenSSH\ssh.exe
 # 还会忽略 ConnectTimeout。这里按绝对路径调用 System32 的 ssh.exe / scp.exe。
-# VERIFY_OPENSSH_DIR 只在单测里使用，且仅当上面两个 System32 路径都不存在时才生效。
+# VERIFY_OPENSSH_DIR 只给单测，用来避开运行器上的真 ssh.exe；正式验收不设置。
 resolve_openssh() {
   local _name="$1" _hit
+  if [ -n "${VERIFY_OPENSSH_DIR:-}" ] && [ -x "${VERIFY_OPENSSH_DIR}/${_name}.exe" ]; then
+    printf '%s\n' "${VERIFY_OPENSSH_DIR}/${_name}.exe"
+    return 0
+  fi
   for _hit in \
     "/c/Windows/System32/OpenSSH/${_name}.exe" \
     "/mnt/c/Windows/System32/OpenSSH/${_name}.exe"
@@ -85,14 +89,40 @@ resolve_openssh() {
       return 0
     fi
   done
-  if [ -n "${VERIFY_OPENSSH_DIR:-}" ] && [ -x "${VERIFY_OPENSSH_DIR}/${_name}.exe" ]; then
-    printf '%s\n' "${VERIFY_OPENSSH_DIR}/${_name}.exe"
-    return 0
-  fi
   printf '%s\n' "$_name"
 }
 SSH_BIN="$(resolve_openssh ssh)"
 SCP_BIN="$(resolve_openssh scp)"
+
+# System32 ssh.exe 认 -i 的 /c/...，但不认 UserKnownHostsFile="/c/..."。
+# 只有选中 Windows ssh.exe / scp.exe 时，才把密钥和 known_hosts 转成 C:/...。
+# 没有 cygpath（或 VERIFY_HIDE_CYGPATH=1）就保持原路径。macOS / Linux 的 ssh 不转换。
+needs_win_ssh_path=0
+case "$SSH_BIN" in
+  *.exe) needs_win_ssh_path=1 ;;
+esac
+win_ssh_path() {
+  local _in="$1" _out=""
+  if [ "$needs_win_ssh_path" != 1 ]; then
+    printf '%s\n' "$_in"
+    return 0
+  fi
+  if [ "${VERIFY_HIDE_CYGPATH:-}" = 1 ] || ! command -v cygpath >/dev/null 2>&1; then
+    printf '%s\n' "$_in"
+    return 0
+  fi
+  _out="$(cygpath -m "$_in" 2>/dev/null)" || _out=""
+  _out="${_out%$'\r'}"
+  if [ -z "$_out" ]; then
+    printf '%s\n' "$_in"
+  else
+    printf '%s\n' "$_out"
+  fi
+}
+if [ "$needs_win_ssh_path" = 1 ]; then
+  SSH_KEY="$(win_ssh_path "$SSH_KEY")"
+  SSH_KNOWN_HOSTS="$(win_ssh_path "$SSH_KNOWN_HOSTS")"
+fi
 
 SSH_OPTS=(-F none -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=\"$SSH_KNOWN_HOSTS\"" -p "$SSH_PORT")
 # scp 的端口是 -P；-p 在 scp 里表示保留时间戳，不能复用 SSH_OPTS。
@@ -101,9 +131,16 @@ guest() { "$SSH_BIN" "${SSH_OPTS[@]}" "claude@$GUEST_IP" "$@"; }
 guest_scp() { "$SCP_BIN" "${SCP_OPTS[@]}" "$@"; }
 
 # 单测探针：正常验收不设置。退出码 86，避免被当成验收通过。
+# VERIFY_LINUX_TRANSPORT_PROBE_EXEC=1 时才真正调用 ssh/scp（假二进制）。默认只打印参数。
 if [ "${VERIFY_LINUX_TRANSPORT_PROBE:-}" = 1 ]; then
-  "$SSH_BIN" "${SSH_OPTS[@]}" "claude@$GUEST_IP" true
-  guest_scp -- "probe-local" "claude@${GUEST_IP}:probe-remote"
+  printf 'SSH_BIN=%s\n' "$SSH_BIN"
+  printf 'SCP_BIN=%s\n' "$SCP_BIN"
+  printf 'SSH_OPTS=%s\n' "${SSH_OPTS[*]}"
+  printf 'SCP_OPTS=%s\n' "${SCP_OPTS[*]}"
+  if [ "${VERIFY_LINUX_TRANSPORT_PROBE_EXEC:-}" = 1 ]; then
+    "$SSH_BIN" "${SSH_OPTS[@]}" "claude@$GUEST_IP" true
+    guest_scp -- "probe-local" "claude@${GUEST_IP}:probe-remote"
+  fi
   exit 86
 fi
 
