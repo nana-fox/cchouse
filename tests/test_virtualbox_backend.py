@@ -2,6 +2,8 @@
 import hashlib
 import io
 import json
+import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -288,7 +290,14 @@ class TestVirtualBoxScript(unittest.TestCase):
         self.assertIn("firstboot shutdown timed out", src)
         boot = src.split("function Invoke-CchouseVBoxBoot", 1)[1].split("function New-CchouseVBoxSnapshot", 1)[0]
         self.assertLess(boot.find("Resolve-CchouseHostKeyTrust"), boot.find("Start-CchouseVmDetached"))
+        self.assertLess(boot.find("Write-CchouseHostKeyTrustMark"), boot.find("Start-CchouseVmDetached"))
+        self.assertIn("未经串口核对主机密钥", boot)
         self.assertLess(boot.rfind("Test-CchouseOwnForward"), boot.rfind("Get-CchouseSshVerifyOptions"))
+        delete = src.split("function Remove-CchouseVBoxVM", 1)[1].split("function New-CchouseVBoxSnapshot", 1)[0]
+        self.assertLess(delete.find("poweroff"), delete.find("unregistervm"))
+        self.assertIn("--delete", delete)
+        self.assertIn("-cne $Name", delete)
+        self.assertIn('"delete" { Remove-CchouseVBoxVM $CcVmName }', src)
         firstboot = src.split("function Invoke-CchouseVBoxFirstboot", 1)[1].split("function Invoke-CchouseVBoxBoot", 1)[0]
         self.assertLess(firstboot.find("Enable-CchouseVBoxSerialLog"), firstboot.find("Start-CchouseVmDetached"))
         self.assertLess(src.rfind("Resolve-CchouseFirstbootStop"), src.find("HARD_POWEROFF=1"))
@@ -319,6 +328,8 @@ class TestVirtualBoxScript(unittest.TestCase):
         self.assertIn(r"C:\Windows\System32\OpenSSH\ssh.exe", helper)
         self.assertIn("$script:CchouseSshWaitSeconds = 180", helper)
         self.assertIn("accept-new", helper)
+        self.assertIn("function Write-CchouseHostKeyTrustMark", helper)
+        self.assertIn("hostkey.trust", helper)
         self.assertIn("ConnectionAttempts=1", helper)
         self.assertIn("ConnectTimeout=$ConnectTimeout", helper)
         self.assertNotIn("StrictHostKeyChecking=no", helper)
@@ -331,7 +342,13 @@ class TestVirtualBoxScript(unittest.TestCase):
         self.assertIn("CchouseSystem32Ssh", vmware)
         boot = vmware.split("function Invoke-CchouseBoot", 1)[1].split("function New-CchouseSnapshot", 1)[0]
         self.assertLess(boot.find("Get-CchouseHostKeyFromSerialText"), boot.find("Start-VmDetached"))
+        self.assertLess(boot.find("Write-CchouseHostKeyTrustMark"), boot.find("Start-VmDetached"))
+        self.assertIn("未经串口核对主机密钥", boot)
         self.assertLess(boot.find("getGuestIPAddress"), boot.find("Get-CchouseSshVerifyOptions"))
+        verify = (ROOT / "scripts" / "verify-linux.sh").read_text(encoding="utf-8")
+        self.assertIn('warn "未经串口核对主机密钥"', verify)
+        self.assertIn("hostkey.trust", verify)
+        self.assertLess(verify.find("warn_unverified_hostkey"), verify.find('log "-- 规则红线与服务"'))
         self.assertIn("CCHOUSE_HOSTKEY", firstboot)
         self.assertIn("/dev/ttyS0", firstboot)
         self.assertIn("timeout 2", firstboot)
@@ -341,6 +358,40 @@ class TestVirtualBoxScript(unittest.TestCase):
         self.assertIn("windows-hostkey.ps1", uploader)
         tart = (ROOT / "scripts" / "vm-tart.sh").read_text(encoding="utf-8")
         self.assertIn("ssh-keyscan", tart)
+
+    def test_verify_warns_only_for_accept_new_hostkey_trust(self):
+        import re
+        bash = shutil.which("bash")
+        if not bash:
+            self.skipTest("需要 bash")
+        src = (ROOT / "scripts" / "verify-linux.sh").read_text(encoding="utf-8")
+        found = re.search(r"^warn_unverified_hostkey\(\) \{\n.*?\n\}$", src, re.S | re.M)
+        self.assertIsNotNone(found)
+        harness = "set -uo pipefail\nwarn() { printf 'WARN %s\\n' \"$1\"; }\n" + found.group(0) + "\nwarn_unverified_hostkey\n"
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            script = root / "check.sh"
+            script.write_text(harness, encoding="utf-8")
+            env_file = root / "instance.env"
+            env_file.write_text("TAG=cc01\n", encoding="utf-8")
+            trust = root / "logs" / "hostkey.trust"
+            trust.parent.mkdir()
+
+            def run():
+                proc = subprocess.run(
+                    [bash, str(script)],
+                    capture_output=True, text=True, encoding="utf-8", errors="replace",
+                    env={**os.environ, "ENV_FILE": str(env_file), "LC_ALL": "en_US.UTF-8"},
+                )
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                return proc.stdout
+
+            trust.write_text("accept-new\n", encoding="utf-8")
+            self.assertEqual(run(), "WARN 未经串口核对主机密钥\n")
+            trust.write_text("serial\n", encoding="utf-8")
+            self.assertEqual(run(), "")
+            trust.unlink()
+            self.assertEqual(run(), "")
 
 
 if __name__ == "__main__":

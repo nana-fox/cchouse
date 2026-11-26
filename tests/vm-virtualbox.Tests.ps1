@@ -122,6 +122,12 @@ $bootVb = $src.Split("function Invoke-CchouseVBoxBoot")[1].Split("function New-C
 $ownAt = $bootVb.LastIndexOf("Test-CchouseOwnForward")
 $verifyAt = $bootVb.LastIndexOf("Get-CchouseSshVerifyOptions")
 Assert-True "ownership before recording ssh" (($ownAt -ge 0) -and ($verifyAt -gt $ownAt))
+Assert-True "trust mark before start" ($bootVb.IndexOf("Write-CchouseHostKeyTrustMark") -lt $bootVb.IndexOf("Start-CchouseVmDetached"))
+Assert-True "visible unverified warning" $bootVb.Contains("未经串口核对主机密钥")
+$deleteVb = $src.Split("function Remove-CchouseVBoxVM")[1].Split("function New-CchouseVBoxSnapshot")[0]
+Assert-True "power off before unregister" ($deleteVb.IndexOf("poweroff") -lt $deleteVb.IndexOf("unregistervm"))
+Assert-True "unregister deletes disks" $deleteVb.Contains("--delete")
+Assert-True "exact name" $deleteVb.Contains('-cne $Name')
 Assert-True "serial trust before start" ($bootVb.IndexOf("Resolve-CchouseHostKeyTrust") -lt $bootVb.IndexOf("Start-CchouseVmDetached"))
 $fbVb = $src.Split("function Invoke-CchouseVBoxFirstboot")[1].Split("function Invoke-CchouseVBoxBoot")[0]
 Assert-True "uart before first start" ($fbVb.IndexOf("Enable-CchouseVBoxSerialLog") -lt $fbVb.IndexOf("Start-CchouseVmDetached"))
@@ -176,6 +182,11 @@ try {
   $kh = Join-Path $tmp "known_hosts"
   Write-CchouseKnownHostsFile -Path $kh -Line $round.KnownHostsLine
   Assert-Equal "known_hosts byte" ([System.IO.File]::ReadAllText($kh)) ($round.KnownHostsLine + "`n")
+  Write-CchouseHostKeyTrustMark -SerialLogPath $serial -Pinned:$false
+  $trustPath = Join-Path $tmp "logs\hostkey.trust"
+  Assert-Equal "accept-new mark" ([System.IO.File]::ReadAllText($trustPath)) "accept-new`n"
+  Write-CchouseHostKeyTrustMark -SerialLogPath $serial -Pinned:$true
+  Assert-Equal "serial mark" ([System.IO.File]::ReadAllText($trustPath)) "serial`n"
 } finally {
   if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force }
 }

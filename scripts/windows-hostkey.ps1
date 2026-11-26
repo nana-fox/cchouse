@@ -78,6 +78,18 @@ function Resolve-CchouseHostKeyTrust {
   return [pscustomobject]@{ Pinned = $true; KnownHostsLine = $line }
 }
 
+function Write-CchouseHostKeyTrustMark {
+  param([string]$SerialLogPath, [bool]$Pinned)
+  if ([string]::IsNullOrWhiteSpace($SerialLogPath)) { return }
+  $parent = Split-Path -Parent $SerialLogPath
+  if ([string]::IsNullOrWhiteSpace($parent)) { return }
+  New-Item -ItemType Directory -Force -Path $parent | Out-Null
+  $path = Join-Path $parent "hostkey.trust"
+  $value = "serial"
+  if (-not $Pinned) { $value = "accept-new" }
+  [System.IO.File]::WriteAllText($path, ($value + "`n"), [System.Text.UTF8Encoding]::new($false))
+}
+
 function Write-CchouseKnownHostsFile {
   param([string]$Path, [string]$Line)
   if ([string]::IsNullOrWhiteSpace($Path) -or [string]::IsNullOrWhiteSpace($Line)) {

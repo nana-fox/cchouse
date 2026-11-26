@@ -4,7 +4,7 @@
 # Host public keys come from the guest serial log.
 # Do not print credentials.
 param(
-  [ValidateSet("", "install", "import", "firstboot", "boot", "snapshot", "exists")] [string]$CcOp = "",
+  [ValidateSet("", "install", "import", "firstboot", "boot", "snapshot", "exists", "delete")] [string]$CcOp = "",
   [string]$CcOva = "",
   [string]$CcVmName = "",
   [string]$CcVmDir = "",
@@ -352,8 +352,11 @@ function Invoke-CchouseVBoxBoot {
   Enable-CchouseVBoxSerialLog -Name $Name -HostKeyLog $HostKeyLog
   $serialText = Read-CchouseSerialText -Path $HostKeyLog
   $trust = Resolve-CchouseHostKeyTrust -SerialText $serialText -HostName "127.0.0.1" -Port $SshPort
+  Write-CchouseHostKeyTrustMark -SerialLogPath $HostKeyLog -Pinned:([bool]$trust.Pinned)
   if ($trust.Pinned) {
     Write-CchouseKnownHostsFile -Path $KnownHostsPath -Line $trust.KnownHostsLine
+  } else {
+    Write-Host "WARN  未经串口核对主机密钥"
   }
   Write-Host "Detached seed.iso; starting networked VM (detached)..."
   Start-CchouseVmDetached $Name
@@ -405,6 +408,34 @@ function Invoke-CchouseVBoxBoot {
   Write-Host "GUEST_IP=127.0.0.1"
 }
 
+function Remove-CchouseVBoxVM {
+  param([string]$Name)
+  if ($Name -notmatch '^claude-[a-z][a-z0-9_-]{1,15}$') { throw "VM name is not an exact instance name" }
+  $vbm = Get-CchouseVBoxManage
+  if (-not $vbm) { throw "VBoxManage.exe not found" }
+  if (-not (Test-CchouseVmRegistered $Name)) { return }
+  $info = @(Get-CchouseShowvminfoLines -Name $Name)
+  $reported = Get-CchouseVmNameFromLines -Lines $info
+  if ([string]::IsNullOrEmpty($reported) -or ($reported -cne $Name)) {
+    throw "registered VM name does not match $Name"
+  }
+  $vmState = ""
+  foreach ($line in $info) {
+    if ($line -match '^VMState="([^"]*)"') {
+      $vmState = $Matches[1]
+      break
+    }
+  }
+  if ($vmState -ne "poweroff" -and $vmState -ne "aborted") {
+    & $vbm controlvm $Name poweroff
+    if ($LASTEXITCODE -ne 0) { throw "poweroff failed for $Name" }
+    if (-not (Wait-CchousePowerOff $Name 40)) { throw "poweroff timed out for $Name" }
+  }
+  & $vbm unregistervm $Name --delete
+  if ($LASTEXITCODE -ne 0) { throw "unregistervm failed for $Name" }
+  if (Test-CchouseVmRegistered $Name) { throw "VM $Name is still registered" }
+}
+
 function New-CchouseVBoxSnapshot {
   param([string]$Name, [string]$SnapName)
   $vbm = Get-CchouseVBoxManage
@@ -426,6 +457,7 @@ if ($CcOp) {
     "firstboot" { Invoke-CchouseVBoxFirstboot $CcVmName $CcSeedIso $CcFirstbootSeconds $CcHostKeyLog }
     "boot" { Invoke-CchouseVBoxBoot $CcVmName $CcSeedIso $CcKey $CcKnownHosts $CcIpFile $CcSshPort $CcHostKeyLog }
     "snapshot" { New-CchouseVBoxSnapshot $CcVmName $CcSnapshot }
+    "delete" { Remove-CchouseVBoxVM $CcVmName }
   }
   exit 0
 }

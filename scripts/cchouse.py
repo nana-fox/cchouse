@@ -1564,6 +1564,19 @@ def _tart_remove_plan(vm_name, snapshot, private_dir, inventory):
     ]
 
 
+def _virtualbox_remove_plan(vm_name, snapshot, private_dir, inventory):
+    if not isinstance(vm_name, str) or not re.fullmatch(r"claude-[a-z][a-z0-9_-]{1,15}", vm_name):
+        raise StepError("state.json 的 VirtualBox 虚拟机名无法精确匹配")
+    label = f"虚拟机 {vm_name}（先关机，再 VBoxManage unregistervm --delete"
+    if snapshot:
+        label += f"，含快照 {snapshot}"
+    return [(f"{label}）", [
+        "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+        str(ROOT / "scripts" / "vm-virtualbox.ps1"),
+        "-CcOp", "delete", "-CcVmName", vm_name,
+    ])]
+
+
 def _vmware_remove_plan(vm_name, snapshot, private_dir, inventory):
     vmx = private_dir / "vm" / vm_name / f"{vm_name}.vmx"
     if vmx.resolve() != vmx:
@@ -1580,7 +1593,11 @@ def _vmware_remove_plan(vm_name, snapshot, private_dir, inventory):
 
 
 # 新后端在这里注册。未注册的后端保留原实例，以便在对应软件中手动处理。
-REMOVE_BACKENDS = {"tart": _tart_remove_plan, "vmware": _vmware_remove_plan}
+REMOVE_BACKENDS = {
+    "tart": _tart_remove_plan,
+    "vmware": _vmware_remove_plan,
+    "virtualbox": _virtualbox_remove_plan,
+}
 
 
 def _remove_state(private_dir, root, tag):
@@ -1647,8 +1664,6 @@ def cmd_remove(args):
             return 0
 
         backend = state.get("vm_backend")
-        if backend == "virtualbox" and backend not in REMOVE_BACKENDS:
-            raise StepError("此版本暂不支持卸载 VirtualBox 实例，请在 VirtualBox 中手动删除")
         snapshot = state.get("clean_snapshot")
         owned = state.get("vm_created_by_up") is True
         recorded_vm = state.get("vm_name")
@@ -1662,7 +1677,7 @@ def cmd_remove(args):
             raise StepError("state.json 的干净快照名不匹配")
 
         vm_dir = private_dir / "vm"
-        allowed_vm_dirs = {vm_name} if owned and backend == "vmware" else set()
+        allowed_vm_dirs = {vm_name} if owned and backend in ("vmware", "virtualbox") else set()
         if vm_dir.resolve() != vm_dir or (vm_dir.exists() and {p.name for p in vm_dir.iterdir()} - allowed_vm_dirs):
             raise StepError("私有目录的 vm/ 下有无法确认归属的项目")
 

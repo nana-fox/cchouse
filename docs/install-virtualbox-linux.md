@@ -33,7 +33,7 @@ VirtualBox 基础包装从 Oracle 官网下载，版本和 SHA-256 写在 `guest
 | `GUEST_IF` | `enp0s3` | VirtualBox NAT 网卡在客机里的名字 |
 | `ROUTER_IP` | 不改 | 仍是家里的路由器。验收把它当作必须拦截的地址 |
 
-Windows 上 SSH 使用 `C:\Windows\System32\OpenSSH\ssh.exe`。`C:\Program Files\OpenSSH\ssh.exe` 会忽略 `ConnectTimeout`。`ssh-keyscan.exe` 在开启 HVCI 时会卡住，这条路径不再调用它。首启时客机把 ed25519 主机公钥写到串口日志 `logs/hostkey.serial`，宿主用这一行写入 `known_hosts`。日志里没有这一行时，先确认 `127.0.0.1:<SSH_PORT>` 是这台虚拟机的转发，再用 `ssh.exe -o StrictHostKeyChecking=accept-new` 做第一次连接。等待上限 180 秒，主机密钥对不上就停止。
+Windows 上 SSH 使用 `C:\Windows\System32\OpenSSH\ssh.exe`。`C:\Program Files\OpenSSH\ssh.exe` 会忽略 `ConnectTimeout`。`ssh-keyscan.exe` 在开启 HVCI 时会卡住，这条路径不再调用它。首启时客机把 ed25519 主机公钥写到串口日志 `logs/hostkey.serial`，宿主用这一行写入 `known_hosts`。日志里没有这一行时，先确认 `127.0.0.1:<SSH_PORT>` 的 NAT 转发规则和监听进程都属于这台虚拟机，再用 `ssh.exe -o StrictHostKeyChecking=accept-new` 做第一次连接。这种兜底会在 `verify-linux.sh` 里记一条 WARN：未经串口核对主机密钥。等待上限 180 秒，主机密钥对不上就停止。
 
 开启 BIOS 虚拟化。Windows 11 开着 VBS 时 VirtualBox 可能更慢，**不要为了提速关闭 VBS**。缺 VMware 本身不是 `cchouse up` 的 `HUMAN_WAIT`。单独运行 `preflight.py` 且不传 `--vm-backend virtualbox` 时，没有 `vmrun` 仍会报告 `MISSING_VMWARE`。
 
@@ -50,5 +50,7 @@ Windows 上 SSH 使用 `C:\Windows\System32\OpenSSH\ssh.exe`。`C:\Program Files
 ## 验收与交接
 
 自动验收必须是 `verify-linux.sh --fail-closed` 退出码 0。然后由人在客机桌面核对 `check.html` 全绿，并自行登录。Claude Code 的 OAuth 链接只能在客机浏览器里打开。
+
+`cchouse.py remove --tag` 读取 `state.json` 里的虚拟机名。名字与 `claude-<tag>` 精确一致时，先关机，再执行 `VBoxManage unregistervm --delete`。名字对不上，或 `vm/` 里有别的目录，就停下来，不删虚拟机。
 
 断网是保护生效。不要放宽客机 `nftables`，不要加 `DIRECT`，也不要改走宿主代理。

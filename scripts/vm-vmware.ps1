@@ -133,7 +133,12 @@ function Invoke-CchouseBoot([string]$vmxPath, [string]$seedIso, [string]$keyPath
   Enable-CchouseVmwareHostKeySerial $vmxPath $hostKeyLog
   # 开机前读串口日志。冲突的主机公钥直接失败，不连网。
   $serialText = Read-CchouseSerialText -Path $hostKeyLog
-  $null = Get-CchouseHostKeyFromSerialText -Text $serialText
+  $serialKey = Get-CchouseHostKeyFromSerialText -Text $serialText
+  $pinnedFromSerial = -not [string]::IsNullOrWhiteSpace($serialKey)
+  Write-CchouseHostKeyTrustMark -SerialLogPath $hostKeyLog -Pinned:$pinnedFromSerial
+  if (-not $pinnedFromSerial) {
+    Write-Host "WARN  未经串口核对主机密钥"
+  }
   Set-VmxKeys $vmxPath @{
     "ide1:0.fileName" = ""
     "ide1:0.startConnected" = "FALSE"
