@@ -40,6 +40,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import downloads  # noqa: E402
+import launcher as launcher_mod  # noqa: E402
 import preflight as preflight_mod  # noqa: E402
 import render as render_mod  # noqa: E402
 
@@ -1767,6 +1768,276 @@ def _print_remove_remainder(cache_dir, golden_name, purged):
     print("安装器仓库和宿主虚拟机软件仍保留，可分别在文件管理器和系统软件管理界面删除。")
 
 
+def _load_instance_context(tag, private_dir_arg=None):
+    """读取已有实例的私有目录、state.json、backend 与 vm_name，供 open/stop/status/restore 共用。"""
+    tag = (tag or "cc01").strip().lower()
+    if not SAFE_TAG_RE.fullmatch(tag):
+        raise StepError("错误：--tag 仅支持小写字母开头的 2-16 位字母/数字/下划线/短横线（如 cc01）", 2)
+    root = _remove_path(default_private_root().resolve())
+    requested = _remove_path(private_dir_arg).expanduser() if private_dir_arg else root / tag
+    private_dir = _remove_path(requested.parent.resolve()) / requested.name
+    state = _remove_state(private_dir, root, tag)
+    vm_name = state.get("vm_name") or f"claude-{tag}"
+    backend = state.get("vm_backend")
+    if not backend:
+        route = state.get("route") or detect_route()
+        backend = detect_vm_backend(route)
+    return {
+        "tag": tag,
+        "root": root,
+        "private_dir": private_dir,
+        "state_path": private_dir / "state.json",
+        "env_path": private_dir / "instance.env",
+        "ssh_key": private_dir / "id_ed25519",
+        "known_hosts": private_dir / "known_hosts",
+        "logs": private_dir / "logs",
+        "state": state,
+        "vm_name": vm_name,
+        "backend": backend,
+        "snapshot": state.get("clean_snapshot") or (f"{vm_name}-clean" if backend == "tart" else CLEAN_SNAPSHOT),
+    }
+
+
+def _save_state_dict(state_path, state):
+    state["updated_at"] = _now_iso()
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = state_path.with_name("state.json.tmp")
+    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    if os.name != "nt":
+        os.chmod(tmp, 0o600)
+    os.replace(tmp, state_path)
+
+
+def _virtualbox_cmd(op, **kw):
+    cmd = [
+        "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+        str(ROOT / "scripts" / "vm-virtualbox.ps1"), "-CcOp", op,
+    ]
+    for k, v in kw.items():
+        cmd += [f"-Cc{k}", str(v)]
+    return cmd
+
+
+def _tart_cmd(*args):
+    return ["bash", str(ROOT / "scripts" / "vm-tart.sh"), *[str(a) for a in args]]
+
+
+def _backend_status(info):
+    """查询后端虚拟机与干净快照状态，返回 (vm_state, snapshot_exists)。
+
+    vm_state: 'running' | 'running-headless' | 'stopped' | 'missing'
+    snapshot_exists: bool
+    """
+    backend = info["backend"]
+    vm_name = info["vm_name"]
+    snapshot = info["snapshot"]
+    if backend == "tart":
+        proc = subprocess.run(_tart_cmd("status", vm_name), capture_output=True, text=True)
+        vm_state = (proc.stdout or "").strip().splitlines()[-1].strip() if proc.stdout and proc.stdout.strip() else "missing"
+        if vm_state not in ("running", "stopped", "missing"):
+            vm_state = "missing"
+        snap_exists = subprocess.run(
+            _tart_cmd("exists", snapshot), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        ).returncode == 0
+        return vm_state, snap_exists
+    if backend == "virtualbox":
+        proc = subprocess.run(
+            _virtualbox_cmd("status", VmName=vm_name, Snapshot=snapshot),
+            capture_output=True, text=True,
+        )
+        vm_state = "missing"
+        snap_exists = False
+        for line in (proc.stdout or "").splitlines():
+            line = line.strip()
+            if line.startswith("VM_STATE="):
+                vm_state = line.split("=", 1)[1].strip()
+            elif line.startswith("SNAPSHOT_STATE="):
+                snap_exists = line.split("=", 1)[1].strip().lower() == "present"
+        return vm_state, snap_exists
+    raise StepError(f"当前后端 {backend} 暂不支持该操作")
+
+
+def _ssh_graceful_poweroff(info):
+    """经 SSH 执行 sync + sudo -n /usr/bin/systemctl poweroff。返回 True 表示已发送关机命令。"""
+    ssh_key = info["ssh_key"]
+    env_path = info["env_path"]
+    if not ssh_key.is_file() or not env_path.is_file():
+        return False
+    ip = _env_raw_value(env_path, "GUEST_IP")
+    if not ip:
+        return False
+    port = _env_raw_value(env_path, "SSH_PORT") if info["backend"] == "virtualbox" else None
+    kh = info["known_hosts"]
+    cmd = ["ssh", "-F", "none", "-i", str(ssh_key), "-o", "BatchMode=yes", "-o", "ConnectTimeout=5"]
+    if kh.is_file():
+        cmd += ["-o", "StrictHostKeyChecking=yes", "-o", f"UserKnownHostsFile={kh}"]
+    else:
+        cmd += ["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"]
+    if port:
+        cmd += ["-p", str(port)]
+    cmd += [f"claude@{ip}", "sync; sudo -n /usr/bin/systemctl poweroff"]
+    try:
+        proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+        # systemctl poweroff 会断开 SSH 连接，退出码 0 或 255 均表示已触发关机
+        return proc.returncode in (0, 255)
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _wait_stopped(info, timeout):
+    deadline = time.monotonic() + max(1, int(timeout))
+    while time.monotonic() < deadline:
+        vm_state, _ = _backend_status(info)
+        if vm_state in ("stopped", "missing"):
+            return True
+        time.sleep(2)
+    vm_state, _ = _backend_status(info)
+    return vm_state in ("stopped", "missing")
+
+
+def cmd_status(args):
+    try:
+        info = _load_instance_context(args.tag, getattr(args, "private_dir", None))
+        if not info["state"]:
+            vm_state, snap_exists = "missing", False
+        else:
+            vm_state, snap_exists = _backend_status(info)
+    except StepError as exc:
+        print(str(exc), file=sys.stderr)
+        return exc.exit_code
+    label = {
+        "running": "运行中",
+        "running-headless": "运行中（无窗口）",
+        "stopped": "已关机",
+        "missing": "不存在",
+    }.get(vm_state, vm_state)
+    snap_label = f"存在（{info['snapshot']}）" if snap_exists else "不存在"
+    if getattr(args, "json", False):
+        print(json.dumps({
+            "tag": info["tag"],
+            "vm_name": info["vm_name"],
+            "backend": info["backend"],
+            "state": vm_state,
+            "snapshot": info["snapshot"],
+            "snapshot_exists": snap_exists,
+        }, ensure_ascii=False))
+    else:
+        print(f"实例：{info['tag']}（{info['vm_name']}）")
+        print(f"状态：{label}")
+        print(f"干净快照：{snap_label}")
+    return 0
+
+
+def cmd_open(args):
+    try:
+        info = _load_instance_context(args.tag, getattr(args, "private_dir", None))
+        if not info["state"]:
+            raise StepError(f"没有找到 {info['tag']} 的安装记录，请先运行 cchouse up --tag {info['tag']}。")
+        vm_state, _ = _backend_status(info)
+        if vm_state == "missing":
+            raise StepError(f"虚拟机 {info['vm_name']} 不存在，请核对或运行 cchouse up --tag {info['tag']}。")
+        if info["backend"] == "tart":
+            info["logs"].mkdir(parents=True, exist_ok=True)
+            subprocess.run(_tart_cmd("open", info["vm_name"], info["logs"] / "tart-gui.log"), check=True)
+        elif info["backend"] == "virtualbox":
+            subprocess.run(_virtualbox_cmd("gui", VmName=info["vm_name"]), check=True)
+        else:
+            raise StepError(f"当前后端 {info['backend']} 暂不支持 open")
+    except (StepError, subprocess.CalledProcessError, OSError) as exc:
+        print(f"打开失败：{exc}", file=sys.stderr)
+        return exc.exit_code if isinstance(exc, StepError) else 1
+    return 0
+
+
+def cmd_stop(args):
+    try:
+        info = _load_instance_context(args.tag, getattr(args, "private_dir", None))
+        if not info["state"]:
+            raise StepError(f"没有找到 {info['tag']} 的安装记录。")
+        vm_state, _ = _backend_status(info)
+        if vm_state == "missing":
+            raise StepError(f"虚拟机 {info['vm_name']} 不存在。")
+        if vm_state == "stopped":
+            print(f"客机 {info['vm_name']} 已处于关机状态。")
+            return 0
+        force = bool(getattr(args, "force", False))
+        timeout = int(getattr(args, "timeout", 60))
+        if not force:
+            if _ssh_graceful_poweroff(info):
+                print(f"已向 {info['vm_name']} 发送安全关机命令，等待停机（最多 {timeout}s）...", flush=True)
+                if _wait_stopped(info, timeout):
+                    print(f"客机 {info['vm_name']} 已安全关机。")
+                    return 0
+            if info["backend"] == "virtualbox":
+                subprocess.run(
+                    _virtualbox_cmd("stop", VmName=info["vm_name"], Force="no", Timeout=str(timeout)),
+                    check=True,
+                )
+                print(f"客机 {info['vm_name']} 已安全关机。")
+                return 0
+            raise StepError(
+                f"无法通过 SSH 安全关闭 {info['vm_name']}（或等待超过 {timeout}s）。"
+                "请在客机桌面右键选择 Power Off (Safe Shutdown)，或加 --force 强制停机。"
+            )
+        if info["backend"] == "tart":
+            subprocess.run(_tart_cmd("stop", info["vm_name"]), check=True)
+        elif info["backend"] == "virtualbox":
+            subprocess.run(
+                _virtualbox_cmd("stop", VmName=info["vm_name"], Force="yes", Timeout=str(timeout)),
+                check=True,
+            )
+        else:
+            raise StepError(f"当前后端 {info['backend']} 暂不支持 stop")
+        print(f"已强制停止客机 {info['vm_name']}。")
+    except (StepError, subprocess.CalledProcessError, OSError) as exc:
+        print(f"关机失败：{exc}", file=sys.stderr)
+        return exc.exit_code if isinstance(exc, StepError) else 1
+    return 0
+
+
+def cmd_restore(args):
+    try:
+        info = _load_instance_context(args.tag, getattr(args, "private_dir", None))
+        if not info["state"]:
+            raise StepError(f"没有找到 {info['tag']} 的安装记录。")
+        vm_state, snap_exists = _backend_status(info)
+        if not snap_exists:
+            raise StepError(f"找不到干净快照 {info['snapshot']}，无法恢复。")
+        if not getattr(args, "yes", False):
+            try:
+                ok = input(
+                    f"将把 {info['vm_name']} 恢复到干净快照 {info['snapshot']}（客机内未保存的文件和登录状态会清空，"
+                    "节点配置 instance.env 与 SSH 密钥保留）。确认？ [y/N] "
+                ).strip().lower() in ("y", "yes")
+            except EOFError:
+                ok = False
+            if not ok:
+                print("已取消恢复。")
+                return 0
+        if vm_state in ("running", "running-headless"):
+            stop_ns = argparse.Namespace(tag=info["tag"], private_dir=str(info["private_dir"]), force=False, timeout=60)
+            rc = cmd_stop(stop_ns)
+            if rc != 0:
+                return rc
+        if info["backend"] == "tart":
+            subprocess.run(_tart_cmd("restore", info["vm_name"], info["snapshot"]), check=True)
+            info["state"]["tart_vm_identity"] = tart_vm_identity(info["vm_name"])
+            _save_state_dict(info["state_path"], info["state"])
+        elif info["backend"] == "virtualbox":
+            subprocess.run(
+                _virtualbox_cmd("restore", VmName=info["vm_name"], Snapshot=info["snapshot"]),
+                check=True,
+            )
+            _save_state_dict(info["state_path"], info["state"])
+        else:
+            raise StepError(f"当前后端 {info['backend']} 暂不支持 restore")
+        print(f"已将 {info['vm_name']} 恢复到干净快照 {info['snapshot']}（instance.env 与 SSH 密钥已保留）。")
+    except (StepError, subprocess.CalledProcessError, OSError) as exc:
+        print(f"恢复失败：{exc}", file=sys.stderr)
+        return exc.exit_code if isinstance(exc, StepError) else 1
+    return 0
+
+
 def main():
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -1803,11 +2074,39 @@ def main():
     p_remove.add_argument("--yes", action="store_true", help="跳过确认提示")
     p_remove.add_argument("--purge-cache", action="store_true", help="同时清理共享下载缓存和对应的 Tart 黄金镜像")
 
+    p_open = sub.add_parser("open", help="打开客机桌面窗口（已开则不重复开）")
+    p_open.add_argument("--tag", default="cc01", help="实例短名（默认 cc01）")
+    p_open.add_argument("--private-dir", default=None, help="安装时使用的自定义私有目录")
+
+    p_stop = sub.add_parser("stop", help="安全关闭客机（经 SSH poweroff；强停需 --force）")
+    p_stop.add_argument("--tag", default="cc01", help="实例短名（默认 cc01）")
+    p_stop.add_argument("--private-dir", default=None, help="安装时使用的自定义私有目录")
+    p_stop.add_argument("--force", action="store_true", help="强制停机（可能丢失未落盘数据）")
+    p_stop.add_argument("--timeout", type=int, default=60, help="等待安全关机超时秒数（默认 60）")
+
+    p_status = sub.add_parser("status", help="查看客机与干净快照状态")
+    p_status.add_argument("--tag", default="cc01", help="实例短名（默认 cc01）")
+    p_status.add_argument("--private-dir", default=None, help="安装时使用的自定义私有目录")
+    p_status.add_argument("--json", action="store_true", help="以 JSON 格式输出状态")
+
+    p_restore = sub.add_parser("restore", help="安全停机并恢复到干净快照（保留 instance.env 与 SSH 密钥）")
+    p_restore.add_argument("--tag", default="cc01", help="实例短名（默认 cc01）")
+    p_restore.add_argument("--private-dir", default=None, help="安装时使用的自定义私有目录")
+    p_restore.add_argument("--yes", action="store_true", help="跳过确认提示")
+
     args = parser.parse_args()
     if args.command == "up":
         sys.exit(cmd_up(args))
     if args.command == "remove":
         sys.exit(cmd_remove(args))
+    if args.command == "open":
+        sys.exit(cmd_open(args))
+    if args.command == "stop":
+        sys.exit(cmd_stop(args))
+    if args.command == "status":
+        sys.exit(cmd_status(args))
+    if args.command == "restore":
+        sys.exit(cmd_restore(args))
 
 
 if __name__ == "__main__":
