@@ -563,10 +563,13 @@ Assert-Equal "bootstrap custom up args" ($customUp -join " ") "up --tag cc02 --v
 $bsTmp = Join-Path ([System.IO.Path]::GetTempPath()) ("cchouse-bs-test-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Force -Path $bsTmp | Out-Null
 try {
-  $cmdPath = Write-CchouseCmdEntry -LocalAppData $bsTmp -PythonExe "C:\py\python.exe" -CodeDir "C:\code"
+  $fakePy = Join-Path $bsTmp "python.exe"
+  $fakeCode = Join-Path $bsTmp "code"
+  $cmdPath = Write-CchouseCmdEntry -LocalAppData $bsTmp -PythonExe $fakePy -CodeDir $fakeCode
   Assert-True "cchouse.cmd created" (Test-Path -LiteralPath $cmdPath -PathType Leaf)
   $cmdText = [System.IO.File]::ReadAllText($cmdPath)
-  Assert-True "cchouse.cmd invokes python -I scripts/cchouse.py" ($cmdText.Contains('"C:\py\python.exe" -I "C:\code\scripts\cchouse.py" %*'))
+  $expectedCchousePy = Join-Path $fakeCode (Join-Path "scripts" "cchouse.py")
+  Assert-True "cchouse.cmd invokes python -I scripts/cchouse.py" ($cmdText.Contains("`"$fakePy`" -I `"$expectedCchousePy`" %*"))
 
   # Test curl.exe retry + 92 -> --http1.1 + persistent .part
   & {

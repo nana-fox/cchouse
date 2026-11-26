@@ -8,6 +8,7 @@
 
 所有创建的图标路径记录在 state["launchers"]（字符串列表），cchouse remove 预览并清理。
 """
+import base64
 import json
 import os
 import platform
@@ -252,11 +253,11 @@ def _windows_icon_location():
 
 
 def _create_windows_lnk_files(specs):
-    """用 Windows PowerShell WScript.Shell COM 批量写入 .lnk（经 UTF-8 JSON stdin 传参以兼容中文与空格路径）。"""
+    """用 Windows PowerShell WScript.Shell COM 批量写入 .lnk（经 UTF-8 Base64 环境变量传参，不依赖控制台句柄）。"""
     ps_script = (
-        "[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)\n"
         "$ErrorActionPreference = 'Stop'\n"
-        "$items = [Console]::In.ReadToEnd() | ConvertFrom-Json\n"
+        "$raw = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($env:CCHOUSE_LNK_JSON_B64))\n"
+        "$items = $raw | ConvertFrom-Json\n"
         "$ws = New-Object -ComObject WScript.Shell\n"
         "foreach ($item in @($items)) {\n"
         "  $parent = Split-Path -Parent $item.path\n"
@@ -271,12 +272,11 @@ def _create_windows_lnk_files(specs):
         "  $s.Save()\n"
         "}\n"
     )
-    payload = json.dumps(specs, ensure_ascii=False)
+    payload_b64 = base64.b64encode(json.dumps(specs, ensure_ascii=False).encode("utf-8")).decode("ascii")
+    env = dict(os.environ, CCHOUSE_LNK_JSON_B64=payload_b64)
     subprocess.run(
         ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_script],
-        input=payload,
-        text=True,
-        encoding="utf-8",
+        env=env,
         check=True,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
