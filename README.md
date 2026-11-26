@@ -53,7 +53,7 @@ python3 -I scripts/cchouse.py up --tag cc01
 
 Windows PowerShell 用 `py -3 -I scripts/cchouse.py up --tag cc01`。
 
-提示时粘贴节点链接，输入不会回显。安装器会显示探测到的出口时区和预期出口 IP，核对无误后分别按回车采用默认值；之后无需再操作，等待自动验收完成。安装器在后台通过宿主网络下载并校验镜像和官方 Claude Code 包，同时完成配置和自检。Apple Silicon Mac 和 Windows 会自动创建客机（导入镜像或克隆已有黄金镜像）、离线注入配置、清理明文配置文件、联网重启、运行 `verify-linux.sh --fail-closed` 并在通过后保存干净快照。[手动安装](docs/manual-install.md)
+提示时粘贴节点链接，输入不会回显。安装器会自动采用并显示出口时区和预期出口 IP，继续运行至自动验收。安装器在后台通过宿主网络下载并校验镜像和官方 Claude Code 包，同时完成配置和自检。Apple Silicon Mac 和 Windows 会自动创建客机（导入镜像或克隆已有黄金镜像）、离线注入配置、清理明文配置文件、联网重启、运行 `verify-linux.sh --fail-closed` 并在通过后保存干净快照。[手动安装](docs/manual-install.md)
 
 安装失败会停在出错的步骤。处理提示的原因后，从同一个目录重跑原命令，保留相同的 `--tag` 和自定义目录参数。安装器会续用已保存的步骤和校验过的下载文件。
 
@@ -178,7 +178,7 @@ python3 -I scripts/cchouse.py remove --tag cc01
 
 Windows PowerShell 用 `py -3 -I scripts/cchouse.py remove --tag cc01`。安装时指定过 `--private-dir`，卸载时也传同一路径。
 
-安装器会先列出它能确认归属的虚拟机、干净快照、私有目录和临时明文，再询问是否删除。回车默认取消，`--yes` 会跳过确认。在 VMware 中，删除虚拟机也会删除它的所有内置快照。旧安装缺少能验证归属的记录时，请在虚拟机软件中核对后，按提示手动清理。
+安装器会先列出它能确认归属的虚拟机、干净快照、私有目录和临时明文，再询问是否删除。回车默认取消，`--yes` 会跳过确认。在 VMware 中，删除虚拟机也会删除它的所有内置快照。在 VirtualBox 中，卸载会先关机，再用 `VBoxManage unregistervm --delete` 删除安装记录里名字精确匹配的那一台。旧安装缺少能验证归属的记录时，请在虚拟机软件中核对后，按提示手动清理。
 
 黄金镜像和下载缓存默认保留，供其他实例复用。确认无需复用时，可加 `--purge-cache`，清单会列出对应 Tart 黄金镜像和可识别的下载缓存及大小。结束时会显示剩余内容和手动清理方法。
 

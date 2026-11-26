@@ -31,7 +31,7 @@ GTR_GOLDEN_VMX="C:\\Users\\<WIN_USER>\\cchouse-e2e-base\\cchouse-debian13-amd64\
 GTR_WORK_DIR="C:\\Users\\<WIN_USER>\\AppData\\Local\\cchouse\\e2e"
 ```
 
-> 客机导入、首启注入、联网重启的实现与 `scripts/cchouse.py up` 共用：Tart 见 `scripts/vm-tart.sh`（`run-mac.sh` source 复用），VMware 见 `scripts/vm-vmware.ps1`（`run-gtr.sh` 随 `gtr-remote.ps1` 一并上传并点源复用）。
+> 客机导入、首启注入、联网重启的实现与 `scripts/cchouse.py up` 共用：Tart 见 `scripts/vm-tart.sh`（`run-mac.sh` source 复用），VMware 见 `scripts/vm-vmware.ps1` 与 `scripts/windows-hostkey.ps1`（`run-gtr.sh` 随 `gtr-remote.ps1` 一并上传并点源复用）。
 
 ## 验证覆盖项
 

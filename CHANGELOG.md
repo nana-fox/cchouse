@@ -2,6 +2,9 @@
 
 ## v2.0-preview
 
+- Windows PowerShell 5.1 的 SSH 探测遇到超时会继续重试，主机密钥不符仍立即停止。Windows 脚本统一按原生命令退出码处理失败，保留独立的标准错误输出。CI 覆盖首次 SSH 超时后重试成功的路径。
+- Windows 上的 `cchouse up` 默认使用 VirtualBox，已有 VMware 实例的安装记录需使用新的 tag 创建 VirtualBox 实例。安装器直接采用并显示出口时区和预期出口 IP。修复 Windows PowerShell 5.1 遇到 VBoxManage 探测 stderr 时中止的问题，CI 增加 5.1 回归测试。首次 SSH 连接须同时通过本实例 NAT 转发与监听进程核对：优先核对 `VBox.log` 中的 PID，日志未提供 PID 时核对 VirtualBox 安装目录下的进程路径。
+- `cchouse.py remove` 增加 VirtualBox：按 `state.json` 里的虚拟机名精确匹配，先关机，再 `VBoxManage unregistervm --delete`。Windows 开机若串口没有主机公钥，要先确认 NAT 转发属于本实例，才用 `accept-new` 收录 `known_hosts`；`verify-linux.sh` 会记一条 WARN「未经串口核对主机密钥」。
 - 新增 `cchouse.py remove --tag`。根据安装记录精确清理 Tart 或 VMware 实例，先列清单再确认。默认保留共享黄金镜像和下载缓存，可用 `--purge-cache` 同时清理。
 - 安装器遇到输入结束（EOF）时，有默认值就采用并说明。没有默认值时给出中文提示，清理临时明文后退出。
 - 重写 README 面向首次使用者（大白话价值、三个痛点、原理图、3 步快速开始、支持矩阵、FAQ、安全设计、免责声明），新增英文版 `README.en.md` 与脱敏检查页截图 `docs/assets/check-all-green.png`；原 README 中的出口模式、目录结构、手动安装步骤移至新增的 `docs/manual-install.md`。
@@ -30,3 +33,5 @@
 - Tart 黄金镜像构建的 USTC apt 镜像仅在构建期间生效。关机前恢复 Debian 官方普通源和安全源，并在空状态断言中拒绝交付 `/etc/apt` 仍含 USTC 的镜像。
 - Linux 桌面网络检查页在客机代理启动或查询服务暂不可用时进行限时重试，等待期间显示黄色状态。出口元数据优先查询 IPQuery，备用 IPinfo，仍用 ipify 独立核对 IP。全部尝试结束后仍无法完成核对时提示刷新或运行自动验收。
 - 修复 `scripts/verify-linux.sh` 在 VirtualBox NAT 端口转发下仍连 22 端口的问题：`instance.env` 可选 `SSH_PORT`（默认 22），ssh 使用 `-p`、scp 使用 `-P`。Windows 上按绝对路径调用 `C:\Windows\System32\OpenSSH\ssh.exe` 与同目录 `scp.exe`，避免 Git Bash 把 `/usr/bin/ssh` 放在 PATH 最前盖住 `cchouse.py` 预置的 System32 OpenSSH，也避开会忽略 `ConnectTimeout` 的 `C:\Program Files\OpenSSH\ssh.exe`。System32 ssh 认 `-i` 的 `/c/...`，但不认 `UserKnownHostsFile="/c/..."`；选中该客户端时用 `cygpath -m` 把密钥和 `known_hosts` 转成 `C:/...`，没有 `cygpath` 时保持原路径。
+- Windows 的 `cchouse up` 不再调用 `ssh-keyscan.exe`（System32 的 keyscan 在 HVCI 下会卡住）。客机 `firstboot.sh` 生成 SSH 主机密钥后，最多用 2 秒把一行 `CCHOUSE_HOSTKEY` 写到串口（VirtualBox COM1 文件、VMware `serial0` 文件）。宿主据此写入 `known_hosts`，再用 System32 `ssh.exe` 和 `StrictHostKeyChecking=yes` 探测。串口没有这一行时，只在确认地址属于这台虚拟机之后用 `StrictHostKeyChecking=accept-new` 做第一次连接。等待有 180 秒上限，主机密钥对不上就立刻失败。Apple Silicon 的 Tart 仍用 `ssh-keyscan`。
+- Windows 上 `cchouse up` 检测到 VMware（`vmrun`）时仍用 VMware；没装时用 VirtualBox。基础包装只从 Oracle 官网下载，版本和 SHA-256 写在 `guest-linux/virtualbox-manifest.json`，静默参数为 `ADDLOCAL=VBoxApplication`（`--msiparams` 后每个属性单独一项），不含附加包，仓库不分发二进制。静默安装仍会弹出 Windows UAC。`scripts/vm-virtualbox.ps1` 导入同一份 Debian 13 OVA：只用 NAT，按 tag 在宿主 `127.0.0.1` 的 `2222`–`2421` 里选空闲端口写入 `SSH_PORT` 再转到客机 22（同一 tag 已写入且仍空闲的端口保持不变）；探测前确认本虚拟机的转发规则，对不上就不把主机钥写入 `known_hosts`。挂 `seed.iso` 离线首启，卸盘后开网卡、验收并打快照。`VMNET_CIDR=10.0.2.0/24` 在渲染前写入，`GUEST_IP=127.0.0.1`，`GUEST_IF=enp0s3`，不改 `ROUTER_IP`。Apple Silicon 仍走 Tart，Intel Mac 仍走 VMware。单测覆盖后端选择、清单校验和 IDE 控制器解析，CI 不安装 VirtualBox。

@@ -150,6 +150,23 @@ log() { [ "$JSON_OUT" = 1 ] || echo "$@"; }
 ok()  { log "  PASS  $1"; pass=$((pass+1)); }
 bad() { log "  FAIL  $1"; fail=$((fail+1)); }
 warn() { log "  WARN  $1"; warn_count=$((warn_count+1)); }
+# Windows 开机没有串口主机公钥时，会在确认地址属于本实例后用 accept-new 写 known_hosts。
+# 那一次必须出现在验收结果里，不能当成已经核对过。
+warn_unverified_hostkey() {
+  local hostkey_trust_file hostkey_trust
+  case "$ENV_FILE" in
+    */*) hostkey_trust_file="${ENV_FILE%/*}/logs/hostkey.trust" ;;
+    *) hostkey_trust_file="logs/hostkey.trust" ;;
+  esac
+  if [ ! -f "$hostkey_trust_file" ]; then
+    return 0
+  fi
+  hostkey_trust="$(tr -d '\r\n' < "$hostkey_trust_file" 2>/dev/null || true)"
+  if [ "$hostkey_trust" = "accept-new" ]; then
+    warn "未经串口核对主机密钥"
+  fi
+}
+warn_unverified_hostkey
 expect() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1（期望 $3，实际 ${2:-无}）"; fi; }
 
 expect_blocked() {

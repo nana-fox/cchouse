@@ -53,7 +53,7 @@ python3 -I scripts/cchouse.py up --tag cc01
 
 In Windows PowerShell, run `py -3 -I scripts/cchouse.py up --tag cc01`.
 
-When prompted, paste the node link. The input is not shown. The installer shows the detected exit time zone and the expected exit IP. After you confirm both are correct, press Enter on each to accept the default. After that, no further action is needed; wait for the automated verification to finish. The installer downloads and checks the image and the official Claude Code package in the background over the host network, and at the same time finishes configuration and its own checks. On Apple Silicon Mac and on Windows it creates the guest (importing the image or cloning an existing golden image), injects the configuration offline, deletes the plaintext config files, reboots onto the network, runs `verify-linux.sh --fail-closed`, and saves a clean snapshot after that passes. [Manual install](docs/manual-install.md)
+When prompted, paste the node link. The input is hidden. The installer applies and displays the exit time zone and expected exit IP, then continues through automated verification. The installer downloads and checks the image and the official Claude Code package in the background over the host network, and at the same time finishes configuration and its own checks. On Apple Silicon Mac and on Windows it creates the guest (importing the image or cloning an existing golden image), injects the configuration offline, deletes the plaintext config files, reboots onto the network, runs `verify-linux.sh --fail-closed`, and saves a clean snapshot after that passes. [Manual install](docs/manual-install.md)
 
 If installation fails, it stops on the step that failed. Fix the cause it prints, then rerun the same command from the same directory. Keep the same `--tag` and any custom directory arguments. The installer resumes from the saved steps and the downloads it has already checked.
 
@@ -178,7 +178,7 @@ python3 -I scripts/cchouse.py remove --tag cc01
 
 In Windows PowerShell, use `py -3 -I scripts/cchouse.py remove --tag cc01`. If you installed with `--private-dir`, pass the same path when uninstalling.
 
-The installer lists the VM, clean snapshot, private folder, and temporary plaintext it can verify before asking for confirmation. Enter cancels by default. Use `--yes` to skip confirmation. Deleting a VMware VM also deletes all its built-in snapshots. If an older installation lacks a record that verifies ownership, check the VM in your virtualization app and follow the manual cleanup instructions.
+The installer lists the VM, clean snapshot, private folder, and temporary plaintext it can verify before asking for confirmation. Enter cancels by default. Use `--yes` to skip confirmation. Deleting a VMware VM also deletes all its built-in snapshots. On VirtualBox, uninstall powers the VM off and then runs `VBoxManage unregistervm --delete` for the VM whose name matches the install record exactly. If an older installation lacks a record that verifies ownership, check the VM in your virtualization app and follow the manual cleanup instructions.
 
 The golden image and downloads stay in place by default so other instances can reuse them. If you no longer need them, add `--purge-cache` to list the associated Tart golden image and recognized downloads with their sizes for removal. The installer reports what remains and how to clean it up manually.
 

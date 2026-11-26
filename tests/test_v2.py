@@ -883,7 +883,7 @@ async function check(fixtures) {
                     self.assertNotEqual(r.stdout.strip(), "ok")
 
     def test_docs_keyboard_and_version_consistency(self):
-        for doc_name in ("install-tart-linux.md", "install-vmware-linux.md"):
+        for doc_name in ("install-tart-linux.md", "install-vmware-linux.md", "install-virtualbox-linux.md"):
             text = (ROOT / "docs" / doc_name).read_text(encoding="utf-8")
             self.assertNotIn("按出口地区配置键盘布局", text, doc_name)
             self.assertIn("GUEST_KEYBOARD", text, doc_name)
@@ -917,6 +917,16 @@ async function check(fixtures) {
         tart_builder = (ROOT / "guest-linux" / "image-builder" / "build-tart-linux-from-cloud-image.sh").read_text(encoding="utf-8")
         self.assertIn("BUILD_HOST=", tart_builder)
         self.assertIn("/var/db/dhcpd_leases", tart_builder)
+
+    def test_firstboot_publishes_ed25519_hostkey_on_serial(self):
+        fb = (ROOT / "guest-linux" / "firstboot.sh").read_text(encoding="utf-8")
+        publish = fb.split("ssh-keygen -A", 1)[1].split("GUEST_HOSTNAME", 1)[0]
+        self.assertIn("CCHOUSE_HOSTKEY", publish)
+        self.assertIn("ssh_host_ed25519_key.pub", publish)
+        self.assertIn("timeout 2", publish)
+        self.assertIn("/dev/ttyS0", publish)
+        self.assertNotIn("ssh_host_ed25519_key >/dev/ttyS0", publish)
+        self.assertNotIn("cat ", publish)
 
     def test_linux_single_optional_stripe_node_full_chain(self):
         with tempfile.TemporaryDirectory() as td:

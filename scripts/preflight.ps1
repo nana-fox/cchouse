@@ -12,6 +12,7 @@ $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $PreflightPy = Join-Path $ScriptDir "preflight.py"
+. (Join-Path $ScriptDir "windows-native.ps1")
 
 function Get-VbsNote {
   try {
@@ -48,9 +49,9 @@ if ($found) {
   $pyArgs = $found[1]
   if ($EnvPath) { $pyArgs += @("--env", $EnvPath) }
   if ($StatePath) { $pyArgs += @("--state", $StatePath) }
-  $outLines = & $pyExe @pyArgs
-  $rc = $LASTEXITCODE
-  $joined = ($outLines -join "`n")
+  $result = Invoke-CchouseNative -FilePath $pyExe -ArgumentList $pyArgs -ShowStderr
+  $rc = $result.ExitCode
+  $joined = ($result.Output -join "`n")
   if ($vbsNote -and $joined) {
     try {
       $obj = $joined | ConvertFrom-Json

@@ -49,6 +49,21 @@ fi
 if [ ! -f /etc/ssh/ssh_host_ed25519_key ]; then
   ssh-keygen -A
 fi
+# 主机公钥交给宿主串口，Windows 据此写 known_hosts。私钥留在客机。
+# 没有串口，或 2 秒内写不出去，都不让首启停住。
+if [ -f /etc/ssh/ssh_host_ed25519_key.pub ]; then
+  cchouse_keytype=""
+  cchouse_keydata=""
+  read -r cchouse_keytype cchouse_keydata _ < /etc/ssh/ssh_host_ed25519_key.pub || true
+  case "${cchouse_keytype} ${cchouse_keydata}" in
+    ssh-ed25519\ [A-Za-z0-9+/]*)
+      if command -v timeout >/dev/null 2>&1; then
+        timeout 2 sh -c 'printf "CCHOUSE_HOSTKEY %s %s\n" "$1" "$2" >/dev/ttyS0' _ "$cchouse_keytype" "$cchouse_keydata" || true
+      fi
+      ;;
+  esac
+  unset cchouse_keytype cchouse_keydata
+fi
 if [ -z "$GUEST_HOSTNAME" ]; then
   RAND_HEX=$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')
   GUEST_HOSTNAME="pc-${RAND_HEX}"

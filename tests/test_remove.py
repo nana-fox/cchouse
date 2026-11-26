@@ -66,6 +66,10 @@ class TestRemove(unittest.TestCase):
             del self.inventory[cmd[-1]]
             return subprocess.CompletedProcess(cmd, 0)
         if cmd[0] == "powershell":
+            if cmd[-2] == "-CcVmName":
+                self.assertEqual(cmd[-4:-1], ["-CcOp", "delete", "-CcVmName"])
+                self.assertEqual(cmd[-1], self.vm_name)
+                return subprocess.CompletedProcess(cmd, 0)
             self.assertEqual(cmd[-4:-1], ["-CcOp", "delete", "-CcVmx"])
             Path(cmd[-1]).unlink()
             return subprocess.CompletedProcess(cmd, 0)
@@ -134,7 +138,8 @@ class TestRemove(unittest.TestCase):
     def test_mismatched_and_unsupported_owners_leave_instance_untouched(self):
         for overrides in (
             {"vm_name": "claude-other1"}, {"clean_snapshot": "claude-other2-clean-old"},
-            {"vm_backend": "virtualbox"}, {"tag": "other2"}, {"private_dir": str(self.root)},
+            {"vm_backend": "virtualbox", "vm_name": "claude-other1", "clean_snapshot": "cchouse-clean"},
+            {"tag": "other2"}, {"private_dir": str(self.root)},
             {"vm_backend": None, "vm_name": None, "route": "vmware-linux"},
         ):
             with self.subTest(overrides=overrides):
@@ -142,8 +147,6 @@ class TestRemove(unittest.TestCase):
                 rc, text = self.remove(yes=True, purge=True)
                 self.assertEqual(rc, 1, text)
                 self.assertIn("手动清理", text)
-                if overrides.get("vm_backend") == "virtualbox":
-                    self.assertIn("此版本暂不支持卸载 VirtualBox 实例，请在 VirtualBox 中手动删除", text)
                 self.assertTrue(self.private.exists())
                 self.assertIn(self.vm_name, self.inventory)
         self.mock_run.assert_not_called()
@@ -164,6 +167,33 @@ class TestRemove(unittest.TestCase):
         self.assertIn(self.vm_name, self.inventory)
         self.assertIn(self.snapshot, self.inventory)
         self.assertFalse(self.private.exists())
+
+    def test_virtualbox_deletes_the_exact_recorded_name(self):
+        self.write_state(vm_backend="virtualbox", route="vmware-linux", clean_snapshot="cchouse-clean")
+        vm_dir = self.private / "vm" / self.vm_name
+        vm_dir.mkdir(parents=True)
+        (vm_dir / f"{self.vm_name}.vbox").touch()
+        rc, text = self.remove(yes=True)
+        self.assertEqual(rc, 0, text)
+        self.assertIn("unregistervm --delete", text)
+        self.assertIn(self.vm_name, text)
+        self.assertIn("先关机", text)
+        self.assertFalse(self.private.exists())
+        self.assertEqual(self.mock_run.call_count, 1)
+        cmd = self.mock_run.call_args.args[0]
+        self.assertEqual(cmd[-4:], ["-CcOp", "delete", "-CcVmName", self.vm_name])
+        self.assertTrue(cmd[-5].endswith("vm-virtualbox.ps1"))
+        self.assertTrue(self.image.is_file())
+
+    def test_unrelated_virtualbox_directory_blocks_uninstall(self):
+        self.write_state(vm_backend="virtualbox", route="vmware-linux", clean_snapshot="cchouse-clean")
+        other = self.private / "vm" / "claude-other2"
+        other.mkdir(parents=True)
+        rc, text = self.remove(yes=True)
+        self.assertEqual(rc, 1, text)
+        self.assertIn("无法确认归属", text)
+        self.assertTrue(other.is_dir())
+        self.mock_run.assert_not_called()
 
     def test_unrelated_vmware_directory_blocks_uninstall(self):
         self.write_state(vm_backend="vmware", route="vmware-linux", clean_snapshot="cchouse-clean")
