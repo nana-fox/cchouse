@@ -505,12 +505,14 @@ def write_env_secure(env_path, content):
         env_path.write_bytes(content.replace("\r\n", "\n").encode("utf-8"))
 
 
-def run_preflight_check(env_path, route, check_stripe=True):
+def run_preflight_check(env_path, route, check_stripe=True, tart_bin=None):
     cmd = [sys.executable, "-I", str(ROOT / "scripts" / "preflight.py"), "--route", route, "--env", str(env_path)]
     if check_stripe:
         cmd.append("--check-stripe")
     child_env = os.environ.copy()
     child_env["PYTHONIOENCODING"] = "utf-8"
+    if tart_bin and (os.path.isabs(str(tart_bin)) or os.sep in str(tart_bin)):
+        child_env["CCHOUSE_TART_BIN"] = str(tart_bin)
     proc = subprocess.run(
         cmd,
         stdout=subprocess.PIPE,
@@ -856,6 +858,7 @@ class UpContext:
         self.claude_path = self.cache_dir / f"claude-code-{self.claude_platform}.tgz"
         self.downloader = Downloader()
         self.state = self._load_state()
+        self.tart_bin = _resolve_up_tart_bin(self.state) if self.backend == "tart" else None
 
     # ---- state.json（断点续跑 + 计时） ----
     def _load_state(self):
@@ -915,7 +918,7 @@ class UpContext:
             raise StepError(f"找不到命令：{cmd[0]}") from None
 
     def tart(self, *op):
-        return self.run(["bash", ROOT / "scripts" / "vm-tart.sh", *op])
+        return self.run(["bash", ROOT / "scripts" / "vm-tart.sh", *op], env=_tart_env(self.tart_bin))
 
     def virtualbox(self, op, **kw):
         cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ROOT / "scripts" / "vm-virtualbox.ps1", "-CcOp", op]
@@ -1000,6 +1003,14 @@ class UpContext:
         if chosen and chosen != "auto":
             parts += ["--vm-backend", chosen]
         return " ".join(parts)
+
+
+    def doctor_cmd(self, env_arg="", vm_arg=""):
+        py_exe = str(Path(sys.executable).resolve())
+        doc_script = str(ROOT / "scripts" / "doctor.py")
+        if platform.system() == "Windows":
+            return f'& "{py_exe}" -I "{doc_script}"{env_arg}{vm_arg}'
+        return f'"{py_exe}" -I "{doc_script}"{env_arg}{vm_arg}'
 
 
 def do_config(ctx):
@@ -1109,7 +1120,7 @@ def step_config(ctx):
 def step_preflight(ctx):
     apply_virtualbox_guest_net(ctx)
     rc, pf_json, pf_stderr = run_preflight_check(
-        ctx.env_path, ctx.route, check_stripe=(not ctx.args.no_probe),
+        ctx.env_path, ctx.route, check_stripe=(not ctx.args.no_probe), tart_bin=ctx.tart_bin,
     )
     if not pf_json:
         msg = f"preflight 无法运行（退出码 {rc}）：{pf_stderr[-300:]}"
@@ -1161,6 +1172,7 @@ def vm_exists(ctx):
         return subprocess.run(
             ["bash", str(ROOT / "scripts" / "vm-tart.sh"), "exists", ctx.vm_name],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            env=_tart_env(ctx.tart_bin),
         ).returncode == 0
     if ctx.backend == "virtualbox":
         try:
@@ -1175,16 +1187,79 @@ def vm_exists(ctx):
     return False
 
 
-def tart_vm_dir(name):
-    return preflight_mod.tart_home_dir() / "vms" / name
+def tart_vm_dir(name, tart_bin=None):
+    return preflight_mod.tart_home_dir(tart_bin) / "vms" / name
 
 
-def tart_vm_identity(name):
+def tart_vm_identity(name, tart_bin=None):
     try:
-        info = tart_vm_dir(name).lstat()
+        info = tart_vm_dir(name, tart_bin).lstat()
     except FileNotFoundError:
         return None
     return [info.st_dev, info.st_ino] if stat.S_ISDIR(info.st_mode) else None
+
+
+def _tart_vm_config_mac(name, tart_bin=None):
+    cfg = tart_vm_dir(name, tart_bin) / "config.json"
+    if not cfg.is_file():
+        return None
+    try:
+        data = json.loads(cfg.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    for key in ("macAddress", "MAC", "mac"):
+        val = data.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip().lower()
+    return None
+
+
+def _tart_vm_mac(name, tart_bin=None):
+    exe = tart_bin or _tart_bin()
+    try:
+        proc = subprocess.run(
+            [str(exe), "get", name, "--format", "json"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0 or not (proc.stdout or "").strip():
+        return None
+    try:
+        data = json.loads(proc.stdout)
+    except ValueError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    for key in ("MAC", "mac", "macAddress"):
+        val = data.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip().lower()
+    for k, v in data.items():
+        if str(k).lower() in ("mac", "macaddress") and isinstance(v, str) and v.strip():
+            return v.strip().lower()
+    return None
+
+
+def _verify_tart_ownership(name, state, identity_key, mac_key, tart_bin=None):
+    """用同一个 tart 与目录身份双重校验目标虚拟机/快照归属；对不上立即报错，绝不操作。"""
+    has_id = identity_key in state and state.get(identity_key) is not None
+    has_mac = mac_key in state and bool(state.get(mac_key))
+    if not has_id and not has_mac:
+        return
+    if has_id:
+        cur_id = tart_vm_identity(name, tart_bin)
+        if cur_id is None or cur_id != state[identity_key]:
+            raise StepError(vm_name_conflict(name))
+    dir_mac = _tart_vm_config_mac(name, tart_bin)
+    if has_mac or dir_mac:
+        live_mac = _tart_vm_mac(name, tart_bin)
+        if has_mac and (not live_mac or live_mac != str(state[mac_key]).strip().lower()):
+            raise StepError(vm_name_conflict(name))
+        if dir_mac and (not live_mac or live_mac != dir_mac):
+            raise StepError(vm_name_conflict(name))
 
 
 def vm_name_conflict(name):
@@ -1225,12 +1300,14 @@ def step_import(ctx):
     if exists and not owned:
         raise StepError(vm_name_conflict(ctx.vm_name))
     if ctx.backend == "tart":
-        if exists and (not ctx.state.get("tart_vm_identity")
-                or tart_vm_identity(ctx.vm_name) != ctx.state["tart_vm_identity"]):
-            raise StepError(vm_name_conflict(ctx.vm_name))
+        if exists:
+            if not ctx.state.get("tart_vm_identity") and not ctx.state.get("tart_vm_mac"):
+                raise StepError(vm_name_conflict(ctx.vm_name))
+            _verify_tart_ownership(ctx.vm_name, ctx.state, "tart_vm_identity", "tart_vm_mac", ctx.tart_bin)
         existed = (not ctx.dry_run) and subprocess.run(
             ["bash", str(ROOT / "scripts" / "vm-tart.sh"), "exists", ctx.golden_name],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            env=_tart_env(ctx.tart_bin),
         ).returncode == 0
         if existed:
             print(f"  本机已有黄金镜像 {ctx.golden_name}，直接克隆（热缓存）")
@@ -1239,10 +1316,19 @@ def step_import(ctx):
         if exists:
             ctx.tart("delete", ctx.vm_name)
         ctx.tart("clone-new", ctx.golden_name, ctx.vm_name)
-        ctx.state.update(vm_created_by_up=True, vm_name=ctx.vm_name, vm_backend=ctx.backend,
-                         golden_name=ctx.golden_name, tart_vm_identity=tart_vm_identity(ctx.vm_name),
-                         image_artifact=image_identity(ctx.artifact),
-                         image_artifact_origin="reused_tart_golden" if existed else "verified_download")
+        updates = dict(
+            vm_created_by_up=True, vm_name=ctx.vm_name, vm_backend=ctx.backend,
+            golden_name=ctx.golden_name, tart_vm_identity=tart_vm_identity(ctx.vm_name, ctx.tart_bin),
+            image_artifact=image_identity(ctx.artifact),
+            image_artifact_origin="reused_tart_golden" if existed else "verified_download",
+        )
+        if ctx.tart_bin:
+            updates["tart_bin"] = ctx.tart_bin
+        if not ctx.dry_run:
+            vm_mac = _tart_vm_mac(ctx.vm_name, ctx.tart_bin)
+            if vm_mac:
+                updates["tart_vm_mac"] = vm_mac
+        ctx.state.update(updates)
         ctx.save_state()
         return existed
     if ctx.backend == "virtualbox":
@@ -1333,12 +1419,30 @@ def step_verify(ctx):
 def step_snapshot(ctx):
     if ctx.backend == "tart":
         snap = f"{ctx.vm_name}-clean"
-        if tart_vm_dir(snap).exists():
-            if not ctx.state.get("tart_snapshot_identity") or tart_vm_identity(snap) != ctx.state["tart_snapshot_identity"]:
+        snap_exists = (not ctx.dry_run) and (
+            subprocess.run(
+                ["bash", str(ROOT / "scripts" / "vm-tart.sh"), "exists", snap],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                env=_tart_env(ctx.tart_bin),
+            ).returncode == 0
+            or tart_vm_dir(snap, ctx.tart_bin).exists()
+        )
+        if snap_exists:
+            if not ctx.state.get("tart_snapshot_identity") and not ctx.state.get("tart_snapshot_mac"):
                 raise StepError(vm_name_conflict(snap))
+            _verify_tart_ownership(snap, ctx.state, "tart_snapshot_identity", "tart_snapshot_mac", ctx.tart_bin)
         else:
+            if not ctx.dry_run:
+                _verify_tart_ownership(ctx.vm_name, ctx.state, "tart_vm_identity", "tart_vm_mac", ctx.tart_bin)
             ctx.tart("snapshot-new", ctx.vm_name, snap)
-        ctx.state.update(clean_snapshot=snap, tart_snapshot_identity=tart_vm_identity(snap))
+        snap_updates = dict(clean_snapshot=snap, tart_snapshot_identity=tart_vm_identity(snap, ctx.tart_bin))
+        if ctx.tart_bin:
+            snap_updates["tart_bin"] = ctx.tart_bin
+        if not ctx.dry_run:
+            snap_mac = _tart_vm_mac(snap, ctx.tart_bin)
+            if snap_mac:
+                snap_updates["tart_snapshot_mac"] = snap_mac
+        ctx.state.update(snap_updates)
         ctx.save_state()
         ctx.tart("gui", ctx.vm_name, ctx.logs / "tart-gui.log")
     elif ctx.backend == "virtualbox":
@@ -1383,9 +1487,11 @@ def step_snapshot(ctx):
             try:
                 paths = launcher_mod.create(ctx.tag, ctx.state)
                 if paths:
-                    print(f"  已创建桌面启动入口：{', '.join(paths)}")
+                    has_desktop = any("Desktop" in p for p in paths)
+                    label = "桌面启动入口" if has_desktop else "应用启动入口"
+                    print(f"  已创建{label}：{', '.join(paths)}")
             except (OSError, subprocess.SubprocessError) as exc:
-                print(f"  WARN  桌面启动入口创建失败：{exc}")
+                print(f"  WARN  启动入口创建失败：{exc}")
         ctx.save_state()
     return False
 
@@ -1529,10 +1635,10 @@ def on_failure(ctx, steps, i, name, title, reason):
     vm_arg = " --vm-ssh" if ctx.done("boot") else ""
     print(f"\n✗ 第 {i}/{len(steps)} 步「{title}」失败：{reason}")
     print("  明文 seed.iso / rendered 已删除；后台下载如未完成，已下载部分会保留续传。")
-    print("  修复后再次运行同一命令，会从这一步继续（state.json 断点续跑）：")
-    print(f"    {ctx.rerun_cmd()}")
+    print("  修复后请原样重跑首页安装命令，会从这一步继续（state.json 断点续跑）。")
+    print(f"  如在源码目录手动运行，也可执行：{ctx.rerun_cmd()}")
     print("  需要求助时导出脱敏诊断包：")
-    print(f"    {ctx.py()} scripts/doctor.py{env_arg}{vm_arg}")
+    print(f"    {ctx.doctor_cmd(env_arg, vm_arg)}")
 
 
 def finish_manual(ctx, steps):
@@ -1577,8 +1683,14 @@ def cmd_up(args):
                  and previous_backend == ctx.backend)
         if ctx.backend == "tart" and owned:
             identity = ctx.state.get("tart_vm_identity")
-            owned = (tart_vm_identity(ctx.vm_name) == identity if identity is not None
-                     else ctx.done("snapshot"))
+            has_mac = bool(ctx.state.get("tart_vm_mac"))
+            if identity is not None or has_mac:
+                try:
+                    _verify_tart_ownership(ctx.vm_name, ctx.state, "tart_vm_identity", "tart_vm_mac", ctx.tart_bin)
+                except StepError:
+                    owned = False
+            else:
+                owned = ctx.done("snapshot")
         if not owned:
             sys.exit(vm_name_conflict(ctx.vm_name))
         print(f"检测到 {ctx.vm_name} 的安装记录，将沿用已完成步骤。")
@@ -1586,19 +1698,69 @@ def cmd_up(args):
         sys.exit(f"安装记录中的虚拟机 {ctx.vm_name} 已不存在。请使用新的 --tag，或先核对并卸载旧记录。")
     if live_run and ctx.backend == "tart" and not ctx.done("snapshot"):
         snapshot = f"{ctx.vm_name}-clean"
-        if tart_vm_dir(snapshot).exists() and (not ctx.state.get("tart_snapshot_identity")
-                or tart_vm_identity(snapshot) != ctx.state["tart_snapshot_identity"]):
-            sys.exit(vm_name_conflict(snapshot))
+        snap_exists = (
+            subprocess.run(
+                ["bash", str(ROOT / "scripts" / "vm-tart.sh"), "exists", snapshot],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                env=_tart_env(ctx.tart_bin),
+            ).returncode == 0
+            or tart_vm_dir(snapshot, ctx.tart_bin).exists()
+        )
+        if snap_exists:
+            if not ctx.state.get("tart_snapshot_identity") and not ctx.state.get("tart_snapshot_mac"):
+                sys.exit(vm_name_conflict(snapshot))
+            try:
+                _verify_tart_ownership(snapshot, ctx.state, "tart_snapshot_identity", "tart_snapshot_mac", ctx.tart_bin)
+            except StepError as exc:
+                sys.exit(str(exc))
     return run_pipeline(ctx)
 
 
-def _tart_bin():
-    return "tart" if shutil.which("tart") else (preflight_mod.find_tart() or "tart")
+def _resolve_up_tart_bin(state=None):
+    """安装阶段解析实际使用的 tart 绝对路径，供 state.json 固定。"""
+    if state and state.get("tart_bin"):
+        return str(state["tart_bin"])
+    override = os.environ.get("CCHOUSE_TART_BIN", "").strip()
+    if override and os.path.isfile(override):
+        return os.path.abspath(override)
+    found = shutil.which("tart") or preflight_mod.find_tart()
+    return os.path.abspath(found) if found else None
 
 
-def _tart_inventory():
+def _tart_bin(state=None, *, announce_legacy=False):
+    if state and state.get("tart_bin"):
+        return str(state["tart_bin"])
+    override = os.environ.get("CCHOUSE_TART_BIN", "").strip()
+    if override:
+        chosen = override
+        shown = override
+    else:
+        which_tart = shutil.which("tart")
+        if which_tart:
+            chosen = "tart"
+            shown = which_tart
+        else:
+            found = preflight_mod.find_tart()
+            chosen = found or "tart"
+            shown = chosen
+    if announce_legacy:
+        print(f"[cchouse] 旧安装记录未固定 tart 路径，当前使用：{shown}", file=sys.stderr)
+    return chosen
+
+
+def _tart_env(tart_bin=None):
+    env = os.environ.copy()
+    if tart_bin and (os.path.isabs(str(tart_bin)) or os.sep in str(tart_bin)):
+        env["CCHOUSE_TART_BIN"] = str(tart_bin)
+    else:
+        env.pop("CCHOUSE_TART_BIN", None)
+    return env
+
+
+def _tart_inventory(tart_bin=None):
+    exe = tart_bin or _tart_bin()
     proc = subprocess.run(
-        [_tart_bin(), "list", "--source", "local", "--format", "json"],
+        [str(exe), "list", "--source", "local", "--format", "json"],
         check=True, capture_output=True, encoding="utf-8",
     )
     try:
@@ -1741,14 +1903,19 @@ def cmd_remove(args):
             raise StepError("缓存位于实例私有目录中，请先手动移出缓存")
 
         manifest = json.loads((ROOT / "guest-linux" / "image-manifest.json").read_text(encoding="utf-8"))
+        tart_bin = None
         if backend == "tart":
+            tart_bin = _tart_bin(state, announce_legacy=not state.get("tart_bin"))
             golden_name = state.get("golden_name", f"cchouse-debian13-arm64-{manifest['image_version']}")
             if not isinstance(golden_name, str) or not re.fullmatch(r"cchouse-debian13-arm64-[a-zA-Z0-9._-]+", golden_name):
                 raise StepError("state.json 的 Tart 黄金镜像名无效")
-            inventory = _tart_inventory()
-            for name, key in ((vm_name, "tart_vm_identity"), (snapshot, "tart_snapshot_identity")):
-                if name in inventory and key in state and tart_vm_identity(name) != state[key]:
-                    raise StepError(vm_name_conflict(name))
+            inventory = _tart_inventory(tart_bin)
+            for name, id_key, mac_key in (
+                (vm_name, "tart_vm_identity", "tart_vm_mac"),
+                (snapshot, "tart_snapshot_identity", "tart_snapshot_mac"),
+            ):
+                if name in inventory:
+                    _verify_tart_ownership(name, state, id_key, mac_key, tart_bin)
         else:
             inventory = {}
 
@@ -1779,7 +1946,10 @@ def cmd_remove(args):
         if not owned:
             print("该记录没有安装器创建虚拟机的标记。手动创建的虚拟机需在虚拟机软件里核对并删除。")
         if not args.purge_cache:
-            print("Tart 黄金镜像和共享下载缓存默认保留。")
+            if backend == "tart":
+                print("Tart 黄金镜像和共享下载缓存默认保留。")
+            else:
+                print("黄金镜像和共享下载缓存默认保留。")
         else:
             print("共享缓存可能供其他实例使用。")
         if not args.yes:
@@ -1794,14 +1964,24 @@ def cmd_remove(args):
             raise StepError("确认期间实例状态改变，请重新预览")
         if owned and REMOVE_BACKENDS[backend](vm_name, snapshot, private_dir, inventory) != vm_actions:
             raise StepError("确认期间虚拟机路径改变，请重新预览")
+        if backend == "tart" and owned:
+            for name, id_key, mac_key in (
+                (vm_name, "tart_vm_identity", "tart_vm_mac"),
+                (snapshot, "tart_snapshot_identity", "tart_snapshot_mac"),
+            ):
+                if name in inventory:
+                    _verify_tart_ownership(name, state, id_key, mac_key, tart_bin)
 
         for _label, cmd in vm_actions:
-            subprocess.run(cmd, check=True)
+            run_kwargs = {"check": True}
+            if backend == "tart":
+                run_kwargs["env"] = _tart_env(tart_bin)
+            subprocess.run(cmd, **run_kwargs)
         if launcher_items:
             launcher_mod.remove(tag, state)
         if args.purge_cache:
             if golden:
-                subprocess.run([_tart_bin(), "delete", golden_name], check=True)
+                subprocess.run([str(tart_bin), "delete", golden_name], check=True)
             for path, _size in cache_items:
                 if _remove_path(path.parent.resolve()) != path.parent:
                     raise StepError("缓存目录在卸载期间改变")
@@ -1815,18 +1995,22 @@ def cmd_remove(args):
         print(f"可在文件管理器核对共享下载缓存 {cache_dir}，仅删除不再需要的安装包。")
         return 1
     print(f"已完成 {tag} 的卸载。")
-    _print_remove_remainder(cache_dir, golden_name, args.purge_cache)
+    _print_remove_remainder(cache_dir, golden_name, args.purge_cache, tart_bin=tart_bin)
     return 0
 
 
-def _print_remove_remainder(cache_dir, golden_name, purged):
+def _print_remove_remainder(cache_dir, golden_name, purged, tart_bin=None):
     if purged:
         print("已处理清单中的共享缓存项，未识别的缓存文件可在文件管理器中核对。")
     else:
         print("保留共享黄金镜像和下载缓存。确认其他实例无需使用后，可按下面的路径手动清理。")
     print(f"手动清理下载缓存：在文件管理器打开 {cache_dir}，核对后删除不需要的安装包。")
     if golden_name and not purged:
-        print(f'手动清理 Tart 黄金镜像：确认无需使用后运行 tart delete "{golden_name}"。')
+        if tart_bin and (os.path.isabs(str(tart_bin)) or os.sep in str(tart_bin)):
+            tart_cmd = f'"{tart_bin}"'
+        else:
+            tart_cmd = "tart"
+        print(f'手动清理 Tart 黄金镜像：确认无需使用后运行 {tart_cmd} delete "{golden_name}"，或卸载时加 --purge-cache。')
     print("安装器仓库和宿主虚拟机软件仍保留，可分别在文件管理器和系统软件管理界面删除。")
 
 
@@ -1844,6 +2028,7 @@ def _load_instance_context(tag, private_dir_arg=None):
     if not backend:
         route = state.get("route") or detect_route()
         backend = detect_vm_backend(route)
+    tart_bin = _tart_bin(state, announce_legacy=bool(state and not state.get("tart_bin"))) if backend == "tart" else None
     return {
         "tag": tag,
         "root": root,
@@ -1856,6 +2041,7 @@ def _load_instance_context(tag, private_dir_arg=None):
         "state": state,
         "vm_name": vm_name,
         "backend": backend,
+        "tart_bin": tart_bin,
         "snapshot": state.get("clean_snapshot") or (f"{vm_name}-clean" if backend == "tart" else CLEAN_SNAPSHOT),
     }
 
@@ -1894,12 +2080,13 @@ def _backend_status(info):
     vm_name = info["vm_name"]
     snapshot = info["snapshot"]
     if backend == "tart":
-        proc = subprocess.run(_tart_cmd("status", vm_name), capture_output=True, text=True)
+        tenv = _tart_env(info.get("tart_bin"))
+        proc = subprocess.run(_tart_cmd("status", vm_name), capture_output=True, text=True, env=tenv)
         vm_state = (proc.stdout or "").strip().splitlines()[-1].strip() if proc.stdout and proc.stdout.strip() else "missing"
         if vm_state not in ("running", "stopped", "missing"):
             vm_state = "missing"
         snap_exists = subprocess.run(
-            _tart_cmd("exists", snapshot), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            _tart_cmd("exists", snapshot), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=tenv,
         ).returncode == 0
         return vm_state, snap_exists
     if backend == "virtualbox":
@@ -1923,14 +2110,20 @@ def _sync_tart_ip_and_known_hosts(info):
     """Tart 重启或 restore 后 DHCP IP 可能变化；复用既有 known_hosts 中已固定的主机公钥映射到新 IP。"""
     if info["backend"] != "tart":
         return _env_raw_value(info["env_path"], "GUEST_IP") if info["env_path"].is_file() else None
-    try:
-        proc = subprocess.run(
-            [_tart_bin(), "ip", info["vm_name"], "--wait", "2"],
-            capture_output=True, text=True, timeout=10,
-        )
-        ip = (proc.stdout or "").strip().splitlines()[0].strip() if proc.stdout and proc.stdout.strip() else ""
-    except (OSError, subprocess.SubprocessError):
-        ip = ""
+    tart_bin = info.get("tart_bin") or _tart_bin(info.get("state"))
+    ip = ""
+    for ip_cmd in (
+        [str(tart_bin), "ip", info["vm_name"], "--wait", "2"],
+        [str(tart_bin), "ip", "--resolver=arp", info["vm_name"], "--wait", "2"],
+    ):
+        try:
+            proc = subprocess.run(ip_cmd, capture_output=True, text=True, timeout=10)
+            cand = (proc.stdout or "").strip().splitlines()[0].strip() if proc.stdout and proc.stdout.strip() else ""
+            if render_mod.is_ipv4(cand):
+                ip = cand
+                break
+        except (OSError, subprocess.SubprocessError):
+            continue
     if not render_mod.is_ipv4(ip):
         return _env_raw_value(info["env_path"], "GUEST_IP") if info["env_path"].is_file() else None
     if info["env_path"].is_file() and _env_raw_value(info["env_path"], "GUEST_IP") != ip:
@@ -2037,7 +2230,10 @@ def cmd_open(args):
             raise StepError(f"虚拟机 {info['vm_name']} 不存在，请核对或运行 cchouse up --tag {info['tag']}。")
         if info["backend"] == "tart":
             info["logs"].mkdir(parents=True, exist_ok=True)
-            subprocess.run(_tart_cmd("open", info["vm_name"], info["logs"] / "tart-gui.log"), check=True)
+            subprocess.run(
+                _tart_cmd("open", info["vm_name"], info["logs"] / "tart-gui.log"),
+                check=True, env=_tart_env(info.get("tart_bin")),
+            )
             print("提示：关机请用桌面右键 Safe Shutdown 或 cchouse stop")
         elif info["backend"] == "virtualbox":
             subprocess.run(_virtualbox_cmd("gui", VmName=info["vm_name"]), check=True)
@@ -2080,7 +2276,7 @@ def cmd_stop(args):
                 "请在客机桌面右键选择 Power Off (Safe Shutdown)，或加 --force 强制停机。"
             )
         if info["backend"] == "tart":
-            subprocess.run(_tart_cmd("stop", info["vm_name"]), check=True)
+            subprocess.run(_tart_cmd("stop", info["vm_name"]), check=True, env=_tart_env(info.get("tart_bin")))
         elif info["backend"] == "virtualbox":
             subprocess.run(
                 _virtualbox_cmd("stop", VmName=info["vm_name"], Force="yes", Timeout=str(timeout)),
@@ -2103,6 +2299,11 @@ def cmd_restore(args):
         vm_state, snap_exists = _backend_status(info)
         if not snap_exists:
             raise StepError(f"找不到干净快照 {info['snapshot']}，无法恢复。")
+        if info["backend"] == "tart":
+            tart_bin = info.get("tart_bin")
+            if vm_state != "missing":
+                _verify_tart_ownership(info["vm_name"], info["state"], "tart_vm_identity", "tart_vm_mac", tart_bin)
+            _verify_tart_ownership(info["snapshot"], info["state"], "tart_snapshot_identity", "tart_snapshot_mac", tart_bin)
         if not getattr(args, "yes", False):
             try:
                 ok = input(
@@ -2120,8 +2321,18 @@ def cmd_restore(args):
             if rc != 0:
                 return rc
         if info["backend"] == "tart":
-            subprocess.run(_tart_cmd("restore", info["vm_name"], info["snapshot"]), check=True)
-            info["state"]["tart_vm_identity"] = tart_vm_identity(info["vm_name"])
+            tart_bin = info.get("tart_bin")
+            if vm_state != "missing":
+                _verify_tart_ownership(info["vm_name"], info["state"], "tart_vm_identity", "tart_vm_mac", tart_bin)
+            _verify_tart_ownership(info["snapshot"], info["state"], "tart_snapshot_identity", "tart_snapshot_mac", tart_bin)
+            subprocess.run(
+                _tart_cmd("restore", info["vm_name"], info["snapshot"]),
+                check=True, env=_tart_env(tart_bin),
+            )
+            info["state"]["tart_vm_identity"] = tart_vm_identity(info["vm_name"], tart_bin)
+            new_mac = _tart_vm_mac(info["vm_name"], tart_bin)
+            if new_mac:
+                info["state"]["tart_vm_mac"] = new_mac
             _save_state_dict(info["state_path"], info["state"])
         elif info["backend"] == "virtualbox":
             subprocess.run(
@@ -2172,7 +2383,7 @@ def main():
     p_remove.add_argument("--tag", required=True, help="安装时的实例短名")
     p_remove.add_argument("--private-dir", help="安装时使用的自定义私有目录")
     p_remove.add_argument("--yes", action="store_true", help="跳过确认提示")
-    p_remove.add_argument("--purge-cache", action="store_true", help="同时清理共享下载缓存和对应的 Tart 黄金镜像")
+    p_remove.add_argument("--purge-cache", action="store_true", help="同时清理共享下载缓存和对应的黄金镜像")
 
     p_open = sub.add_parser("open", help="打开客机桌面窗口（已开则不重复开）")
     p_open.add_argument("--tag", default="cc01", help="实例短名（默认 cc01）")

@@ -83,9 +83,11 @@ echo "cchouse $version 将校验并准备私有 Python 和源码，写入 ${root
 if command -v tart >/dev/null && tart --version >/dev/null 2>&1; then
   echo '将复用本机 Tart。'
   needs_tart=0
+  export CCHOUSE_TART_BIN="$(command -v tart)"
 elif [ -x "$tart_home/Contents/MacOS/tart" ] && "$tart_home/Contents/MacOS/tart" --version >/dev/null 2>&1; then
   echo '将复用已准备的私有 Tart。'
   needs_tart=0
+  export CCHOUSE_TART_BIN="$tart_home/Contents/MacOS/tart"
   export PATH="$tart_home/Contents/MacOS:$PATH"
 else
   echo '将从官方 Release 校验并准备私有 Tart。'
@@ -223,8 +225,9 @@ if [ "$needs_tart" = 1 ]; then
   tart_tar="$root/downloads/tart-$tart_sha.tar.gz"
   fetch "私有 Tart" "$tart_url" "$tart_sha" "$tart_tar"
   install_tar "$tart_tar" "$tart_home" tart.app
+  export CCHOUSE_TART_BIN="$tart_home/Contents/MacOS/tart"
   export PATH="$tart_home/Contents/MacOS:$PATH"
-  tart --version >/dev/null
+  "$CCHOUSE_TART_BIN" --version >/dev/null
 fi
 if [ ! -d "$code" ]; then
   mkdir "$stage/zip"

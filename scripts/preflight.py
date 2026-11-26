@@ -61,6 +61,9 @@ def _private_tart_candidates():
 
 
 def find_tart():
+    override = os.environ.get("CCHOUSE_TART_BIN", "").strip()
+    if override and os.path.isfile(override):
+        return override
     for cand in (
         shutil.which("tart"),
         str(Path.home() / ".local/bin/tart"),
@@ -106,7 +109,7 @@ def detect_ram_gb():
 
 
 def _parse_wrapper_tart_home(tart_bin):
-    """当 tart 通过 host/tart-wrapper.sh.example 包装脚本安装时，解析其中 export 的 TART_HOME。"""
+    """当 tart 通过 host/tart-wrapper.sh.example 包装脚本安装时，解析其中强制 export 的 TART_HOME。"""
     if not tart_bin or not os.path.isfile(tart_bin):
         return None
     try:
@@ -121,18 +124,20 @@ def _parse_wrapper_tart_home(tart_bin):
         m = re.match(r'^\s*(?:export\s+)?TART_HOME=(?:"([^"]+)"|\'([^\']+)\'|([^\s#]+))', line)
         if m:
             raw = m.group(1) or m.group(2) or m.group(3)
-            if raw:
+            # 仅把无条件覆盖 TART_HOME 的包装脚本视为固定目录；条件默认值（如 ${TART_HOME:-...}）尊重环境变量
+            if raw and "TART_HOME" not in raw:
                 return Path(os.path.expanduser(os.path.expandvars(raw)))
     return None
 
 
 def tart_home_dir(tart_bin=None):
-    env_home = os.environ.get("TART_HOME", "").strip()
-    if env_home:
-        return Path(os.path.expanduser(env_home))
+    # 若 tart 是强制覆盖 TART_HOME 的包装脚本，实际目录由包装脚本决定，优先于当前环境变量
     wrapper_home = _parse_wrapper_tart_home(tart_bin if tart_bin is not None else find_tart())
     if wrapper_home is not None:
         return wrapper_home
+    env_home = os.environ.get("TART_HOME", "").strip()
+    if env_home:
+        return Path(os.path.expanduser(env_home))
     return Path.home() / ".tart"
 
 

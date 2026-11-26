@@ -380,8 +380,9 @@ class TestUpPipeline(unittest.TestCase):
             self.assertFalse(ctx.rendered.exists())
             text = out.getvalue()
             self.assertIn("导入/克隆黄金镜像", text)
+            self.assertIn("原样重跑首页安装命令", text)
             self.assertIn("会从这一步继续", text)
-            self.assertIn("scripts/doctor.py", text)
+            self.assertIn(os.path.join("scripts", "doctor.py"), text)
             self.assertIn("耗时表", text)
             if os.name != "nt":
                 self.assertEqual(os.stat(ctx.state_path).st_mode & 0o777, 0o600)

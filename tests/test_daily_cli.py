@@ -172,6 +172,7 @@ class TestDailyCliDispatch(unittest.TestCase):
             with mock.patch.object(cchouse, "default_private_root", return_value=root), \
                  mock.patch.object(cchouse, "_backend_status", return_value=("stopped", True)), \
                  mock.patch.object(cchouse, "tart_vm_identity", return_value=[123, 456]), \
+                 mock.patch.object(cchouse, "_tart_vm_mac", return_value="02:cc:00:00:00:99"), \
                  mock.patch.object(cchouse.subprocess, "run") as m_run:
                 with redirect_stdout(io.StringIO()):
                     rc = cchouse.cmd_restore(argparse.Namespace(tag="cc01", private_dir=None, yes=True))
@@ -180,6 +181,7 @@ class TestDailyCliDispatch(unittest.TestCase):
                 self.assertEqual(cmd[2:], ["restore", "claude-cc01", "claude-cc01-clean"])
             updated = json.loads((pdir / "state.json").read_text(encoding="utf-8"))
             self.assertEqual(updated["tart_vm_identity"], [123, 456])
+            self.assertEqual(updated["tart_vm_mac"], "02:cc:00:00:00:99")
             self.assertEqual((pdir / "instance.env").read_text(encoding="utf-8"), env_before)
             self.assertEqual((pdir / "id_ed25519").read_text(encoding="utf-8"), key_before)
 
@@ -304,8 +306,63 @@ class TestLauncherAndPrivateTart(unittest.TestCase):
             content = entry.read_text(encoding="utf-8").replace("\\", "/")
             self.assertIn("scripts/cchouse.py", content)
             self.assertIn("tart-2.42.0/Contents/MacOS", content)
+            self.assertNotIn("command -v tart", content)
             if os.name != "nt":
                 self.assertTrue(bool(entry.stat().st_mode & stat.S_IXUSR))
+
+    def test_daily_commands_pass_pinned_tart_bin_and_restore_checks_ownership(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "privroot"
+            pdir = root / "cc01"
+            pinned = str((Path(tmp) / "private-tart").resolve())
+            state = _make_state(pdir, backend="tart")
+            state["tart_bin"] = pinned
+            state["tart_vm_mac"] = "02:cc:00:00:00:aa"
+            state["tart_snapshot_mac"] = "02:cc:00:00:00:cc"
+            (pdir / "state.json").write_text(json.dumps(state, indent=2), encoding="utf-8")
+
+            with mock.patch.object(cchouse, "default_private_root", return_value=root), \
+                 mock.patch.object(cchouse, "_backend_status", return_value=("stopped", True)), \
+                 mock.patch.object(cchouse.subprocess, "run") as m_run:
+                with redirect_stdout(io.StringIO()):
+                    rc = cchouse.cmd_open(argparse.Namespace(tag="cc01", private_dir=None))
+                self.assertEqual(rc, 0)
+                self.assertEqual(m_run.call_args.kwargs["env"].get("CCHOUSE_TART_BIN"), pinned)
+
+            # restore 时若 tart get 返回不同的 MAC，必须拒绝恢复且不调用 vm-tart.sh restore
+            with mock.patch.object(cchouse, "default_private_root", return_value=root), \
+                 mock.patch.object(cchouse, "_backend_status", return_value=("stopped", True)), \
+                 mock.patch.object(cchouse, "_tart_vm_mac", return_value="02:cc:00:00:00:ff"), \
+                 mock.patch.object(cchouse.subprocess, "run") as m_run:
+                err = io.StringIO()
+                with redirect_stderr(err):
+                    rc = cchouse.cmd_restore(argparse.Namespace(tag="cc01", private_dir=None, yes=True))
+                self.assertNotEqual(rc, 0)
+                self.assertIn("无法确认归属", err.getvalue())
+                m_run.assert_not_called()
+
+    @unittest.skipIf(os.name == "nt", "requires Bash wrapper")
+    def test_vm_tart_sh_uses_cchouse_tart_bin_over_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            decoy_dir = base / "decoy"
+            pinned_dir = base / "pinned"
+            decoy_dir.mkdir()
+            pinned_dir.mkdir()
+            log = base / "calls.log"
+            decoy = decoy_dir / "tart"
+            pinned = pinned_dir / "tart"
+            decoy.write_text(f'#!/bin/sh\necho "DECOY $*" >> "{log}"\nexit 0\n', encoding="utf-8")
+            pinned.write_text(f'#!/bin/sh\necho "PINNED $*" >> "{log}"\nexit 0\n', encoding="utf-8")
+            decoy.chmod(0o700)
+            pinned.chmod(0o700)
+            env = dict(os.environ, PATH=f"{decoy_dir}{os.pathsep}{os.environ['PATH']}", CCHOUSE_TART_BIN=str(pinned))
+            res = subprocess.run(
+                ["bash", str(ROOT / "scripts" / "vm-tart.sh"), "exists", "claude-cc01"],
+                env=env, capture_output=True, text=True, timeout=10,
+            )
+            self.assertEqual(res.returncode, 0, res.stderr)
+            self.assertEqual(log.read_text(encoding="utf-8").splitlines(), ["PINNED get claude-cc01"])
 
     def test_find_tart_discovers_private_tart(self):
         with tempfile.TemporaryDirectory() as tmp:
