@@ -1,5 +1,14 @@
 # 变更记录
 
+## [v2.0.0-preview.6](https://github.com/nana-fox/cchouse/releases/tag/v2.0.0-preview.6) · 2026-11-27
+
+preview.5 的修复版，preview.5 不再推荐使用。
+
+- Mac：安装时记录所用 Tart 的绝对路径，`open`、`stop`、`status`、`restore`、`remove` 只用这一个，不再按 PATH 先到先得。此前若 PATH 里有把 TART_HOME 指向别处的 tart 包装脚本，日常命令可能操作另一处的同名虚拟机。
+- Mac：删除、恢复、重导入前，用同一个 Tart 同时核对目录身份与网卡地址。缺少可核对记录或任一项不符时停止，并给出手动核对方法。
+- Windows：首启改为同步启动虚拟机，修复与状态查询争用会话锁导致的首启注入 180 秒超时。启动失败时立即给出 VirtualBox 原始报错。
+- 失败提示优先引导原样重跑首页命令，诊断命令给出可直接运行的完整写法。Windows 卸载输出不再提及 Tart。
+
 ## [v2.0.0-preview.5](https://github.com/nana-fox/cchouse/releases/tag/v2.0.0-preview.5) · 2026-11-27
 
 - 新增日常命令 `open`、`stop`、`status`、`restore`。安装时写入命令入口（Mac `~/.local/bin/cchouse`，Windows `%LOCALAPPDATA%\cchouse\bin\cchouse.cmd`），并在桌面放启动图标（Mac `~/Applications` 应用加桌面替身，Windows 桌面与开始菜单快捷方式）。`remove` 一并清理图标。
