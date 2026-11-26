@@ -5,6 +5,8 @@
 set -uo pipefail
 
 ENV_FILE="${1:?用法：verify-linux.sh <instance.env> [--fail-closed] [--json]}"
+GUEST_LOCAL=0
+if [ "$ENV_FILE" = "--guest-local" ]; then GUEST_LOCAL=1; fi
 shift
 FAIL_CLOSED=0
 JSON_OUT=0
@@ -16,29 +18,30 @@ for arg in "$@"; do
   esac
 done
 
-[ -f "$ENV_FILE" ] || { echo "找不到 $ENV_FILE" >&2; exit 1; }
-# 独立加载 Linux env（兼容 macOS Bash 3.2，不用进程替换 . <(...)；同时清 UTF-8 BOM 与 Windows CRLF）
-TMP_ENV="$(mktemp)"
-chmod 600 "$TMP_ENV"
 cleanup_all() {
-  rm -f "$TMP_ENV"
   if ! restore_mihomo; then
     echo "无法自动恢复 cchouse-mihomo.service，请在客机控制台恢复" >&2
   fi
 }
-python3 -I -c 'import sys
+if [ "$GUEST_LOCAL" = 0 ]; then
+  [ -f "$ENV_FILE" ] || { echo "找不到 $ENV_FILE" >&2; exit 1; }
+  # 独立加载 Linux env，兼容 macOS Bash 3.2、UTF-8 BOM 与 Windows CRLF。
+  TMP_ENV="$(mktemp)"
+  chmod 600 "$TMP_ENV"
+  python3 -I -c 'import sys
 from pathlib import Path
 raw = Path(sys.argv[1]).read_text(encoding="utf-8-sig").replace("\r\n", "\n")
 Path(sys.argv[2]).write_bytes(raw.encode("utf-8"))' "$ENV_FILE" "$TMP_ENV" 2>/dev/null \
-  || tr -d '\r' <"$ENV_FILE" | sed '1s/^\xef\xbb\xbf//' >"$TMP_ENV"
-set -a
-# shellcheck disable=SC1090
-. "$TMP_ENV"
-set +a
-rm -f "$TMP_ENV"
+    || tr -d '\r' <"$ENV_FILE" | sed '1s/^\xef\xbb\xbf//' >"$TMP_ENV"
+  set -a
+  # shellcheck disable=SC1090
+  . "$TMP_ENV"
+  set +a
+  rm -f "$TMP_ENV"
+  : "${SSH_KEY:?instance.env 缺 SSH_KEY}" "${SSH_KNOWN_HOSTS:?instance.env 缺 SSH_KNOWN_HOSTS}"
+fi
 
 : "${TAG:?instance.env 缺 TAG}" "${GUEST_IP:?instance.env 缺 GUEST_IP}" \
-  "${SSH_KEY:?instance.env 缺 SSH_KEY}" "${SSH_KNOWN_HOSTS:?instance.env 缺 SSH_KNOWN_HOSTS}" \
   "${EXPECTED_EGRESS_IP:?instance.env 缺 EXPECTED_EGRESS_IP}" \
   "${EXPECTED_EGRESS_ASN:?instance.env 缺 EXPECTED_EGRESS_ASN}" \
   "${ROUTER_IP:?instance.env 缺 ROUTER_IP}" "${TIMEZONE:?instance.env 缺 TIMEZONE}"
@@ -58,6 +61,10 @@ fi
 
 # NAT 端口转发（VirtualBox）时 GUEST_IP 仍是 127.0.0.1，宿主端口不是 22。
 # instance.env 可写 SSH_PORT；不写则保持直连客机的 22。
+if [ "$GUEST_LOCAL" = 1 ]; then
+  # verify-linux-native.py 已建立严格校验主机密钥的 SSH 会话。各探针仍以 claude 用户执行。
+  guest() { /bin/sh -c "$1" </dev/null; }
+else
 SSH_PORT="${SSH_PORT:-22}"
 case "$SSH_PORT" in
   ''|*[!0-9]*|0*)
@@ -143,6 +150,7 @@ if [ "${VERIFY_LINUX_TRANSPORT_PROBE:-}" = 1 ]; then
   fi
   exit 86
 fi
+fi
 
 TRACE=https://www.cloudflare.com/cdn-cgi/trace
 pass=0; fail=0; warn_count=0; stripe_ok="unknown"
@@ -154,14 +162,18 @@ warn() { log "  WARN  $1"; warn_count=$((warn_count+1)); }
 # 那一次必须出现在验收结果里，不能当成已经核对过。
 warn_unverified_hostkey() {
   local hostkey_trust_file hostkey_trust
-  case "$ENV_FILE" in
-    */*) hostkey_trust_file="${ENV_FILE%/*}/logs/hostkey.trust" ;;
-    *) hostkey_trust_file="logs/hostkey.trust" ;;
-  esac
-  if [ ! -f "$hostkey_trust_file" ]; then
-    return 0
+  if [ "${GUEST_LOCAL:-0}" = 1 ]; then
+    hostkey_trust="${CCHOUSE_HOSTKEY_TRUST:-}"
+  else
+    case "$ENV_FILE" in
+      */*) hostkey_trust_file="${ENV_FILE%/*}/logs/hostkey.trust" ;;
+      *) hostkey_trust_file="logs/hostkey.trust" ;;
+    esac
+    if [ ! -f "$hostkey_trust_file" ]; then
+      return 0
+    fi
+    hostkey_trust="$(tr -d '\r\n' < "$hostkey_trust_file" 2>/dev/null || true)"
   fi
-  hostkey_trust="$(tr -d '\r\n' < "$hostkey_trust_file" 2>/dev/null || true)"
   if [ "$hostkey_trust" = "accept-new" ]; then
     warn "未经串口核对主机密钥"
   fi
@@ -187,6 +199,7 @@ restore_mihomo() {
   restore_needed=0
 }
 trap 'cleanup_all' EXIT
+trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 

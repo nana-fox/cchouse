@@ -1328,11 +1328,12 @@ def step_boot(ctx):
 
 
 def step_verify(ctx):
-    env = os.environ.copy()
-    if os.name == "nt":
-        env["PATH"] = r"C:\Windows\System32\OpenSSH;" + env.get("PATH", "")
+    if platform.system() == "Windows":
+        verifier = [sys.executable, "-I", ROOT / "scripts" / "verify-linux-native.py"]
+    else:
+        verifier = [find_bash(), ROOT / "scripts" / "verify-linux.sh"]
     try:
-        ctx.run([find_bash(), ROOT / "scripts" / "verify-linux.sh", ctx.env_path, "--fail-closed"], env=env)
+        ctx.run([*verifier, ctx.env_path, "--fail-closed"])
     except StepError as exc:
         raise StepError(f"自动验收未通过（{exc}）；断网保护不会放宽，请按上方 FAIL 项排查代理") from None
     return False
