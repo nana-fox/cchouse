@@ -1,5 +1,15 @@
 # 变更记录
 
+## [v2.0.0-preview.5](https://github.com/nana-fox/cchouse/releases/tag/v2.0.0-preview.5) · 2026-11-27
+
+- 新增日常命令 `open`、`stop`、`status`、`restore`。安装时写入命令入口（Mac `~/.local/bin/cchouse`，Windows `%LOCALAPPDATA%\cchouse\bin\cchouse.cmd`），并在桌面放启动图标（Mac `~/Applications` 应用加桌面替身，Windows 桌面与开始菜单快捷方式）。`remove` 一并清理图标。
+- `stop` 经 SSH 让客机正常关机，强停需 `--force`。`restore` 安全停机后回到干净快照，保留节点配置与 SSH 密钥。
+- Windows：点虚拟机窗口关闭按钮即正常关机，不再弹出断电或保存状态选项。装完改为离线干净快照并以窗口交给用户；经 SSH 等非交互会话安装时提示双击图标打开。
+- Mac：点 Tart 窗口关闭按钮等于断电，`open` 会提示改用客机右键安全关机或 `cchouse stop`。私有 Tart 可被后续命令找到。
+- 引导下载断点续传、显示进度、多次退避重试，遇到 HTTP/2 断流改用 HTTP/1.1，失败时说明是哪一段并给出下一步。Windows 引导改用系统 curl，新增 `-Tag`、`-ImageMirror`、`-NpmMirror`；Mac 引导支持 `--image-mirror`、`--npm-mirror`。
+- 大文件下载有进展时不计入失败次数，长时间低速自动断开续传，npm 元数据请求加重试。
+- 两个平台继续使用 preview.2 的公开镜像。
+
 ## [v2.0.0-preview.4](https://github.com/nana-fox/cchouse/releases/tag/v2.0.0-preview.4) · 2026-11-26
 
 - 中英首页增加 Apple Silicon Mac 的 SHA-256 锁定引导入口。Mac 引导支持 `--tag`，续跑核对实例归属，遇到同名的外部虚拟机或快照时停止并提示换名。

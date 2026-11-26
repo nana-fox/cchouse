@@ -1439,10 +1439,12 @@ def print_timing_table(ctx, steps):
 
 def print_handoff(ctx):
     print("\n== 部署完成，交给你 ==")
-    print(f"- 客机 {ctx.vm_name} 已开机，干净快照：{ctx.state.get('clean_snapshot')}")
+    # Windows 经 SSH 等非交互会话安装时不弹窗口、客机保持关机，这里不说「已开机」
+    print(f"- 客机 {ctx.vm_name} 已就绪，干净快照：{ctx.state.get('clean_snapshot')}")
     launchers = ctx.state.get("launchers") or []
     if launchers:
-        print(f"- 启动图标：{launchers[-1]}（双击即可打开客机窗口）")
+        desktop = [p for p in launchers if "Desktop" in p]
+        print(f"- 启动图标：{(desktop or launchers)[-1]}（双击即可打开客机窗口）")
     cli_entry = ctx.state.get("cli_entry")
     if cli_entry:
         if ctx.state.get("cli_entry_in_path"):
