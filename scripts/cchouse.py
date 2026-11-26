@@ -753,14 +753,6 @@ def apply_virtualbox_guest_net(ctx):
     update_env_value(env_path, "SSH_PORT", str(port))
 
 
-def find_bash():
-    if os.name == "nt":
-        for p in (r"C:\Program Files\Git\bin\bash.exe", r"C:\Program Files (x86)\Git\bin\bash.exe"):
-            if Path(p).is_file():
-                return p
-    return shutil.which("bash") or "/bin/bash"
-
-
 def update_env_value(env_path, key, value):
     """改写 instance.env 中单个非敏感键（GUEST_IP / VMX_PATH），保持 600 权限。"""
     text = Path(env_path).read_text(encoding="utf-8")
@@ -1328,11 +1320,12 @@ def step_boot(ctx):
 
 
 def step_verify(ctx):
-    env = os.environ.copy()
-    if os.name == "nt":
-        env["PATH"] = r"C:\Windows\System32\OpenSSH;" + env.get("PATH", "")
+    if platform.system() == "Windows":
+        verifier = [sys.executable, "-I", ROOT / "scripts" / "verify-linux-native.py"]
+    else:
+        verifier = [shutil.which("bash") or "/bin/bash", ROOT / "scripts" / "verify-linux.sh"]
     try:
-        ctx.run([find_bash(), ROOT / "scripts" / "verify-linux.sh", ctx.env_path, "--fail-closed"], env=env)
+        ctx.run([*verifier, ctx.env_path, "--fail-closed"])
     except StepError as exc:
         raise StepError(f"自动验收未通过（{exc}）；断网保护不会放宽，请按上方 FAIL 项排查代理") from None
     return False
