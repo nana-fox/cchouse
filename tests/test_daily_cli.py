@@ -127,14 +127,16 @@ class TestDailyCliDispatch(unittest.TestCase):
                  mock.patch.object(cchouse, "_backend_status", return_value=("running", True)), \
                  mock.patch.object(cchouse, "_ssh_graceful_poweroff", return_value=False), \
                  mock.patch.object(cchouse.subprocess, "run") as m_run:
-                rc = cchouse.cmd_stop(argparse.Namespace(tag="cc02", private_dir=None, force=False, timeout=45))
+                with redirect_stdout(io.StringIO()):
+                    rc = cchouse.cmd_stop(argparse.Namespace(tag="cc02", private_dir=None, force=False, timeout=45))
                 self.assertEqual(rc, 0)
                 cmd = m_run.call_args[0][0]
                 self.assertEqual(cmd[cmd.index("-CcOp") + 1], "stop")
                 self.assertEqual(cmd[cmd.index("-CcForce") + 1], "no")
                 self.assertEqual(cmd[cmd.index("-CcTimeout") + 1], "45")
 
-                rc = cchouse.cmd_stop(argparse.Namespace(tag="cc02", private_dir=None, force=True, timeout=45))
+                with redirect_stdout(io.StringIO()):
+                    rc = cchouse.cmd_stop(argparse.Namespace(tag="cc02", private_dir=None, force=True, timeout=45))
                 self.assertEqual(rc, 0)
                 cmd = m_run.call_args[0][0]
                 self.assertEqual(cmd[cmd.index("-CcForce") + 1], "yes")
@@ -154,7 +156,8 @@ class TestDailyCliDispatch(unittest.TestCase):
                 m_run.assert_not_called()
                 self.assertIn("--force", err.getvalue())
 
-                rc = cchouse.cmd_stop(argparse.Namespace(tag="cc01", private_dir=None, force=True, timeout=10))
+                with redirect_stdout(io.StringIO()):
+                    rc = cchouse.cmd_stop(argparse.Namespace(tag="cc01", private_dir=None, force=True, timeout=10))
                 self.assertEqual(rc, 0)
                 cmd = m_run.call_args[0][0]
                 self.assertEqual(cmd[2], "stop")
@@ -170,7 +173,8 @@ class TestDailyCliDispatch(unittest.TestCase):
                  mock.patch.object(cchouse, "_backend_status", return_value=("stopped", True)), \
                  mock.patch.object(cchouse, "tart_vm_identity", return_value=[123, 456]), \
                  mock.patch.object(cchouse.subprocess, "run") as m_run:
-                rc = cchouse.cmd_restore(argparse.Namespace(tag="cc01", private_dir=None, yes=True))
+                with redirect_stdout(io.StringIO()):
+                    rc = cchouse.cmd_restore(argparse.Namespace(tag="cc01", private_dir=None, yes=True))
                 self.assertEqual(rc, 0)
                 cmd = m_run.call_args[0][0]
                 self.assertEqual(cmd[2:], ["restore", "claude-cc01", "claude-cc01-clean"])
@@ -186,7 +190,8 @@ class TestDailyCliDispatch(unittest.TestCase):
             with mock.patch.object(cchouse, "default_private_root", return_value=root), \
                  mock.patch.object(cchouse, "_backend_status", return_value=("stopped", True)), \
                  mock.patch.object(cchouse.subprocess, "run") as m_run:
-                rc = cchouse.cmd_restore(argparse.Namespace(tag="cc02", private_dir=None, yes=True))
+                with redirect_stdout(io.StringIO()):
+                    rc = cchouse.cmd_restore(argparse.Namespace(tag="cc02", private_dir=None, yes=True))
                 self.assertEqual(rc, 0)
                 cmd = m_run.call_args[0][0]
                 self.assertEqual(cmd[cmd.index("-CcOp") + 1], "restore")
@@ -282,7 +287,7 @@ class TestLauncherAndPrivateTart(unittest.TestCase):
                 entry, in_path = launcher.install_cli_entry(python_exe="/opt/py/python3", repo_root=ROOT, home=home)
             self.assertFalse(in_path)
             self.assertTrue(entry.is_file())
-            content = entry.read_text(encoding="utf-8")
+            content = entry.read_text(encoding="utf-8").replace("\\", "/")
             self.assertIn("scripts/cchouse.py", content)
             self.assertIn("tart-2.42.0/Contents/MacOS", content)
             if os.name != "nt":
