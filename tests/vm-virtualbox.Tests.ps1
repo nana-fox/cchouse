@@ -291,6 +291,10 @@ try {
       $commands.Add("wait $Name")
       return $vm.PowerOff
     }
+    function Invoke-CchouseVBoxOptional {
+      param($CcArgumentList)
+      return [pscustomobject]@{ ExitCode = 0; Output = @('VMState="poweroff"', 'SessionState="Unlocked"') }
+    }
 
     Assert-Throws "fresh import cannot overwrite a registered VM" {
       Import-CchouseVBoxOva -OvaPath $ova -Name $fixtureName -DestDir $vmDir -SshPort 2301 -ReplaceExisting "no"

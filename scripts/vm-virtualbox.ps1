@@ -449,6 +449,15 @@ function Remove-CchouseVBoxVM {
     Invoke-CchouseVBox -CcArgumentList @("controlvm", $vmUuid, "poweroff") -FailureMessage "poweroff failed for $Name"
     if (-not (Wait-CchousePowerOff $vmUuid 40)) { throw "poweroff timed out for $Name" }
   }
+  # A GUI VirtualBoxVM process can keep the session lock briefly after VMState="poweroff".
+  $lockClock = [System.Diagnostics.Stopwatch]::StartNew()
+  while ($lockClock.Elapsed.TotalSeconds -lt 15) {
+    $cur = Invoke-CchouseVBoxOptional -CcArgumentList @("showvminfo", $vmUuid, "--machinereadable")
+    if ($cur.ExitCode -ne 0 -or ('SessionState="Locked"' -notin $cur.Output -and 'SessionState="Spawning"' -notin $cur.Output -and 'SessionState="Unlocking"' -notin $cur.Output)) {
+      break
+    }
+    Start-Sleep -Milliseconds 500
+  }
   Invoke-CchouseVBox -CcArgumentList @("unregistervm", $vmUuid, "--delete") -FailureMessage "unregistervm failed for $Name"
   if (Get-CchouseRegisteredVBoxUuid -Name $Name) { throw "VM $Name is still registered" }
 }
