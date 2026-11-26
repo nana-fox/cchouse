@@ -38,24 +38,22 @@ cchouse 的做法：只走你配置的那一个节点，把虚拟机的时区、
 
 快速开始从 main 运行当前安装器，使用 `v2.0.0-preview.2` 镜像。安装器按仓库内的镜像清单下载并校验文件。[镜像大小与 SHA-256](guest-linux/image-manifest.json)
 
-**第 1 步：装好基础软件和虚拟机软件**（一次性）
+**第 1 步：装好基础软件**（一次性）
 
 - 在 **Apple Silicon Mac** 上先装 [Homebrew](https://brew.sh)、Git 和 Python 3，再运行 `brew install cirruslabs/cli/tart`。
-- 在 **Windows（x64）** 上先装 [Git for Windows](https://git-scm.com/download/win)、Python 3（在 PowerShell 里用 `py -3` 运行）、OpenSSH 客户端（Windows 设置 → 可选功能），并确认 BIOS 里已开启 CPU 虚拟化。再安装 [VirtualBox](https://www.virtualbox.org/wiki/Downloads) 基础包，不要安装 Extension Pack。还没有 VirtualBox 时，见下面的常见问题。
+- 在 **Windows（x64）** 上先装 [Git for Windows](https://git-scm.com/download/win)、Python 3（在 PowerShell 里用 `py -3` 运行）、OpenSSH 客户端（Windows 设置 → 可选功能），并确认 BIOS 里已开启 CPU 虚拟化。VirtualBox 不用自己装。
 
-**第 2 步：运行安装器，粘贴单节点链接**
+**第 2 步：运行这一条命令，粘贴节点链接**
 
 ```bash
-git clone https://github.com/nana-fox/cchouse.git
-cd cchouse
-python3 -I scripts/cchouse.py up --tag cc01
+git clone https://github.com/nana-fox/cchouse.git && cd cchouse && python3 -I scripts/cchouse.py up
 ```
 
-Windows PowerShell 用 `py -3 -I scripts/cchouse.py up --tag cc01`。
+Windows PowerShell 把命令里的 `python3` 换成 `py -3`。
 
-提示时粘贴节点链接，输入不会回显。安装器会显示探测到的出口时区和预期出口 IP，核对无误后分别按回车采用默认值；之后无需再操作，等待自动验收完成。安装器在后台通过宿主网络下载并校验镜像和官方 Claude Code 包，同时完成配置和自检。Apple Silicon Mac 和 Windows 会自动创建客机（导入镜像或克隆已有黄金镜像）、离线注入配置、清理明文配置文件、联网重启、运行 `verify-linux.sh --fail-closed` 并在通过后保存干净快照。[手动安装](docs/manual-install.md)
+提示时只粘贴节点链接，输入不会回显。这是安装过程中唯一需要你输入的内容。安装器会探测出口时区和预期出口 IP，把结果打印出来并直接采用。之后无需再操作，等待自动验收完成。安装器在后台通过宿主网络下载并校验镜像和官方 Claude Code 包，同时完成配置和自检。Apple Silicon Mac 使用 Tart，Windows 使用 VirtualBox。两边都会自动创建客机（导入镜像或克隆已有黄金镜像）、离线注入配置、清理明文配置文件、联网重启、运行 `verify-linux.sh --fail-closed` 并在通过后保存干净快照。[手动安装](docs/manual-install.md)
 
-安装失败会停在出错的步骤。处理提示的原因后，从同一个目录重跑原命令，保留相同的 `--tag` 和自定义目录参数。安装器会续用已保存的步骤和校验过的下载文件。
+安装失败会停在出错的步骤。处理提示的原因后，从同一个目录重跑这一条命令。安装器会续用已保存的步骤和已经校验过的下载文件。
 
 **第 3 步：打开虚拟机桌面，网络检查全部通过后再登录**
 
@@ -134,7 +132,7 @@ Stripe 不通只影响在 claude.ai 网页上付款。已经订阅的、或在�
 <details>
 <summary><b>电脑开着 Clash 的 TUN 模式，首次验收出口连测失败？</b></summary>
 
-等 1–2 分钟，再从同一目录重跑快速开始里的安装命令，使用相同的 `--tag`。安装器会续跑并重新验收。如果客机已经关机，先在虚拟机软件中启动同一台客机。
+等 1–2 分钟，再从同一目录重跑快速开始里的那条命令。安装器会续跑并重新验收。如果客机已经关机，先在虚拟机软件中启动同一台客机。
 
 如果仍失败，可以在宿主 Clash 的兜底规则前为节点本身的 IPv4 地址加一条直连规则，例如 `IP-CIDR,<节点IPv4>/32,DIRECT,no-resolve`，然后重跑原安装命令。直连规则只配置在宿主 Clash。
 
@@ -162,7 +160,7 @@ py -3 -I scripts/doctor.py --env "$env:LOCALAPPDATA\cchouse\cc01\instance.env"
 <details>
 <summary><b>还没有 VirtualBox 怎么办？</b></summary>
 
-打开 [VirtualBox 下载页](https://www.virtualbox.org/wiki/Downloads)，安装 Windows 版基础包。不要安装 Extension Pack。若 Windows 弹出提权确认，点允许。装完后从开始菜单打开 Oracle VM VirtualBox。已经装好时不用重装。
+不用自己去下载。安装器发现没装时会安装 Windows 基础包：先用 winget，失败再下载官方安装包，核对 SHA-256 后静默安装。不要安装 Extension Pack。Windows 弹出提权确认时点允许，只此一次。已经装好时，安装器不会重装。
 
 </details>
 

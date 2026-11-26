@@ -38,24 +38,22 @@ cchouse uses only the one node you configure, sets the VM's time zone, language,
 
 The quick start runs the current installer from `main` and uses the `v2.0.0-preview.2` image. The installer downloads the file from the in-repo image manifest and checks it. [Image size and SHA-256](guest-linux/image-manifest.json)
 
-**Step 1: Install the base tools and the VM software** (one time)
+**Step 1: Install the base tools** (one time)
 
 - On an **Apple Silicon Mac**, install [Homebrew](https://brew.sh), Git, and Python 3, then run `brew install cirruslabs/cli/tart`.
-- On **Windows (x64)**, install [Git for Windows](https://git-scm.com/download/win), Python 3 (run it as `py -3` in PowerShell), and the OpenSSH client (Windows Settings → Optional features). Confirm that CPU virtualization is enabled in the BIOS. Then install the [VirtualBox](https://www.virtualbox.org/wiki/Downloads) base package. Do not install the Extension Pack. If VirtualBox is not installed yet, see the question below.
+- On **Windows (x64)**, install [Git for Windows](https://git-scm.com/download/win), Python 3 (run it as `py -3` in PowerShell), and the OpenSSH client (Windows Settings → Optional features). Confirm that CPU virtualization is enabled in the BIOS. You do not install VirtualBox yourself.
 
-**Step 2: Run the installer and paste a single-node link**
+**Step 2: Run this one command and paste a node link**
 
 ```bash
-git clone https://github.com/nana-fox/cchouse.git
-cd cchouse
-python3 -I scripts/cchouse.py up --tag cc01
+git clone https://github.com/nana-fox/cchouse.git && cd cchouse && python3 -I scripts/cchouse.py up
 ```
 
-In Windows PowerShell, run `py -3 -I scripts/cchouse.py up --tag cc01`.
+In Windows PowerShell, replace `python3` in that command with `py -3`.
 
-When prompted, paste the node link. The input is not shown. The installer shows the detected exit time zone and the expected exit IP. After you confirm both are correct, press Enter on each to accept the default. After that, no further action is needed; wait for the automated verification to finish. The installer downloads and checks the image and the official Claude Code package in the background over the host network, and at the same time finishes configuration and its own checks. On Apple Silicon Mac and on Windows it creates the guest (importing the image or cloning an existing golden image), injects the configuration offline, deletes the plaintext config files, reboots onto the network, runs `verify-linux.sh --fail-closed`, and saves a clean snapshot after that passes. [Manual install](docs/manual-install.md)
+When prompted, paste only the node link. The input is not shown. That is the only thing you type during install. The installer detects the exit time zone and the expected exit IP, prints them, and uses those values. After that, no further action is needed; wait for the automated verification to finish. The installer downloads and checks the image and the official Claude Code package in the background over the host network, and at the same time finishes configuration and its own checks. Apple Silicon Mac uses Tart. Windows uses VirtualBox. On both, it creates the guest (importing the image or cloning an existing golden image), injects the configuration offline, deletes the plaintext config files, reboots onto the network, runs `verify-linux.sh --fail-closed`, and saves a clean snapshot after that passes. [Manual install](docs/manual-install.md)
 
-If installation fails, it stops on the step that failed. Fix the cause it prints, then rerun the same command from the same directory. Keep the same `--tag` and any custom directory arguments. The installer resumes from the saved steps and the downloads it has already checked.
+If installation fails, it stops on the step that failed. Fix the cause it prints, then rerun this same command from the same directory. The installer resumes from the saved steps and the downloads it has already checked.
 
 **Step 3: Open the VM desktop, and sign in only after every network check passes**
 
@@ -134,7 +132,7 @@ Installer downloads follow the proxy settings of the host network. When a downlo
 <details>
 <summary><b>Clash TUN is on, and the first exit check fails?</b></summary>
 
-Wait 1–2 minutes, then rerun the install command from Quick start in the same directory, with the same `--tag`. The installer resumes and runs verification again. If the guest is already shut down, start that same guest in the VM app first.
+Wait 1–2 minutes, then rerun the Quick start command from the same directory. The installer resumes and runs verification again. If the guest is already shut down, start that same guest in the VM app first.
 
 If it still fails, add a direct rule for the node’s own IPv4 address before the host Clash catch-all rule, for example `IP-CIDR,<node IPv4>/32,DIRECT,no-resolve`, then rerun the original install command. Put that direct rule only in Clash on the host.
 
@@ -162,7 +160,7 @@ If the install has not created `instance.env` yet, omit `--env` and collect the 
 <details>
 <summary><b>What if VirtualBox is not installed?</b></summary>
 
-Open the [VirtualBox download page](https://www.virtualbox.org/wiki/Downloads) and install the Windows base package. Do not install the Extension Pack. If Windows asks for permission, allow it. After that, open Oracle VM VirtualBox from the Start menu. If it is already installed, do not install it again.
+You do not download it yourself. If it is missing, the installer installs the Windows base package: winget first, and if that fails, it downloads the official installer, checks the SHA-256, and installs it silently. Do not install the Extension Pack. If Windows asks for permission, allow it once. If VirtualBox is already installed, the installer does not install it again.
 
 </details>
 
