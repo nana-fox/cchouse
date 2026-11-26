@@ -1,4 +1,4 @@
-# VirtualBox (Windows) guest lifecycle for scripts/cchouse.py up.
+﻿# VirtualBox (Windows) guest lifecycle for scripts/cchouse.py up.
 # Cc-prefixed parameters stay out of a dot-sourced caller's scope.
 # NAT only. No add-on package, no host-only adapter, no bridged NIC.
 # Host public keys come from the guest serial log.

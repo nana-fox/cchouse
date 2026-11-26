@@ -1,4 +1,4 @@
-# Function tests for scripts/vm-virtualbox.ps1.
+﻿# Function tests for scripts/vm-virtualbox.ps1.
 # Dot-source only. The native stderr test uses a fake VBoxManage command.
 $ErrorActionPreference = "Stop"
 $scriptPath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\scripts\vm-virtualbox.ps1"))
@@ -144,18 +144,18 @@ Assert-False "no ssh-keyscan" $src.Contains("ssh-keyscan")
 Assert-False "no strict no" $src.Contains("StrictHostKeyChecking=no")
 Assert-True "deadline symbol" $src.Contains("CchouseSshWaitSeconds")
 Assert-True "loads hostkey helper" $src.Contains("windows-hostkey.ps1")
-$bootVb = $src.Split("function Invoke-CchouseVBoxBoot")[1].Split("function New-CchouseVBoxSnapshot")[0]
+$bootVb = (($src -csplit "function Invoke-CchouseVBoxBoot", 2)[1] -csplit "function New-CchouseVBoxSnapshot", 2)[0]
 $ownAt = $bootVb.IndexOf("Resolve-CchouseProbeDecision")
 $verifyAt = $bootVb.LastIndexOf("Get-CchouseSshVerifyOptions")
 Assert-True "ownership before recording ssh" (($ownAt -ge 0) -and ($verifyAt -gt $ownAt))
 Assert-True "trust mark before start" ($bootVb.IndexOf("Write-CchouseHostKeyTrustMark") -lt $bootVb.IndexOf("Start-CchouseVmDetached"))
 Assert-True "visible unverified warning" $bootVb.Contains("未经串口核对主机密钥")
-$deleteVb = $src.Split("function Remove-CchouseVBoxVM")[1].Split("function New-CchouseVBoxSnapshot")[0]
+$deleteVb = (($src -csplit "function Remove-CchouseVBoxVM", 2)[1] -csplit "function New-CchouseVBoxSnapshot", 2)[0]
 Assert-True "power off before unregister" ($deleteVb.IndexOf("poweroff") -lt $deleteVb.IndexOf("unregistervm"))
 Assert-True "unregister deletes disks" $deleteVb.Contains("--delete")
 Assert-True "exact name" $deleteVb.Contains('-cne $Name')
 Assert-True "serial trust before start" ($bootVb.IndexOf("Resolve-CchouseHostKeyTrust") -lt $bootVb.IndexOf("Start-CchouseVmDetached"))
-$fbVb = $src.Split("function Invoke-CchouseVBoxFirstboot")[1].Split("function Invoke-CchouseVBoxBoot")[0]
+$fbVb = (($src -csplit "function Invoke-CchouseVBoxFirstboot", 2)[1] -csplit "function Invoke-CchouseVBoxBoot", 2)[0]
 Assert-True "uart before first start" ($fbVb.IndexOf("Enable-CchouseVBoxSerialLog") -lt $fbVb.IndexOf("Start-CchouseVmDetached"))
 Assert-False "no hardcoded ssh port default" $src.Contains('$CcSshPort = 2222')
 
@@ -242,7 +242,7 @@ Assert-False "vmware has no keyscan" $vmware.Contains("ssh-keyscan")
 Assert-False "vmware has no strict no" $vmware.Contains("StrictHostKeyChecking=no")
 Assert-True "vmware uses helper" $vmware.Contains("windows-hostkey.ps1")
 Assert-True "vmware uses deadline" $vmware.Contains("CchouseSshWaitSeconds")
-$bootVm = $vmware.Split("function Invoke-CchouseBoot")[1].Split("function New-CchouseSnapshot")[0]
+$bootVm = (($vmware -csplit "function Invoke-CchouseBoot", 2)[1] -csplit "function New-CchouseSnapshot", 2)[0]
 Assert-True "vmware ip before verify" (($bootVm.IndexOf("getGuestIPAddress") -ge 0) -and ($bootVm.IndexOf("getGuestIPAddress") -lt $bootVm.IndexOf("Get-CchouseSshVerifyOptions")))
 Assert-True "vmware parse before start" ($bootVm.IndexOf("Get-CchouseHostKeyFromSerialText") -lt $bootVm.IndexOf("Start-VmDetached"))
 Assert-False "hard poweroff wait is not ignored" $src.Contains('Wait-CchousePowerOff $Name 20 | Out-Null')
