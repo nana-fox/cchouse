@@ -77,7 +77,7 @@ Windows PowerShell 用 `py -3 -I scripts/cchouse.py up --tag cc01`。
 
 | 你的电脑 | 用什么虚拟机软件 | 状态 |
 |---|---|---|
-| Apple Silicon Mac（M 系列） | Tart | ✅ `preview.2` 候选镜像通过 Mac mini 整机验收 |
+| Apple Silicon Mac（M 系列） | Tart | ✅ `v2.0.0-preview.2` 已在 Mac mini 完成公开版冷安装 |
 | Windows（x64） | VMware Workstation Pro | ✅ 已有真机验证，`preview.2` 首装计时待测 |
 | Intel Mac | — | 暂不支持 |
 
@@ -85,7 +85,7 @@ Windows PowerShell 用 `py -3 -I scripts/cchouse.py up --tag cc01`。
 
 **空缓存首次安装耗时**（包括镜像和 Claude Code 下载）
 
-- **Apple Silicon Mac** 约 3–5 分钟到自动验收结束。Mac mini 的 `preview.1` 空缓存样本为 3 分 43 秒，镜像约 757 MB，经宿主代理平均约 7 MiB/s。该样本的旧镜像缺少关机授权，安装停在自动验收，未保存快照。
+- **Apple Silicon Mac** 在 Mac mini 实测 `v2.0.0-preview.2` 公共版空缓存安装用时 **2 分 15 秒**，涵盖下载、自动验收和保存干净快照。下载经宿主代理，镜像平均 20.67 MiB/s，Claude Code 平均 16.31 MiB/s。
 - **Windows** 的耗时为 `<COLD_WIN>`（待实测）。
 
 ---

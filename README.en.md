@@ -66,7 +66,7 @@ This guide is for image version `v2.0.0-preview.2`. The installer uses the repos
 
 | Your computer | VM software | Status |
 |---|---|---|
-| Apple Silicon Mac | Tart | ✅ `preview.2` candidate passed the VM checks on a Mac mini |
+| Apple Silicon Mac | Tart | ✅ Public `v2.0.0-preview.2` cold install verified on a Mac mini |
 | Windows (x64) | VMware Workstation Pro | ✅ Tested on real hardware. `preview.2` first-install timing pending |
 | Intel Mac | — | Currently unsupported |
 
@@ -74,7 +74,7 @@ The guest is always Debian 13 + Chromium + Claude Code. Linux hosts are not supp
 
 **First-install timing with an empty cache** (includes image and Claude Code downloads)
 
-- On **Apple Silicon Mac**, allow about 3–5 minutes through the automated checks. A Mac mini took 3 minutes 43 seconds with `preview.1`. The roughly 757 MB image downloaded over the host proxy at about 7 MiB/s. That image lacked the shutdown permissions, so the run stopped at verification without saving a snapshot.
+- On a Mac mini with **Apple Silicon**, the public `v2.0.0-preview.2` installer took **2 minutes 15 seconds** from an empty cache through verification and saving a clean snapshot. Over the host proxy, the image averaged 20.67 MiB/s and Claude Code averaged 16.31 MiB/s.
 - **Windows** timing is `<COLD_WIN>` (measurement pending).
 
 ---
