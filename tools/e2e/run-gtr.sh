@@ -31,7 +31,8 @@ REMOTE_DIR_CREATED=0
 REMOTE_READY=0
 
 GTR_SSH_OPTS=(-F none -i "$GTR_KEY" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o LogLevel=ERROR)
-gtr_ssh() { ssh "${GTR_SSH_OPTS[@]}" "${GTR_USER}@${GTR_HOST}" "$@"; }
+# Windows OpenSSH can report 0 for a failed command in a PTY.
+gtr_ssh() { ssh -T "${GTR_SSH_OPTS[@]}" "${GTR_USER}@${GTR_HOST}" "$@"; }
 gtr_scp() { scp "${GTR_SSH_OPTS[@]}" "$@"; }
 gtr_ps() {
   local action="$1"; shift
@@ -56,6 +57,7 @@ fail_step() {
 }
 
 cleanup() {
+  local rc=$?
   report step-start "$RUN_DIR" cleanup "清理 GTR 测试机与临时文件" >/dev/null 2>&1 || true
   if [ "$REMOTE_READY" = "1" ] && [ "$KEEP_VM" = "1" ] && [ "$FAILED" = "0" ]; then
     report step-end "$RUN_DIR" cleanup --status SKIP --detail "--keep-vm 已启用，保留 $VM_NAME"
@@ -81,7 +83,8 @@ cleanup() {
     report finish "$RUN_DIR" --status PASS >/dev/null 2>&1 || true
   else
     report finish "$RUN_DIR" --status FAIL --failure-step "$FAIL_STEP" --failure-reason "$FAIL_REASON" >/dev/null 2>&1 || true
-    exit 1
+    if [ "$rc" = 0 ]; then rc=1; fi
+    exit "$rc"
   fi
 }
 trap cleanup EXIT
@@ -239,7 +242,7 @@ VRC=$?
 SUMMARY6="$(grep -E '^== 结果：' "$LOG6" | tail -n 1 || tail -n 1 "$LOG6" || true)"
 if [ "$VRC" -ne 0 ]; then
   fail_step verify "在 GTR 上执行 scripts/verify-linux.sh --fail-closed" "verify-linux.sh 存在失败项: $SUMMARY6" "$LOG6"
-  exit 1
+  exit "$VRC"
 fi
 report step-end "$RUN_DIR" verify --status PASS --detail "$SUMMARY6" --log-file "$LOG6"
 

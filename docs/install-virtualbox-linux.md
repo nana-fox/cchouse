@@ -40,7 +40,9 @@ Windows 上 SSH 使用 `C:\Windows\System32\OpenSSH\ssh.exe`。`C:\Program Files
 
 导入后 `VBoxManage modifyvm` 固定为：BIOS、2 CPU、2048 MB、VMSVGA 128 MB、网卡 1 为 NAT、型号 `82540EM`、剪贴板双向、关闭拖放、关闭声音、关闭 USB。首启时网线断开，验收重启前再接通。不挂共享目录。
 
-新构建的 amd64 黄金镜像包含 VirtualBox Guest Additions 7.2.22 和 `open-vm-tools`。`up` 下载的已发布版本以 `guest-linux/image-manifest.json` 为准。构建用的 `VBoxGuestAdditions_7.2.22.iso` 的 SHA-256 取自 Oracle 官方清单，写在 `guest-linux/virtualbox-manifest.json` 的 `guest_additions`。构建只运行这份 GPL 安装器。为当前内核编译模块后，删除 ISO，并 purge `dkms`、`linux-headers` 与 `build-essential`。
+`up` 下载的已发布版本以 `guest-linux/image-manifest.json` 为准。preview.4 的 Windows 安装沿用 preview.2 amd64 OVA，该镜像没有 VirtualBox Guest Additions。
+
+从源码新构建的 amd64 黄金镜像包含 VirtualBox Guest Additions 7.2.22 和 `open-vm-tools`。构建用的 `VBoxGuestAdditions_7.2.22.iso` 的 SHA-256 取自 Oracle 官方清单，写在 `guest-linux/virtualbox-manifest.json` 的 `guest_additions`。构建只运行这份 GPL 安装器。为当前内核编译模块后，删除 ISO，并 purge `dkms`、`linux-headers` 与 `build-essential`。
 
 镜像在构建时已经 purge `unattended-upgrades`，并禁用 `apt-daily.timer` 与 `apt-daily-upgrade.timer`（`firstboot.sh` 会再关一次）。没有自动升级内核的路径，所以不把编译器留在客机里，也不锁定内核包。以后如果有人手动升级内核，要重做镜像，`vboxguest` 才会重新对上。
 

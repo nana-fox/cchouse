@@ -381,6 +381,23 @@ class TestUpPipeline(unittest.TestCase):
             self.assertIn("check.html", out2.getvalue())
             self.assertIn("严禁复制到宿主浏览器", out2.getvalue())
 
+    def test_verifier_exit_code_survives_failed_pipeline(self):
+        with tempfile.TemporaryDirectory() as td:
+            ctx = _ctx(td)
+            steps = self._stub_steps([])
+            steps["verify"] = cchouse_mod.step_verify
+            verifier = subprocess.CalledProcessError(124, ["ssh"])
+            with mock.patch.dict(cchouse_mod.STEP_FUNCS, steps), \
+                    mock.patch.object(cchouse_mod.platform, "system", return_value="Windows"), \
+                    mock.patch.object(cchouse_mod.subprocess, "run", side_effect=verifier), \
+                    mock.patch("sys.stdout", io.StringIO()):
+                rc = cchouse_mod.run_pipeline(ctx)
+            self.assertEqual(rc, 124)
+            state = json.loads(ctx.state_path.read_text(encoding="utf-8"))
+            self.assertEqual(state["status"], "FAILED")
+            self.assertEqual(state["failed_step"], "up:verify")
+            self.assertNotIn("up:snapshot", state["completed_steps"])
+
     def test_unexpected_error_deletes_plaintext_marks_failed_and_reraises(self):
         with tempfile.TemporaryDirectory() as td:
             ctx = _ctx(td)
