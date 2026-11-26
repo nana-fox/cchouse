@@ -8,6 +8,7 @@
 
 所有创建的图标路径记录在 state["launchers"]（字符串列表），cchouse remove 预览并清理。
 """
+import json
 import os
 import platform
 import shlex
@@ -19,8 +20,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def cli_entry_path(home=None):
-    """返回 macOS 命令入口路径 ~/.local/bin/cchouse。"""
+def cli_entry_path(home=None, platform_name=None):
+    """返回平台命令入口路径：macOS ~/.local/bin/cchouse，Windows %LOCALAPPDATA%\\cchouse\\bin\\cchouse.cmd。"""
+    sys_name = platform.system() if platform_name is None else platform_name
+    if sys_name == "Windows":
+        if home is not None:
+            return Path(home) / "AppData" / "Local" / "cchouse" / "bin" / "cchouse.cmd"
+        local_app = os.environ.get("LOCALAPPDATA")
+        base = Path(local_app) if local_app else (Path.home() / "AppData" / "Local")
+        return base / "cchouse" / "bin" / "cchouse.cmd"
     base = Path(home) if home is not None else Path.home()
     return base / ".local" / "bin" / "cchouse"
 
@@ -36,14 +44,39 @@ def _private_tart_bin_dir(home=None):
     return None
 
 
-def install_cli_entry(python_exe=None, repo_root=None, home=None):
-    """在 macOS 安装 ~/.local/bin/cchouse 命令入口。返回 (入口路径, 是否已在 PATH 中)。"""
-    if platform.system() != "Darwin":
+def _install_windows_cli_entry(python_exe=None, repo_root=None, home=None):
+    py = str(Path(python_exe or sys.executable).resolve())
+    root = str(Path(repo_root or ROOT).resolve())
+    entry = cli_entry_path(home=home, platform_name="Windows")
+    entry.parent.mkdir(parents=True, exist_ok=True)
+    cchouse_py = os.path.join(root, "scripts", "cchouse.py")
+    script = (
+        "@echo off\r\n"
+        "rem Managed by cchouse\r\n"
+        "setlocal\r\n"
+        "set \"PYTHONUTF8=1\"\r\n"
+        f"\"{py}\" -I \"{cchouse_py}\" %*\r\n"
+        "exit /b %ERRORLEVEL%\r\n"
+    )
+    tmp = entry.with_name(entry.name + ".tmp")
+    tmp.write_text(script, encoding="utf-8")
+    os.replace(tmp, entry)
+    path_dirs = [os.path.normcase(os.path.normpath(p)) for p in os.environ.get("PATH", "").split(os.pathsep) if p]
+    in_path = os.path.normcase(os.path.normpath(str(entry.parent))) in path_dirs
+    return entry, in_path
+
+
+def install_cli_entry(python_exe=None, repo_root=None, home=None, platform_name=None):
+    """安装平台命令入口（macOS ~/.local/bin/cchouse、Windows %LOCALAPPDATA%\\cchouse\\bin\\cchouse.cmd）。"""
+    sys_name = platform.system() if platform_name is None else platform_name
+    if sys_name == "Windows":
+        return _install_windows_cli_entry(python_exe=python_exe, repo_root=repo_root, home=home)
+    if sys_name != "Darwin":
         return None, False
     base = Path(home) if home is not None else Path.home()
     py = str(Path(python_exe or sys.executable).resolve())
     root = str(Path(repo_root or ROOT).resolve())
-    entry = cli_entry_path(base)
+    entry = cli_entry_path(base, platform_name="Darwin")
     entry.parent.mkdir(parents=True, exist_ok=True)
     tart_dir = _private_tart_bin_dir(base)
     tart_line = ""
@@ -173,12 +206,132 @@ def _mac_remove(tag, state):
     return removed
 
 
-def _windows_create(tag, state):
-    raise NotImplementedError("Windows launcher creation is implemented by 1B")
+def _expected_lnk_name(tag):
+    return f"cchouse ({tag}).lnk"
+
+
+def _ps_single_quote(text):
+    return "'" + str(text).replace("'", "''") + "'"
+
+
+def _windows_open_ps_args(tag, state, cmd_path):
+    """构造 .lnk 传递给 powershell.exe 的隐藏窗口参数。"""
+    parts = [f"& {_ps_single_quote(cmd_path)}", "open", "--tag", _ps_single_quote(tag)]
+    private_dir = state.get("private_dir")
+    if private_dir:
+        parts += ["--private-dir", _ps_single_quote(private_dir)]
+    ps_cmd = " ".join(parts)
+    escaped = ps_cmd.replace('"', '\\"')
+    return f'-NoProfile -WindowStyle Hidden -Command "{escaped}"'
+
+
+def _windows_shortcut_dirs(home=None):
+    """返回 (desktop_dir, start_menu_programs_dir)。"""
+    if home is not None:
+        base = Path(home)
+        return (
+            base / "Desktop",
+            base / "AppData" / "Roaming" / "Microsoft" / "Windows" / "Start Menu" / "Programs",
+        )
+    user_home = Path.home()
+    desktop = user_home / "Desktop"
+    appdata = os.environ.get("APPDATA")
+    start_menu = (Path(appdata) if appdata else (user_home / "AppData" / "Roaming")) / "Microsoft" / "Windows" / "Start Menu" / "Programs"
+    return desktop, start_menu
+
+
+def _windows_icon_location():
+    for base in (os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)")):
+        if not base:
+            continue
+        for exe in ("VirtualBoxVM.exe", "VirtualBox.exe"):
+            cand = Path(base) / "Oracle" / "VirtualBox" / exe
+            if cand.is_file():
+                return f"{cand},0"
+    return "shell32.dll,15"
+
+
+def _create_windows_lnk_files(specs):
+    """用 Windows PowerShell WScript.Shell COM 批量写入 .lnk（经 UTF-8 JSON stdin 传参以兼容中文与空格路径）。"""
+    ps_script = (
+        "[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)\n"
+        "$ErrorActionPreference = 'Stop'\n"
+        "$items = [Console]::In.ReadToEnd() | ConvertFrom-Json\n"
+        "$ws = New-Object -ComObject WScript.Shell\n"
+        "foreach ($item in @($items)) {\n"
+        "  $parent = Split-Path -Parent $item.path\n"
+        "  if ($parent) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }\n"
+        "  $s = $ws.CreateShortcut($item.path)\n"
+        "  $s.TargetPath = $item.target\n"
+        "  $s.Arguments = $item.arguments\n"
+        "  $s.WorkingDirectory = $item.workdir\n"
+        "  $s.WindowStyle = 7\n"
+        "  $s.Description = $item.description\n"
+        "  if ($item.icon) { $s.IconLocation = $item.icon }\n"
+        "  $s.Save()\n"
+        "}\n"
+    )
+    payload = json.dumps(specs, ensure_ascii=False)
+    subprocess.run(
+        ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_script],
+        input=payload,
+        text=True,
+        encoding="utf-8",
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+
+
+def _windows_create(tag, state, home=None):
+    entry, _in_path = install_cli_entry(home=home, platform_name="Windows")
+    desktop_dir, start_menu_dir = _windows_shortcut_dirs(home=home)
+    lnk_name = _expected_lnk_name(tag)
+    ps_exe = os.path.join(
+        os.environ.get("WINDIR") or r"C:\Windows",
+        "System32", "WindowsPowerShell", "v1.0", "powershell.exe",
+    )
+    args = _windows_open_ps_args(tag, state, entry)
+    icon = _windows_icon_location()
+    desc = f"cchouse ({tag})"
+    specs = []
+    paths = []
+    for folder in (desktop_dir, start_menu_dir):
+        if folder is None:
+            continue
+        lnk_path = folder / lnk_name
+        specs.append({
+            "path": str(lnk_path),
+            "target": ps_exe,
+            "arguments": args,
+            "workdir": str(entry.parent),
+            "description": desc,
+            "icon": icon,
+        })
+        paths.append(str(lnk_path))
+    if specs:
+        _create_windows_lnk_files(specs)
+    state["launchers"] = list(paths)
+    return list(paths)
+
+
+def _is_safe_windows_launcher_path(path, tag):
+    return path.name.lower() == _expected_lnk_name(tag).lower()
 
 
 def _windows_remove(tag, state):
-    raise NotImplementedError("Windows launcher removal is implemented by 1B")
+    removed = []
+    for raw in list(state.get("launchers") or []):
+        if not isinstance(raw, str) or not raw:
+            continue
+        p = Path(raw)
+        if not _is_safe_windows_launcher_path(p, tag):
+            continue
+        if p.is_file() or p.is_symlink():
+            p.unlink(missing_ok=True)
+            removed.append(str(p))
+    state["launchers"] = []
+    return removed
 
 
 def preview(tag, state):
@@ -199,7 +352,7 @@ def create(tag, state, *, platform_name=None, home=None):
     if sys_name == "Darwin":
         return _mac_create(tag, state, home=home)
     if sys_name == "Windows":
-        return _windows_create(tag, state)
+        return _windows_create(tag, state, home=home)
     state.setdefault("launchers", [])
     return []
 

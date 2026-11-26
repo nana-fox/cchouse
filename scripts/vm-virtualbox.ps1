@@ -4,7 +4,7 @@
 # Host public keys come from the guest serial log.
 # Do not print credentials.
 param(
-  [ValidateSet("", "install", "import", "firstboot", "boot", "snapshot", "exists", "delete")] [string]$CcOp = "",
+  [ValidateSet("", "install", "import", "firstboot", "boot", "snapshot", "exists", "delete", "gui", "stop", "restore", "status")] [string]$CcOp = "",
   [string]$CcOva = "",
   [string]$CcVmName = "",
   [string]$CcVmDir = "",
@@ -18,7 +18,9 @@ param(
   [int]$CcSshPort = 0,
   [string]$CcInstaller = "",
   [string]$CcSha256 = "",
-  [string]$CcHostKeyLog = ""
+  [string]$CcHostKeyLog = "",
+  [ValidateSet("yes", "no")] [string]$CcForce = "no",
+  [int]$CcTimeout = 60
 )
 
 $script:CchouseHostKeyHelper = Join-Path $PSScriptRoot "windows-hostkey.ps1"
@@ -281,6 +283,7 @@ function Import-CchouseVBoxOva {
     "--usb-ohci", "off"
   )
   Enable-CchouseVBoxSerialLog -Name $Name -HostKeyLog $HostKeyLog
+  Set-CchouseVBoxCloseActions -Name $Name
   Write-Host "VBOX_IMPORTED=$Name"
 }
 
@@ -458,6 +461,189 @@ function New-CchouseVBoxSnapshot {
   Write-Host "SNAPSHOT_OK=$SnapName"
 }
 
+function Set-CchouseVBoxCloseActions {
+  param([string]$Name)
+  if ([string]::IsNullOrWhiteSpace($Name)) { throw "CcVmName is required" }
+  # Verified on VirtualBox 7.2.22 (UICommon.dll + GTR GUI test):
+  # Clicking the window close button triggers ACPI Shutdown directly without the 4-way dialog.
+  Invoke-CchouseVBox -CcArgumentList @("setextradata", $Name, "GUI/DefaultCloseAction", "Shutdown") `
+    -FailureMessage "VBoxManage setextradata GUI/DefaultCloseAction failed" | Out-Null
+  Invoke-CchouseVBox -CcArgumentList @(
+    "setextradata", $Name, "GUI/RestrictedCloseActions", "SaveState,PowerOff,PowerOffRestoringSnapshot,Detach"
+  ) -FailureMessage "VBoxManage setextradata GUI/RestrictedCloseActions failed" | Out-Null
+}
+
+function Get-CchouseVBoxState {
+  param([string[]]$Lines)
+  $vmState = $null
+  $sessionName = $null
+  foreach ($line in @($Lines)) {
+    if ($line -match '^VMState="([^"]*)"') {
+      $vmState = $Matches[1].ToLowerInvariant()
+    } elseif ($line -match '^SessionName="([^"]*)"') {
+      $sessionName = $Matches[1].ToLowerInvariant()
+    }
+  }
+  if (-not $vmState) { return "missing" }
+  if ($vmState -in @("running", "starting", "paused", "stopping")) {
+    if ($sessionName -eq "headless") { return "running-headless" }
+    return "running"
+  }
+  return "stopped"
+}
+
+function Test-CchouseVBoxSnapshotExists {
+  param([string]$Name, [string]$SnapName)
+  if ([string]::IsNullOrWhiteSpace($Name) -or [string]::IsNullOrWhiteSpace($SnapName)) { return $false }
+  $res = Invoke-CchouseVBoxOptional -CcArgumentList @("snapshot", $Name, "list", "--machinereadable")
+  if ($res.ExitCode -ne 0) { return $false }
+  foreach ($line in @($res.Output)) {
+    if ($line -cmatch '^SnapshotName(?:-\d+)*="(.+)"$' -and ($Matches[1] -ceq $SnapName)) {
+      return $true
+    }
+  }
+  return $false
+}
+
+function Get-CchouseVBoxStatus {
+  param([string]$Name, [string]$SnapName = "cchouse-clean")
+  if ([string]::IsNullOrWhiteSpace($Name)) { throw "CcVmName is required" }
+  $info = Invoke-CchouseVBoxOptional -CcArgumentList @("showvminfo", $Name, "--machinereadable")
+  if ($info.ExitCode -ne 0) {
+    Write-Output "VM_STATE=missing"
+    Write-Output "SNAPSHOT_STATE=missing"
+    return
+  }
+  $state = Get-CchouseVBoxState -Lines $info.Output
+  $snapState = "missing"
+  if ($SnapName -and (Test-CchouseVBoxSnapshotExists -Name $Name -SnapName $SnapName)) {
+    $snapState = "present"
+  }
+  Write-Output "VM_STATE=$state"
+  Write-Output "SNAPSHOT_STATE=$snapState"
+}
+
+function Test-CchouseInteractiveSession {
+  if ($env:SSH_CONNECTION -or $env:SSH_CLIENT -or $env:SSH_TTY) { return $false }
+  if (-not [System.Environment]::UserInteractive) { return $false }
+  try {
+    if ([System.Diagnostics.Process]::GetCurrentProcess().SessionId -eq 0) { return $false }
+  } catch {
+    return $false
+  }
+  return $true
+}
+
+function Show-CchouseVBoxWindow {
+  param([string]$Name)
+  if ($env:OS -ne "Windows_NT" -or [string]::IsNullOrWhiteSpace($Name)) { return $false }
+  try {
+    $proc = Get-Process -Name "VirtualBoxVM" -ErrorAction SilentlyContinue |
+      Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -like "$Name*" } |
+      Select-Object -First 1
+    if (-not $proc) { return $false }
+    if (-not ("CchouseWin32Window" -as [type])) {
+      Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class CchouseWin32Window {
+  [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+}
+"@ -ErrorAction SilentlyContinue
+    }
+    [void][CchouseWin32Window]::ShowWindowAsync($proc.MainWindowHandle, 9)
+    [void][CchouseWin32Window]::SetForegroundWindow($proc.MainWindowHandle)
+    return $true
+  } catch {
+    return $false
+  }
+}
+
+function Start-CchouseVmGui {
+  param([string]$Name)
+  Invoke-CchouseVBox -CcArgumentList @("startvm", $Name, "--type", "gui") -FailureMessage "VBoxManage startvm --type gui failed" | Out-Null
+}
+
+function Stop-CchouseVBoxVM {
+  param(
+    [string]$Name,
+    [ValidateSet("yes", "no")] [string]$Force = "no",
+    [int]$Timeout = 60
+  )
+  if ([string]::IsNullOrWhiteSpace($Name)) { throw "CcVmName is required" }
+  if ($Timeout -lt 1) { $Timeout = 1 }
+  $info = Invoke-CchouseVBoxOptional -CcArgumentList @("showvminfo", $Name, "--machinereadable")
+  if ($info.ExitCode -ne 0) { throw "VirtualBox VM not found: $Name" }
+  $state = Get-CchouseVBoxState -Lines $info.Output
+  if ($state -eq "stopped") {
+    Write-Host "VM_STOPPED=already-stopped"
+    return
+  }
+  if ($Force -eq "yes") {
+    Invoke-CchouseVBox -CcArgumentList @("controlvm", $Name, "poweroff") -FailureMessage "poweroff failed for $Name" | Out-Null
+    $waitSec = [Math]::Max(20, $Timeout)
+    if (-not (Wait-CchousePowerOff -Name $Name -Seconds $waitSec)) {
+      throw "poweroff timed out for $Name"
+    }
+    Write-Host "VM_STOPPED=force"
+    return
+  }
+  Invoke-CchouseVBox -CcArgumentList @("controlvm", $Name, "acpipowerbutton") -FailureMessage "acpipowerbutton failed for $Name" | Out-Null
+  if (-not (Wait-CchousePowerOff -Name $Name -Seconds $Timeout)) {
+    throw "ACPI shutdown timed out after ${Timeout}s for $Name (use --force to power off)"
+  }
+  Write-Host "VM_STOPPED=acpi"
+}
+
+function Invoke-CchouseVBoxGui {
+  param([string]$Name, [int]$Timeout = 60)
+  if ([string]::IsNullOrWhiteSpace($Name)) { throw "CcVmName is required" }
+  $info = Invoke-CchouseVBoxOptional -CcArgumentList @("showvminfo", $Name, "--machinereadable")
+  if ($info.ExitCode -ne 0) { throw "VirtualBox VM not found: $Name" }
+  Set-CchouseVBoxCloseActions -Name $Name
+  if (-not (Test-CchouseInteractiveSession)) {
+    Write-Host "当前为 SSH/非交互会话，无法弹出虚拟机窗口。请在桌面双击「cchouse」图标打开。"
+    Write-Host "VM_GUI=deferred-noninteractive"
+    return
+  }
+  $state = Get-CchouseVBoxState -Lines $info.Output
+  if ($state -eq "running") {
+    [void](Show-CchouseVBoxWindow -Name $Name)
+    Write-Host "VM_GUI=already-running"
+    return
+  }
+  if ($state -eq "running-headless") {
+    Write-Host "客机正在后台无窗口运行，正在安全关机后以桌面窗口重启..."
+    Stop-CchouseVBoxVM -Name $Name -Force "no" -Timeout $Timeout
+  }
+  Start-CchouseVmGui -Name $Name
+  Write-Host "VM_GUI=started"
+}
+
+function Restore-CchouseVBoxSnapshot {
+  param(
+    [string]$Name,
+    [string]$SnapName = "cchouse-clean",
+    [int]$Timeout = 60
+  )
+  if ([string]::IsNullOrWhiteSpace($Name)) { throw "CcVmName is required" }
+  if ([string]::IsNullOrWhiteSpace($SnapName)) { throw "CcSnapshot is required" }
+  $info = Invoke-CchouseVBoxOptional -CcArgumentList @("showvminfo", $Name, "--machinereadable")
+  if ($info.ExitCode -ne 0) { throw "VirtualBox VM not found: $Name" }
+  $state = Get-CchouseVBoxState -Lines $info.Output
+  if ($state -in @("running", "running-headless")) {
+    Stop-CchouseVBoxVM -Name $Name -Force "no" -Timeout $Timeout
+  }
+  if (-not (Test-CchouseVBoxSnapshotExists -Name $Name -SnapName $SnapName)) {
+    throw "Snapshot not found: $SnapName"
+  }
+  Invoke-CchouseVBox -CcArgumentList @("snapshot", $Name, "restore", $SnapName) `
+    -FailureMessage "VBoxManage snapshot restore failed" | Out-Null
+  Set-CchouseVBoxCloseActions -Name $Name
+  Write-Host "RESTORE_OK=$SnapName"
+}
+
 if ($CcOp) {
   $ErrorActionPreference = "Stop"
   switch ($CcOp) {
@@ -471,6 +657,10 @@ if ($CcOp) {
     "boot" { Invoke-CchouseVBoxBoot $CcVmName $CcSeedIso $CcKey $CcKnownHosts $CcIpFile $CcSshPort $CcHostKeyLog }
     "snapshot" { New-CchouseVBoxSnapshot $CcVmName $CcSnapshot }
     "delete" { Remove-CchouseVBoxVM -Name $CcVmName -VmDir $CcVmDir }
+    "status" { Get-CchouseVBoxStatus -Name $CcVmName -SnapName $CcSnapshot }
+    "gui" { Invoke-CchouseVBoxGui -Name $CcVmName -Timeout $CcTimeout }
+    "stop" { Stop-CchouseVBoxVM -Name $CcVmName -Force $CcForce -Timeout $CcTimeout }
+    "restore" { Restore-CchouseVBoxSnapshot -Name $CcVmName -SnapName $CcSnapshot -Timeout $CcTimeout }
   }
   exit 0
 }
