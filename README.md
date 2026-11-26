@@ -77,7 +77,7 @@ python3 -I scripts/cchouse.py up --tag cc01
 | 你的电脑 | 用什么虚拟机软件 | 状态 |
 |---|---|---|
 | Apple Silicon Mac（M 系列） | Tart | ✅ `v2.0.0-preview.2` 已在 Mac mini 完成公开版冷安装 |
-| Windows（x64） | VirtualBox | `preview.3` 待验证 |
+| Windows（x64） | VirtualBox | ✅ `v2.0.0-preview.3` 已在 Windows 11 实机完成两轮公开版盲装 |
 | Intel Mac | — | 暂不支持 |
 
 虚拟机里统一是 Debian 13 + Chromium + Claude Code。不支持 Linux 电脑作为宿主机。
@@ -85,6 +85,7 @@ python3 -I scripts/cchouse.py up --tag cc01
 **空缓存首次安装耗时**（包括镜像和 Claude Code 下载）
 
 - **Apple Silicon Mac** 在 Mac mini 实测 `v2.0.0-preview.2` 公共版空缓存安装用时 **2 分 15 秒**，涵盖下载、自动验收和保存干净快照。下载经宿主代理，镜像平均 20.67 MiB/s，Claude Code 平均 16.31 MiB/s。
+- **Windows 11（x64）** 实机两轮 `v2.0.0-preview.3` 公开版盲装，从空缓存、未装 VirtualBox 开始，安装器内用时分别为 **10 分 21 秒**和 **9 分 13 秒**，涵盖自动安装 VirtualBox、下载、导入、自动验收和保存干净快照。
 
 ---
 
