@@ -232,7 +232,8 @@ class TestDailyCliDispatch(unittest.TestCase):
                  mock.patch.object(cchouse.subprocess, "run", return_value=fake_ssh) as m_ssh:
                 self.assertTrue(cchouse._ssh_graceful_poweroff(info))
                 cmd = m_ssh.call_args[0][0]
-                self.assertIn(f'UserKnownHostsFile="{kh}"', cmd)
+                expected_kh = kh.resolve().as_posix() if os.name == "nt" else str(kh)
+                self.assertIn(f'UserKnownHostsFile="{expected_kh}"', cmd)
 
 
 class TestLauncherAndPrivateTart(unittest.TestCase):
