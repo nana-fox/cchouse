@@ -425,6 +425,7 @@ class TestUpPipeline(unittest.TestCase):
             ctx = _ctx(td)
             results = [subprocess.CompletedProcess([], 1), subprocess.CompletedProcess([], 0)]
             with mock.patch.object(cchouse_mod.subprocess, "run", side_effect=results), \
+                    mock.patch("sys.stdout", io.StringIO()), \
                     mock.patch.object(ctx, "tart", side_effect=cchouse_mod.StepError("name already exists")) as tart, \
                     self.assertRaises(cchouse_mod.StepError):
                 cchouse_mod.step_import(ctx)

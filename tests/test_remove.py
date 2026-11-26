@@ -268,18 +268,19 @@ class TestVmwareDeleteScript(unittest.TestCase):
         script = r"""
 . $env:VMWARE_SCRIPT
 $ErrorActionPreference = 'Stop'
+$expectedVmx = (Get-Item -LiteralPath $env:TEST_VMX).FullName
 function Get-CchouseVmrun { return 'Invoke-FakeVmrun' }
 function Invoke-FakeVmrun {
   $global:LASTEXITCODE = 0
   if ($args[2] -eq 'list') {
     'Total running VMs: 2'
     $env:OTHER_VMX
-    $testPath = Split-Path -Parent $env:TEST_VMX
-    $testName = Split-Path -Leaf $env:TEST_VMX
+    $testPath = Split-Path -Parent $expectedVmx
+    $testName = Split-Path -Leaf $expectedVmx
     '  ' + $testPath.ToUpperInvariant() + '/unused/../' + $testName.ToUpperInvariant() + '  '
     return
   }
-  if ($args[3] -cne $env:TEST_VMX) { throw "Unexpected VMX" }
+  if ($args[3] -ine $expectedVmx) { throw "Unexpected VMX" }
   switch ($args[2]) {
     'stop' { 'STOPPED TARGET' }
     'deleteVM' { Remove-Item -LiteralPath $args[3]; 'DELETED TARGET' }
