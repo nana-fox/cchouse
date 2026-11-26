@@ -40,20 +40,20 @@ The installer downloads and verifies the matching guest image and official Claud
 
 ### Windows (x64)
 
-Open Windows PowerShell and run this one line to install `v2.0.0-preview.4`.
+Open Windows PowerShell and run this one line to install `v2.0.0-preview.5`.
 
 ```powershell
-$f = "$env:TEMP\cchouse-bootstrap-$([guid]::NewGuid().ToString('N')).ps1"; iwr https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.4/bootstrap-windows.ps1 -UseBasicParsing -OutFile $f -ErrorAction Stop; if ((Get-FileHash $f -Algorithm SHA256).Hash -ne '0e3a7b438485a614635b99d9ea4045ca5afe17cdecd8f6b5c9aad9c6ec87cc46') { throw 'SHA-256 mismatch' }; Unblock-File -LiteralPath $f; powershell -NoProfile -ExecutionPolicy RemoteSigned -File $f -CleanupBootstrap
+$f = "$env:TEMP\cchouse-bootstrap-$([guid]::NewGuid().ToString('N')).ps1"; iwr https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.5/bootstrap-windows.ps1 -UseBasicParsing -OutFile $f -ErrorAction Stop; if ((Get-FileHash $f -Algorithm SHA256).Hash -ne '060aa41e0c8a042552e825cb46a66cfa21552a21701101c9ac4bb9832b2fd51e') { throw 'SHA-256 mismatch' }; Unblock-File -LiteralPath $f; powershell -NoProfile -ExecutionPolicy RemoteSigned -File $f -CleanupBootstrap
 ```
 
 When prompted, paste your node link. The input is hidden. If VirtualBox is missing, the installer installs it automatically. Click **Yes** once when Windows asks for User Account Control (UAC) approval.
 
 ### Apple Silicon Mac
 
-Requires Apple Silicon (M series) and macOS 13.0 Ventura or later. Open Terminal and run this one line to install `v2.0.0-preview.4`. The bootstrap verifies and prepares a private Python and Tart if needed.
+Requires Apple Silicon (M series) and macOS 13.0 Ventura or later. Open Terminal and run this one line to install `v2.0.0-preview.5`. The bootstrap verifies and prepares a private Python and Tart if needed.
 
 ```bash
-f=$(mktemp -t cchouse-bootstrap) && curl -fsSLo "$f" https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.4/bootstrap-macos.sh && printf '%s  %s\n' '59a1a0059635438b085dc172b49c950325c7811a1e3e40cfc0ac089009badb97' "$f" | shasum -a 256 -c - && /bin/bash "$f" --cleanup-bootstrap
+f=$(mktemp -t cchouse-bootstrap) && curl -fsSLo "$f" https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.5/bootstrap-macos.sh && printf '%s  %s\n' '43d7386e95787919d9fdc1a9b72f6503d08e80ee244ee1d98bf6ac5cd713de78' "$f" | shasum -a 256 -c - && /bin/bash "$f" --cleanup-bootstrap
 ```
 
 When prompted, paste your SOCKS5 or HTTP(S) node link. The input is hidden.
@@ -65,6 +65,16 @@ The installer configures the guest and runs automated checks, then saves a clean
 After the automated checks pass, open the network check page on the VM desktop (the picture above). After every network check passes, sign in to Claude in **the browser inside the VM**. That page checks the network only. It does not say anything about the account.
 
 > The authorization link shown when you sign in to Claude Code must also be opened in the browser inside the VM. Do not copy it into the browser on your own computer.
+
+### Daily use
+
+After installation there is a `cchouse (cc01)` icon on your desktop.
+
+- **Open**: double-click the desktop icon. If the VM is already open, it will not start a second one.
+- **Shut down**: right-click the VM desktop and choose **Power Off (Safe Shutdown)**. On Windows, the window's close button also shuts down cleanly; **on Mac, closing the Tart window cuts power** and unsaved work is lost.
+- **Back to the freshly installed state**: run `cchouse restore --tag cc01`. Your node settings are kept; files and sign-ins inside the VM are cleared.
+- **Status / shut down from the terminal**: `cchouse status --tag cc01`, `cchouse stop --tag cc01`.
+- If the terminal cannot find `cchouse`: use `~/.local/bin/cchouse` on Mac, or `%LOCALAPPDATA%\cchouse\bin\cchouse.cmd` on Windows.
 
 For AI-assisted installation, see [AGENTS.md](AGENTS.md). For manual configuration, see the [advanced installation guide](docs/manual-install.md).
 
@@ -137,13 +147,15 @@ An unreachable Stripe only affects paying on the claude.ai website. An existing 
 
 Downloads happen in two stages, and both follow the host network's proxy settings (such as the system proxy or terminal proxy environment variables):
 
-1. **Bootstrap downloads** (source zip, private Python, and private Tart on Mac if Tart is not installed, fetched from GitHub / python.org): this stage currently has no progress bar and may wait silently for several minutes on slow connections; `--image-mirror` does **not** apply to these bootstrap downloads.
+1. **Bootstrap downloads** (source zip, private Python, and private Tart on Mac if Tart is not installed, fetched from GitHub / python.org): this stage shows progress and retries and resumes automatically after a drop; `--image-mirror` does **not** apply to these bootstrap downloads.
 2. **Image and component downloads** (guest image, official Claude Code package, and VirtualBox on Windows if missing, inside `cchouse up`): every downloaded file is verified against its SHA-256 in the manifest.
 
-**About `--image-mirror`**: the one-line bootstrap scripts on this page **do not currently support** forwarding `--image-mirror` to the installer (`bootstrap-macos.sh` only accepts `--tag` and `--cleanup-bootstrap`; `bootstrap-windows.ps1` only accepts `-CleanupBootstrap`). To use a mirror for the guest image with the one-line command, set the `CCHOUSE_IMAGE_MIRROR` environment variable first (the file is still checked against the SHA-256 in the manifest):
+**Using a mirror for the guest image**: append an argument to the end of the one-line command (the file is still checked against the SHA-256 in the manifest):
 
-- **Apple Silicon Mac**: run `export CCHOUSE_IMAGE_MIRROR='<mirror directory URL>'` first, then run the Mac one-line command from Quick start as-is.
-- **Windows (x64)**: run `$env:CCHOUSE_IMAGE_MIRROR = '<mirror directory URL>'` in the same PowerShell window first, then run the Windows one-line command from Quick start as-is.
+- **Apple Silicon Mac**: after `--cleanup-bootstrap`, append ` --image-mirror '<mirror directory URL>'`.
+- **Windows (x64)**: after `-CleanupBootstrap`, append ` -ImageMirror '<mirror directory URL>'`.
+
+You can also set the `CCHOUSE_IMAGE_MIRROR` environment variable first and run the command as-is.
 
 When invoking `scripts/cchouse.py up` directly (see [manual install](docs/manual-install.md)), you can pass `--image-mirror <mirror directory URL>` directly. You can also download the image on the host first and import it offline.
 
@@ -163,7 +175,7 @@ If it still fails, check whether the node is reachable and export a diagnostic p
 <details>
 <summary><b>Something went wrong during install. What now?</b></summary>
 
-Use the Python and source that the bootstrap prepared to export a redacted diagnostic package. Follow the instructions for [Mac](docs/operations.md#mac-一键安装后的诊断与卸载) or [Windows](docs/operations.md#windows-一键安装后的诊断与卸载).
+Use the Python and source that the bootstrap prepared to export a redacted diagnostic package. Follow [Mac](docs/operations.md#mac-一键安装后的诊断与卸载) or [Windows](docs/operations.md#windows-一键安装后的诊断与卸载).
 
 **Unzip and check the package before you open a public issue.** Confirm that no credentials or personal information remain, then attach it to an [issue](https://github.com/nana-fox/cchouse/issues). See [docs/operations.md](docs/operations.md).
 
@@ -173,7 +185,7 @@ Use the Python and source that the bootstrap prepared to export a redacted diagn
 
 ## Uninstall
 
-Wait for installation to finish, then follow the `remove` instructions for [Mac](docs/operations.md#mac-一键安装后的诊断与卸载) or [Windows](docs/operations.md#windows-一键安装后的诊断与卸载). Use the original instance tag and include the original `--private-dir` if you supplied one.
+Run `cchouse remove --tag cc01`; the desktop icon is removed too. For details, see the instructions for [Mac](docs/operations.md#mac-一键安装后的诊断与卸载) or [Windows](docs/operations.md#windows-一键安装后的诊断与卸载). Use the original instance tag and include the original `--private-dir` if you supplied one.
 
 The installer lists the VM, clean snapshot, private folder, and temporary plaintext it can verify before asking for confirmation. Enter cancels by default. Use `--yes` to skip confirmation. On VirtualBox, uninstall powers the VM off and then runs `VBoxManage unregistervm --delete` for the VM whose name matches the install record exactly. If an older installation lacks a record that verifies ownership, check the VM in your virtualization app and follow the manual cleanup instructions.
 
@@ -189,7 +201,7 @@ For people who want the details:
 4. **Closed inside the VM**: only the official website and official Claude Code are used. The sign-in authorization link is opened only in the VM's browser.
 5. **Credentials stay out of the repo**: node details live only in a private directory on your computer (readable only by you). Plaintext intermediate files are deleted after use. The repo's commit hook blocks content that looks like credentials.
 
-We will **never**: bundle a node, relax the offline protection in order to "get the network back", or ship a desktop GUI program.
+We will **never**: bundle a node, relax the offline protection in order to "get the network back", or ship a standalone desktop client or control panel (the desktop icon is only a system shortcut that runs `cchouse open`).
 
 Architecture: [docs/architecture.md](docs/architecture.md). Verification items: [docs/verify.md](docs/verify.md).
 
