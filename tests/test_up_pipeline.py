@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import types
 import unittest
@@ -261,6 +262,41 @@ class TestUpPipeline(unittest.TestCase):
             self.assertIn("EXPECTED_EGRESS_IP=203.0.113.9\n", env)
             self.assertIn("时区=America/New_York，预期出口 IP=203.0.113.9", out.getvalue())
             self.assertNotIn("test-password", out.getvalue())
+
+    def test_background_download_logs_pause_only_during_hidden_prompt(self):
+        with tempfile.TemporaryDirectory() as td:
+            ctx = _ctx(td, link_stdin=False)
+            started = threading.Event()
+            prompting = threading.Event()
+            downloaded = threading.Event()
+
+            def download(progress):
+                ctx.downloader.log("before input")
+                started.set()
+                if prompting.wait(5):
+                    ctx.downloader.log("during input")
+                    progress.update(state="ok", done=1, total=1)
+                    downloaded.set()
+                return "downloaded"
+
+            def prompt(message):
+                print(message, end="")
+                prompting.set()
+                self.assertTrue(downloaded.wait(5))
+                raise EOFError
+
+            with mock.patch.object(cchouse_mod.getpass, "getpass", side_effect=prompt), \
+                    mock.patch("sys.stdout", io.StringIO()) as out:
+                ctx.downloader.start("image", "img", download)
+                self.assertTrue(started.wait(5))
+                with self.assertRaisesRegex(cchouse_mod.StepError, "输入已结束"):
+                    cchouse_mod.do_config(ctx)
+                ctx.downloader.log("after input")
+
+            self.assertIn("before input", out.getvalue())
+            self.assertIn("请粘贴单节点代理链接", out.getvalue())
+            self.assertNotIn("during input", out.getvalue())
+            self.assertIn("after input", out.getvalue())
 
     def test_required_input_eof_fails_and_cleans_plaintext(self):
         for link_stdin in (True, False):
