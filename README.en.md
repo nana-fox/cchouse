@@ -67,7 +67,7 @@ This guide is for image version `v2.0.0-preview.2`. The installer uses the repos
 | Your computer | VM software | Status |
 |---|---|---|
 | Apple Silicon Mac | Tart | ✅ Public `v2.0.0-preview.2` cold install verified on a Mac mini |
-| Windows (x64) | VMware Workstation Pro | ✅ Tested on real hardware. `preview.2` first-install timing pending |
+| Windows (x64) | VMware Workstation Pro | ✅ `preview.2` import and desktop verification passed on real hardware |
 | Intel Mac | — | Currently unsupported |
 
 The guest is always Debian 13 + Chromium + Claude Code. Linux hosts are not supported.
@@ -75,7 +75,7 @@ The guest is always Debian 13 + Chromium + Claude Code. Linux hosts are not supp
 **First-install timing with an empty cache** (includes image and Claude Code downloads)
 
 - On a Mac mini with **Apple Silicon**, the public `v2.0.0-preview.2` installer took **2 minutes 15 seconds** from an empty cache through verification and saving a clean snapshot. Over the host proxy, the image averaged 20.67 MiB/s and Claude Code averaged 16.31 MiB/s.
-- **Windows** timing is `<COLD_WIN>` (measurement pending).
+- On **Windows (VMware)**, `v2.0.0-preview.2` took about **3 minutes 5 seconds** from import through successful desktop verification. The image is about 1.58 GB. A full empty-cache run including the download is still pending.
 
 ---
 
@@ -94,7 +94,7 @@ The guest is always Debian 13 + Chromium + Claude Code. Linux hosts are not supp
 - **Why a VM instead of a fingerprint browser or a plain proxy?** A plain proxy often falls back to direct traffic and CLI tools may ignore it. A fingerprint browser (a browser that manages separate browser profiles and settings) only covers the browser, not Claude Code. A VM locks the network for the whole system, so web and CLI share one exit.
 - **Stripe is blocked.** Only paying on claude.ai is affected, and the check only tests connectivity. Add a payment-only proxy if you need it.
 - **Downloads are slow.** The installer uses the host's proxy settings. Pass `--image-mirror <mirror directory URL>` to use an image mirror while keeping SHA-256 verification. You can also download the image on the host and import it offline. [Manual install (Chinese)](docs/manual-install.md)
-- **The first egress check fails with Clash TUN enabled on the host.** Wait 1–2 minutes and rerun `verify-linux.sh --fail-closed` using the same instance configuration. If it keeps failing, add a direct rule for your proxy node’s IPv4 address in the host’s Clash rules, for example `IP-CIDR,<node IPv4>/32,DIRECT,no-resolve`, before the catch-all rule. Run verification again. Apply the rule on the host.
+- **Does the first egress check fail with Clash TUN enabled on your computer?** Wait 1–2 minutes, then rerun the original Quick Start command from the same directory with the same `--tag`. The installer resumes and runs verification again. If the VM has stopped, start it in your virtualization app first. If verification still fails, add a direct rule for the proxy node’s IPv4 address before the catch-all rule in the host’s Clash settings, for example `IP-CIDR,<node IPv4>/32,DIRECT,no-resolve`, then rerun the installer.
 - **Something failed.** Export a redacted diagnostic zip using the generated `instance.env`. Add `--vm-ssh` to collect guest diagnostics if the VM has started. These examples use the default directory and tag `cc01`.
 
   ```bash

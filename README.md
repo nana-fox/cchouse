@@ -78,7 +78,7 @@ Windows PowerShell 用 `py -3 -I scripts/cchouse.py up --tag cc01`。
 | 你的电脑 | 用什么虚拟机软件 | 状态 |
 |---|---|---|
 | Apple Silicon Mac（M 系列） | Tart | ✅ `v2.0.0-preview.2` 已在 Mac mini 完成公开版冷安装 |
-| Windows（x64） | VMware Workstation Pro | ✅ 已有真机验证，`preview.2` 首装计时待测 |
+| Windows（x64） | VMware Workstation Pro | ✅ `preview.2` 已通过真机导入和桌面验收 |
 | Intel Mac | — | 暂不支持 |
 
 虚拟机里统一是 Debian 13 + Chromium + Claude Code。不支持 Linux 电脑作为宿主机。
@@ -86,7 +86,7 @@ Windows PowerShell 用 `py -3 -I scripts/cchouse.py up --tag cc01`。
 **空缓存首次安装耗时**（包括镜像和 Claude Code 下载）
 
 - **Apple Silicon Mac** 在 Mac mini 实测 `v2.0.0-preview.2` 公共版空缓存安装用时 **2 分 15 秒**，涵盖下载、自动验收和保存干净快照。下载经宿主代理，镜像平均 20.67 MiB/s，Claude Code 平均 16.31 MiB/s。
-- **Windows** 的耗时为 `<COLD_WIN>`（待实测）。
+- **Windows（VMware）** 实测 `v2.0.0-preview.2` 从导入到桌面验收通过约 **3 分 05 秒**。镜像约 1.58 GB，含下载的空缓存全程待测。
 
 ---
 
@@ -138,9 +138,16 @@ Stripe 不通只影响在 claude.ai 网页上付款。已经订阅的、或在�
 </details>
 
 <details>
-<summary><b>装的时候出错了怎么办？</b></summary>
+<summary><b>电脑开着 Clash 的 TUN 模式，首次验收出口连测失败？</b></summary>
 
-宿主启用了 **Clash TUN** 时，如果首次验收的客机出口连测失败，等 1–2 分钟，再用同一实例的配置重跑 `verify-linux.sh --fail-closed`。仍失败时，可在宿主 Clash 规则中为代理节点本身的 IPv4 地址添加一条直连规则，例如 `IP-CIDR,<节点IPv4>/32,DIRECT,no-resolve`，放在兜底规则前，再重跑验收。直连规则只配置在宿主 Clash。
+等 1–2 分钟，再从同一目录重跑快速开始里的安装命令，使用相同的 `--tag`。安装器会续跑并重新验收。如果客机已经关机，先在虚拟机软件中启动同一台客机。
+
+如果仍失败，可以在宿主 Clash 的兜底规则前为节点本身的 IPv4 地址加一条直连规则，例如 `IP-CIDR,<节点IPv4>/32,DIRECT,no-resolve`，然后重跑原安装命令。直连规则只配置在宿主 Clash。
+
+</details>
+
+<details>
+<summary><b>装的时候出错了怎么办？</b></summary>
 
 用安装时生成的 `instance.env` 导出脱敏诊断包。已启动的客机可加 `--vm-ssh`，让工具尝试采集客机诊断信息。以下命令使用默认目录和标签 `cc01`。
 
