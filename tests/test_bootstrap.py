@@ -118,6 +118,8 @@ class WindowsBootstrapTests(unittest.TestCase):
     def test_missing_openssh_or_wrong_source_hash_cannot_launch_up(self):
         driver = """
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+Import-Module Microsoft.PowerShell.Utility
+$env:WINDIR = $env:TEST_ROOT
 function Invoke-WebRequest {
   param([switch]$UseBasicParsing, [string]$Uri, [string]$OutFile)
   [IO.File]::WriteAllText($OutFile, 'tampered')
@@ -141,7 +143,7 @@ exit $LASTEXITCODE
                         (system32 / name).touch()
                 run = subprocess.run(
                     ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded],
-                    env=dict(os.environ, WINDIR=td, LOCALAPPDATA=td, TEST_BOOTSTRAP=str(script)),
+                    env=dict(os.environ, TEST_ROOT=td, LOCALAPPDATA=td, TEST_BOOTSTRAP=str(script)),
                     capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
                 )
                 self.assertEqual(run.returncode, 1, run.stdout + run.stderr)
