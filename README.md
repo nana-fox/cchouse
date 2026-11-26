@@ -40,20 +40,20 @@ cchouse 的做法：只走你配置的那一个节点，把虚拟机的时区、
 
 ### Windows（x64）
 
-打开 Windows PowerShell，运行下面这一行安装 `v2.0.0-preview.5`。
+打开 Windows PowerShell，运行下面这一行安装 `v2.0.0-preview.4`。
 
 ```powershell
-$f = "$env:TEMP\cchouse-bootstrap-$([guid]::NewGuid().ToString('N')).ps1"; iwr https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.5/bootstrap-windows.ps1 -UseBasicParsing -OutFile $f -ErrorAction Stop; if ((Get-FileHash $f -Algorithm SHA256).Hash -ne '060aa41e0c8a042552e825cb46a66cfa21552a21701101c9ac4bb9832b2fd51e') { throw 'SHA-256 mismatch' }; Unblock-File -LiteralPath $f; powershell -NoProfile -ExecutionPolicy RemoteSigned -File $f -CleanupBootstrap
+$f = "$env:TEMP\cchouse-bootstrap-$([guid]::NewGuid().ToString('N')).ps1"; iwr https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.4/bootstrap-windows.ps1 -UseBasicParsing -OutFile $f -ErrorAction Stop; if ((Get-FileHash $f -Algorithm SHA256).Hash -ne '0e3a7b438485a614635b99d9ea4045ca5afe17cdecd8f6b5c9aad9c6ec87cc46') { throw 'SHA-256 mismatch' }; Unblock-File -LiteralPath $f; powershell -NoProfile -ExecutionPolicy RemoteSigned -File $f -CleanupBootstrap
 ```
 
 按提示粘贴自己的节点链接，输入不会回显。缺少 VirtualBox 时，安装器会自动安装。Windows 弹出用户账户控制（UAC）提示时，点一次「是」。
 
 ### Apple Silicon Mac
 
-需要 Apple Silicon（M 系列）及 macOS 13.0 Ventura 或更新版本。打开「终端」，运行下面这一行安装 `v2.0.0-preview.5`。引导脚本会校验并准备私有 Python 和所需的 Tart。
+需要 Apple Silicon（M 系列）及 macOS 13.0 Ventura 或更新版本。打开「终端」，运行下面这一行安装 `v2.0.0-preview.4`。引导脚本会校验并准备私有 Python 和所需的 Tart。
 
 ```bash
-f=$(mktemp -t cchouse-bootstrap) && curl -fsSLo "$f" https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.5/bootstrap-macos.sh && printf '%s  %s\n' '43d7386e95787919d9fdc1a9b72f6503d08e80ee244ee1d98bf6ac5cd713de78' "$f" | shasum -a 256 -c - && /bin/bash "$f" --cleanup-bootstrap
+f=$(mktemp -t cchouse-bootstrap) && curl -fsSLo "$f" https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.4/bootstrap-macos.sh && printf '%s  %s\n' '59a1a0059635438b085dc172b49c950325c7811a1e3e40cfc0ac089009badb97' "$f" | shasum -a 256 -c - && /bin/bash "$f" --cleanup-bootstrap
 ```
 
 按提示粘贴自己的 SOCKS5 或 HTTP(S) 节点链接，输入不会回显。
@@ -65,16 +65,6 @@ f=$(mktemp -t cchouse-bootstrap) && curl -fsSLo "$f" https://github.com/nana-fox
 自动验收通过后，打开虚拟机桌面上的网络检查页（就是上面那张图）。网络检查全部通过后，再在**虚拟机里的浏览器**登录 Claude。这一页只检查网络，不代表账号状态。
 
 > 登录 Claude Code 时弹出的授权链接，也只能在虚拟机里的浏览器打开，不要复制到你本机的浏览器。
-
-### 日常使用
-
-装完后桌面上有 `cchouse (cc01)` 图标。
-
-- **打开**：双击桌面图标。已经开着时不会再开一台。
-- **关机**：在虚拟机桌面右键选 **Power Off (Safe Shutdown)**。Windows 直接点窗口关闭按钮也是正常关机；**Mac 点 Tart 窗口关闭按钮等于断电**，未保存的内容会丢。
-- **回到刚装好的样子**：运行 `cchouse restore --tag cc01`。节点配置保留，虚拟机里的文件和登录状态清空。
-- **查看状态 / 命令关机**：`cchouse status --tag cc01`、`cchouse stop --tag cc01`。
-- 终端找不到 `cchouse` 时：Mac 用 `~/.local/bin/cchouse`，Windows 用 `%LOCALAPPDATA%\cchouse\bin\cchouse.cmd`。
 
 让 AI Agent 协助安装见 [AGENTS.md](AGENTS.md)。手动配置见 [进阶安装](docs/manual-install.md)。
 
@@ -147,15 +137,13 @@ Stripe 不通只影响在 claude.ai 网页上付款。已经订阅的、或在�
 
 下载分为两个阶段，均沿用宿主网络的代理设置（如系统代理或终端代理环境变量）：
 
-1. **引导阶段下载**（从 GitHub / Python 官方源拉取源码 zip、私有 Python，以及 Mac 缺少 Tart 时的私有 Tart）：此阶段显示进度，断流会自动重试并断点续传；`--image-mirror` **不作用于**引导阶段的这些下载。
+1. **引导阶段下载**（从 GitHub / Python 官方源拉取源码 zip、私有 Python，以及 Mac 缺少 Tart 时的私有 Tart）：此阶段目前没有进度条，网络较慢时可能静默等待数分钟；`--image-mirror` **不作用于**引导阶段的这些下载。
 2. **镜像与组件下载**（进入 `cchouse up` 后下载客机镜像、官方 Claude Code 包，以及 Windows 缺少 VirtualBox 时的 VirtualBox 安装包）：下载后均会核对清单中的 SHA-256。
 
-**给客机镜像指定镜像源**：在首页一键命令末尾追加参数即可（下载后仍按清单校验 SHA-256）：
+**关于 `--image-mirror` 参数**：首页的 Mac 与 Windows 一键引导脚本**目前不支持**直接追加 `--image-mirror` 透传给安装器（`bootstrap-macos.sh` 只接受 `--tag` 与 `--cleanup-bootstrap`，`bootstrap-windows.ps1` 只接受 `-CleanupBootstrap`）。如需为客机镜像指定镜像源，可在运行首页一键命令前先设置环境变量 `CCHOUSE_IMAGE_MIRROR`（下载后仍按清单校验 SHA-256）：
 
-- **Apple Silicon Mac**：在 Mac 命令末尾 `--cleanup-bootstrap` 后追加 ` --image-mirror '<镜像目录 URL>'`。
-- **Windows（x64）**：在 Windows 命令末尾 `-CleanupBootstrap` 后追加 ` -ImageMirror '<镜像目录 URL>'`。
-
-也可以先设置环境变量 `CCHOUSE_IMAGE_MIRROR` 再原样运行首页命令。
+- **Apple Silicon Mac**：先执行 `export CCHOUSE_IMAGE_MIRROR='<镜像目录 URL>'`，再原样运行快速开始中的 Mac 一键命令。
+- **Windows（x64）**：先在同一个 PowerShell 窗口执行 `$env:CCHOUSE_IMAGE_MIRROR = '<镜像目录 URL>'`，再原样运行快速开始中的 Windows 一键命令。
 
 若直接使用 `scripts/cchouse.py up`（见 [手动安装](docs/manual-install.md)），可直接传入 `--image-mirror <镜像目录 URL>`；也可在宿主先下载镜像再离线导入。
 
@@ -185,7 +173,7 @@ Stripe 不通只影响在 claude.ai 网页上付款。已经订阅的、或在�
 
 ## 卸载
 
-运行 `cchouse remove --tag cc01`，桌面图标会一并删除。详细说明见 [Mac](docs/operations.md#mac-一键安装后的诊断与卸载) 或 [Windows](docs/operations.md#windows-一键安装后的诊断与卸载)。请使用安装时的标签。指定过 `--private-dir` 时也传入原路径。
+等安装命令结束，再按 [Mac](docs/operations.md#mac-一键安装后的诊断与卸载) 或 [Windows](docs/operations.md#windows-一键安装后的诊断与卸载) 说明运行 `remove`。请使用安装时的标签。指定过 `--private-dir` 时也传入原路径。
 
 安装器会先列出它能确认归属的虚拟机、干净快照、私有目录和临时明文，再询问是否删除。回车默认取消，`--yes` 会跳过确认。在 VirtualBox 中，卸载会先关机，再用 `VBoxManage unregistervm --delete` 删除安装记录里名字精确匹配的那一台。旧安装缺少能验证归属的记录时，请在虚拟机软件中核对后，按提示手动清理。
 
@@ -201,7 +189,7 @@ Stripe 不通只影响在 claude.ai 网页上付款。已经订阅的、或在�
 4. **全在虚拟机里闭环**：只用官方网页和官方 Claude Code；登录授权链接只在虚拟机浏览器里打开。
 5. **凭据不落仓库**：节点信息只存在你电脑上的私有目录（仅本人可读），明文中间文件用完即删；仓库自带提交钩子拦截疑似凭据。
 
-我们**绝不**做：内置节点、为了"恢复联网"放宽断网保护、独立的桌面客户端或控制面板（桌面图标只是调用 `cchouse open` 的系统快捷方式）。
+我们**绝不**做：内置节点、为了"恢复联网"放宽断网保护、桌面 GUI 程序。
 
 架构细节见 [docs/architecture.md](docs/architecture.md)，验收项见 [docs/verify.md](docs/verify.md)。
 
