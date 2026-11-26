@@ -1,5 +1,15 @@
 # 架构
 
+## 产品原则：每平台一条默认路线
+
+每个平台一条默认路线。发版真机测试只覆盖默认路线。其余路线放在进阶文档里。
+
+- **Mac**：Apple Silicon + Tart。安装见 [install-tart-linux.md](install-tart-linux.md)（Debian 13 arm64）。
+- **Windows**：已经安装 VMware 的用 VMware，安装见 [install-vmware-linux.md](install-vmware-linux.md)。尚未安装虚拟机软件的用 VirtualBox。VirtualBox 待 HVCI 与 Guest Additions 验证；验证通过后，Windows 默认路线可能统一为 VirtualBox。
+- **Intel Mac**：暂不支持。相关代码保留。
+
+进阶路线单独成文。需要 macOS 桌面或 Safari 高拟真时用 [build.md](build.md)（Tart + macOS）。下面的架构图属于这条进阶路线。
+
 ```
 宿主 Mac（Apple Silicon）
  └─ tart 虚拟机（macOS，桥接物理网卡，局域网 IP 固定）

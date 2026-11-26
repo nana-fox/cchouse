@@ -2,6 +2,7 @@
 
 ## v2.0-preview
 
+- 安装器遇到输入结束（EOF）时，有默认值就采用并说明。没有默认值时给出中文提示，清理临时明文后退出。
 - 重写 README 面向首次使用者（大白话价值、三个痛点、原理图、3 步快速开始、支持矩阵、FAQ、安全设计、免责声明），新增英文版 `README.en.md` 与脱敏检查页截图 `docs/assets/check-all-green.png`；原 README 中的出口模式、目录结构、手动安装步骤移至新增的 `docs/manual-install.md`。
 - 按读者审阅修订：`guest-linux/check.html` 全部通过时的提示由 "All good — you can sign in." 改为 "All network checks passed."（只表示网络检查通过，不暗示账号状态）；`docs/install-vmware-linux.md`、`docs/install-tart-linux.md` 与 `docs/manual-install.md` 把生成 SSH 密钥、填 `SSH_PUBKEY`、填节点与预期出口移到渲染之前（渲染器缺 `SSH_PUBKEY` 会直接退出）。
 - 新增跨平台 Linux 客机模板（`guest-linux/`，Debian 13 + VMware Workstation/Fusion Pro 路线，开发预览）。

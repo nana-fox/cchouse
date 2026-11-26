@@ -27,13 +27,7 @@ cchouse uses only the one node you configure, sets the VM's time zone, language,
 
 ## How it works
 
-```mermaid
-flowchart LR
-    A["Your computer"] --> B["Isolated VM<br/>(Claude runs only here)"]
-    B --> C["Your own proxy node"]
-    C --> D["Claude"]
-    B -. "any link breaks" .-> X["The whole VM goes offline<br/>never falls back to your local network"]
-```
+![An isolated VM inside your computer reaches Claude only through your proxy node. If the node goes offline, the VM goes offline.](docs/assets/how-it-works.en.svg)
 
 - Inside the VM, only traffic to your one node is allowed. Every other path is blocked.
 - Your computer itself keeps using the internet as usual.
