@@ -88,9 +88,9 @@ if (-not $vmrunFound) {
   $errors += "MISSING_VMWARE: 未检测到 VMware Workstation Pro (vmrun.exe)"
 }
 # 与 preflight.py 的 VMWARE_LINUX_DISK_MIN_GB / VMWARE_LINUX_DISK_RECOMMENDED_GB 保持一致。
-# 9/12 取 GTR 上 VMware 与 VirtualBox 实测的较大值（VMware）。
-$diskMinGb = 9
-$diskRecommendedGb = 12
+# 6/9 来自 GTR 上的 VirtualBox 实测。
+$diskMinGb = 6
+$diskRecommendedGb = 9
 $diskFreeGb = $null
 try {
   $diskFreeGb = Get-CchouseInstallFreeGb

@@ -4,11 +4,12 @@
 # 参数统一加 Cc 前缀：点源时 param 变量会落在调用方作用域，避免覆盖调用方同名变量。
 # 不打印任何凭据。
 param(
-  [ValidateSet("", "import", "firstboot", "boot", "snapshot", "exists")] [string]$CcOp = "",
+  [ValidateSet("", "import", "firstboot", "boot", "snapshot", "exists", "delete")] [string]$CcOp = "",
   [string]$CcVmx = "",
   [string]$CcOva = "",
   [string]$CcVmName = "",
   [string]$CcVmDir = "",
+  [ValidateSet("yes", "no")] [string]$CcReplaceExisting = "no",
   [string]$CcSeedIso = "",
   [string]$CcKey = "",
   [string]$CcKnownHosts = "",
@@ -160,12 +161,33 @@ function New-CchouseSnapshot([string]$vmxPath, [string]$name) {
   Write-Host "SNAPSHOT_OK=$name"
 }
 
+function Remove-CchouseVM([string]$vmxPath) {
+  if (-not (Test-Path -LiteralPath $vmxPath -PathType Leaf)) { return }
+  $vmr = Get-CchouseVmrun
+  $vmxPath = (Get-Item -LiteralPath $vmxPath).FullName
+  $running = & $vmr -T ws list
+  if ($LASTEXITCODE -ne 0) { throw "vmrun list failed" }
+  $runningPaths = $running | Select-Object -Skip 1 | Where-Object { $_.Trim() } | ForEach-Object {
+    [System.IO.Path]::GetFullPath($_.Trim())
+  }
+  if ($runningPaths -icontains $vmxPath) {
+    & $vmr -T ws stop $vmxPath hard
+    if ($LASTEXITCODE -ne 0) { throw "vmrun stop failed for $vmxPath" }
+  }
+  # Workstation deletes the VM and snapshots together.
+  & $vmr -T ws deleteVM $vmxPath
+  if ($LASTEXITCODE -ne 0 -or (Test-Path -LiteralPath $vmxPath)) {
+    throw "vmrun deleteVM failed for $vmxPath"
+  }
+}
+
 if ($CcOp) {
   $ErrorActionPreference = "Stop"
   switch ($CcOp) {
     "exists" { if (Test-Path $CcVmx) { exit 0 } else { exit 1 } }
     "import" {
-      if (Test-Path $CcVmx) {
+      if (Test-Path -LiteralPath $CcVmx) {
+        if ($CcReplaceExisting -ne "yes") { throw "Existing VMX is not owned by this install: $CcVmx" }
         $vmr = Get-CchouseVmrun
         & $vmr -T ws stop $CcVmx hard 2>$null | Out-Null
         & $vmr -T ws deleteVM $CcVmx 2>$null | Out-Null
@@ -178,6 +200,7 @@ if ($CcOp) {
     "firstboot" { Invoke-CchouseFirstboot $CcVmx $CcSeedIso $CcFirstbootSeconds }
     "boot" { Invoke-CchouseBoot $CcVmx $CcSeedIso $CcKey $CcKnownHosts $CcIpFile | Out-Null }
     "snapshot" { New-CchouseSnapshot $CcVmx $CcSnapshot }
+    "delete" { Remove-CchouseVM $CcVmx }
   }
   exit 0
 }

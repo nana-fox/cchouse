@@ -242,21 +242,15 @@ class TestCchouseV2(unittest.TestCase):
             preflight_mod.TART_LINUX_DISK_MIN_GB,
         )
 
-        # Windows：GTR 实测。门槛不得低于 VMware 与 VirtualBox 里较大的那次占用。
-        vmware_kept = 1770708992 + 6934653192
+        # Windows 只用 VirtualBox 实测。门槛不得低于这次占用。
         vbox_kept = 1770708992 + 4154236928
-        vmware_drop = 9418551296
         vbox_drop = 6196707328
-        self.assertEqual(vmware_kept, 8705362184)
         self.assertEqual(vbox_kept, 5924945920)
-        self.assertGreater(vmware_kept, vbox_kept)
-        self.assertGreater(vmware_drop, vbox_drop)
-        larger = max(vmware_kept, vbox_kept, vmware_drop, vbox_drop)
-        self.assertEqual(larger, vmware_drop)
-        self.assertGreaterEqual(preflight_mod.VMWARE_LINUX_DISK_MIN_GB, larger / (1024 ** 3))
-        self.assertEqual(preflight_mod.VMWARE_LINUX_DISK_MIN_GB, 9)
-        self.assertEqual(preflight_mod.VMWARE_LINUX_DISK_RECOMMENDED_GB, 12)
-        self.assertEqual(preflight_mod.disk_requirement_gb("vmware-linux"), (9, 12, False))
+        self.assertGreater(vbox_drop, vbox_kept)
+        self.assertGreaterEqual(preflight_mod.VMWARE_LINUX_DISK_MIN_GB, vbox_drop / (1024 ** 3))
+        self.assertEqual(preflight_mod.VMWARE_LINUX_DISK_MIN_GB, 6)
+        self.assertEqual(preflight_mod.VMWARE_LINUX_DISK_RECOMMENDED_GB, 9)
+        self.assertEqual(preflight_mod.disk_requirement_gb("vmware-linux"), (6, 9, False))
 
         below, _warn = preflight_mod.assess_install_disk(8.9, "tart-linux")
         self.assertTrue(any("INSUFFICIENT_DISK" in item and "至少需要 9 GB" in item for item in below))
@@ -268,15 +262,15 @@ class TestCchouseV2(unittest.TestCase):
         ok_err, ok_warn = preflight_mod.assess_install_disk(12.0, "tart-linux")
         self.assertEqual((ok_err, ok_warn), ([], []))
 
-        win_below, win_warn = preflight_mod.assess_install_disk(8.9, "vmware-linux")
-        self.assertTrue(any("INSUFFICIENT_DISK" in item and "至少需要 9 GB" in item for item in win_below))
+        win_below, win_warn = preflight_mod.assess_install_disk(5.9, "vmware-linux")
+        self.assertTrue(any("INSUFFICIENT_DISK" in item and "至少需要 6 GB" in item for item in win_below))
         self.assertFalse(any("估算" in item for item in win_below))
         self.assertEqual(win_warn, [])
-        win_mid_err, win_mid_warn = preflight_mod.assess_install_disk(9.0, "vmware-linux")
+        win_mid_err, win_mid_warn = preflight_mod.assess_install_disk(6.0, "vmware-linux")
         self.assertEqual(win_mid_err, [])
-        self.assertTrue(any("建议至少 12 GB" in item for item in win_mid_warn))
+        self.assertTrue(any("建议至少 9 GB" in item for item in win_mid_warn))
         self.assertFalse(any("估算" in item for item in win_mid_warn))
-        win_ok_err, win_ok_warn = preflight_mod.assess_install_disk(12.0, "vmware-linux")
+        win_ok_err, win_ok_warn = preflight_mod.assess_install_disk(9.0, "vmware-linux")
         self.assertEqual((win_ok_err, win_ok_warn), ([], []))
 
         # v1 macOS 客机仍走 30/50 GB，不套用 Debian 实测值。
@@ -290,8 +284,8 @@ class TestCchouseV2(unittest.TestCase):
             self.assertFalse((Path(td) / "not-created").exists())
 
         ps1 = (ROOT / "scripts" / "preflight.ps1").read_text(encoding="utf-8")
-        self.assertIn("$diskMinGb = 9", ps1)
-        self.assertIn("$diskRecommendedGb = 12", ps1)
+        self.assertIn("$diskMinGb = 6", ps1)
+        self.assertIn("$diskRecommendedGb = 9", ps1)
         self.assertIn("至少需要 $diskMinGb GB", ps1)
         self.assertIn("建议至少 $diskRecommendedGb GB", ps1)
         self.assertIn("disk_estimate = $false", ps1)
@@ -1368,6 +1362,179 @@ async function check(fixtures) {
                 out = r.stdout.decode("utf-8", "replace").splitlines()
                 self.assertEqual(r.returncode, 0, r.stderr.decode("utf-8", "replace"))
                 self.assertEqual(out, [want, f"calls={calls}"], scen)
+
+    def test_verify_linux_ssh_port_and_system32_openssh(self):
+        # VirtualBox NAT：GUEST_IP=127.0.0.1 且 SSH_PORT 不是 22。Git Bash 的 /usr/bin/ssh
+        # 会盖住 PATH，所以 Windows 上必须直接执行 System32 的 ssh.exe / scp.exe。
+        # System32 ssh 认 -i 的 /c/...，但 UserKnownHostsFile="/c/..." 会被拒绝，要转成 C:/...。
+        bash = find_bash()
+        if not bash:
+            self.skipTest("需要 bash")
+        src = (ROOT / "scripts" / "verify-linux.sh").read_text(encoding="utf-8")
+        self.assertIn('"/c/Windows/System32/OpenSSH/${_name}.exe"', src)
+        self.assertIn('"/mnt/c/Windows/System32/OpenSSH/${_name}.exe"', src)
+        self.assertIn("resolve_openssh ssh", src)
+        self.assertIn("resolve_openssh scp", src)
+        self.assertIn("cygpath -m", src)
+        self.assertIn('-p "$SSH_PORT"', src)
+        self.assertIn('-P "$SSH_PORT"', src)
+        self.assertIn('UserKnownHostsFile=\\"$SSH_KNOWN_HOSTS\\"', src)
+        syntax = subprocess.run([bash, "-n", str(ROOT / "scripts" / "verify-linux.sh")], capture_output=True, text=True)
+        self.assertEqual(syntax.returncode, 0, syntax.stderr)
+
+        def for_bash(path):
+            text = str(path)
+            if os.name == "nt" and len(text) >= 2 and text[1] == ":":
+                return "/" + text[0].lower() + text[2:].replace("\\", "/")
+            return text
+
+        def write_verify_env(directory, name, **extra):
+            data = base_single_linux_env()
+            data.update({
+                "GUEST_IP": "127.0.0.1",
+                "ROUTER_IP": "192.168.100.1",
+                "SSH_KEY": "/c/cchouse/id_ed25519",
+                "SSH_KNOWN_HOSTS": "/c/cchouse/Application Support/known_hosts",
+            })
+            data.update(extra)
+            path = directory / name
+            write_env(path, data)
+            return path
+
+        def tool(path, body):
+            path.write_text(body, encoding="utf-8")
+            path.chmod(0o755)
+
+        with tempfile.TemporaryDirectory() as td_raw:
+            td = Path(td_raw)
+            bindir = td / "bin"
+            bindir.mkdir()
+            tool(
+                bindir / "ssh",
+                "#!/bin/bash\nprintf '%s\\n' \"$0\" >> \"$LOG\"\nprintf '%s\\n' \"$*\" >> \"$LOG\"\nexit 0\n",
+            )
+            tool(
+                bindir / "scp",
+                "#!/bin/bash\nprintf '%s\\n' \"$0\" >> \"$LOG\"\nprintf '%s\\n' \"$*\" >> \"$LOG\"\nexit 0\n",
+            )
+            tool(
+                bindir / "cygpath",
+                "#!/bin/bash\n"
+                "if [ \"$1\" != \"-m\" ]; then exit 1; fi\n"
+                "p=\"$2\"\n"
+                "case \"$p\" in\n"
+                "  /c/*) printf 'C:/%s\\n' \"${p#/c/}\" ;;\n"
+                "  /mnt/c/*) printf 'C:/%s\\n' \"${p#/mnt/c/}\" ;;\n"
+                "  *) printf '%s\\n' \"$p\" ;;\n"
+                "esac\n",
+            )
+            win = td / "OpenSSH"
+            win.mkdir()
+            tool(
+                win / "ssh.exe",
+                "#!/bin/bash\nprintf '%s\\n' \"$0\" >> \"$LOG\"\nprintf '%s\\n' \"$*\" >> \"$LOG\"\nexit 0\n",
+            )
+            tool(
+                win / "scp.exe",
+                "#!/bin/bash\nprintf '%s\\n' \"$0\" >> \"$LOG\"\nprintf '%s\\n' \"$*\" >> \"$LOG\"\nexit 0\n",
+            )
+            win_log = td / "win.log"
+            path_log = td / "path.log"
+            exec_probe = "0" if os.name == "nt" else "1"
+
+            def probe(env_file, *, use_win, use_cygpath, hide_cygpath, log_path, extra_env=None):
+                env = os.environ.copy()
+                path_entries = [str(bindir)]
+                if not use_cygpath:
+                    bare = td / "barebin"
+                    bare.mkdir(exist_ok=True)
+                    for name in ("ssh", "scp"):
+                        target = bare / name
+                        if not target.exists():
+                            target.symlink_to(bindir / name) if os.name != "nt" else target.write_text(
+                                (bindir / name).read_text(encoding="utf-8"), encoding="utf-8"
+                            )
+                            if os.name == "nt":
+                                target.chmod(0o755)
+                    path_entries = [str(bare)]
+                env["PATH"] = os.pathsep.join(path_entries + [env.get("PATH", "")])
+                env["LOG"] = for_bash(log_path)
+                env["VERIFY_LINUX_TRANSPORT_PROBE"] = "1"
+                env["VERIFY_LINUX_TRANSPORT_PROBE_EXEC"] = exec_probe
+                env["LC_ALL"] = "en_US.UTF-8"
+                if use_win:
+                    env["VERIFY_OPENSSH_DIR"] = for_bash(win)
+                else:
+                    env.pop("VERIFY_OPENSSH_DIR", None)
+                if hide_cygpath:
+                    env["VERIFY_HIDE_CYGPATH"] = "1"
+                else:
+                    env.pop("VERIFY_HIDE_CYGPATH", None)
+                if extra_env:
+                    env.update(extra_env)
+                return subprocess.run(
+                    [bash, str(ROOT / "scripts" / "verify-linux.sh"), str(env_file)],
+                    capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
+                )
+
+            converted = probe(
+                write_verify_env(td, "port.env", SSH_PORT="2222"),
+                use_win=True, use_cygpath=True, hide_cygpath=False, log_path=win_log,
+            )
+            self.assertEqual(converted.returncode, 86, converted.stderr + converted.stdout)
+            self.assertIn("SSH_BIN=", converted.stdout)
+            self.assertIn("ssh.exe", converted.stdout.split("SSH_BIN=", 1)[1].splitlines()[0])
+            self.assertIn("-i C:/cchouse/id_ed25519", converted.stdout)
+            self.assertIn('UserKnownHostsFile="C:/cchouse/Application Support/known_hosts"', converted.stdout)
+            self.assertIn("-p 2222", converted.stdout)
+            self.assertIn("-P 2222", converted.stdout)
+            self.assertNotIn('UserKnownHostsFile="/c/', converted.stdout)
+            if exec_probe == "1":
+                logged = win_log.read_text(encoding="utf-8")
+                self.assertIn("ssh.exe", logged)
+                self.assertIn("-p 2222", logged)
+                self.assertIn("C:/cchouse/id_ed25519", logged)
+                self.assertIn("-P 2222", logged)
+                self.assertNotIn(str(bindir / "ssh"), logged)
+
+            kept = probe(
+                write_verify_env(td, "keep.env", SSH_PORT="2222"),
+                use_win=True, use_cygpath=True, hide_cygpath=True, log_path=td / "keep.log",
+            )
+            self.assertEqual(kept.returncode, 86, kept.stderr + kept.stdout)
+            self.assertIn("-i /c/cchouse/id_ed25519", kept.stdout)
+            self.assertIn('UserKnownHostsFile="/c/cchouse/Application Support/known_hosts"', kept.stdout)
+            self.assertNotIn("C:/cchouse", kept.stdout)
+
+            system32 = subprocess.run(
+                [bash, "-c", "if [ -x /c/Windows/System32/OpenSSH/ssh.exe ] || [ -x /mnt/c/Windows/System32/OpenSSH/ssh.exe ]; then exit 0; fi; exit 1"],
+                capture_output=True, text=True,
+            )
+            if system32.returncode != 0:
+                # 没有 System32 ssh 时走 PATH 上的 ssh，即使 cygpath 存在也不改路径。
+                plain = probe(
+                    write_verify_env(td, "plain.env"),
+                    use_win=False, use_cygpath=True, hide_cygpath=False, log_path=path_log,
+                )
+                self.assertEqual(plain.returncode, 86, plain.stderr + plain.stdout)
+                self.assertIn("\nSSH_BIN=ssh\n", "\n" + plain.stdout)
+                self.assertIn("-i /c/cchouse/id_ed25519", plain.stdout)
+                self.assertIn("-p 22", plain.stdout)
+                self.assertIn("-P 22", plain.stdout)
+                self.assertNotIn("C:/cchouse", plain.stdout)
+                if exec_probe == "1":
+                    plain_log = path_log.read_text(encoding="utf-8")
+                    self.assertIn("-p 22", plain_log)
+                    self.assertNotIn("ssh.exe", plain_log)
+
+            for bad in ("0", "65536", "22abc", "08", "100000"):
+                rejected = probe(
+                    write_verify_env(td, f"bad-{bad}.env", SSH_PORT=bad),
+                    use_win=True, use_cygpath=False, hide_cygpath=True, log_path=td / f"bad-{bad}.log",
+                )
+                self.assertEqual(rejected.returncode, 1, bad + rejected.stderr)
+                self.assertIn("SSH_PORT", rejected.stderr)
+                self.assertFalse((td / f"bad-{bad}.log").exists(), bad)
 
 if __name__ == "__main__":
     unittest.main()

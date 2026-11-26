@@ -41,7 +41,7 @@ The quick start runs the current installer from `main` and uses the `v2.0.0-prev
 **Step 1: Install the base tools and the VM software** (one time)
 
 - On an **Apple Silicon Mac**, install [Homebrew](https://brew.sh), Git, and Python 3, then run `brew install cirruslabs/cli/tart`.
-- On **Windows (x64)**, install [Git for Windows](https://git-scm.com/download/win), Python 3 (run it as `py -3` in PowerShell), and the OpenSSH client (Windows Settings → Optional features). Confirm that CPU virtualization is enabled in the BIOS. Then install VMware Workstation Pro (the download needs a Broadcom account). The installer uses its `vmrun.exe` and `ovftool.exe`.
+- On **Windows (x64)**, install [Git for Windows](https://git-scm.com/download/win), Python 3 (run it as `py -3` in PowerShell), and the OpenSSH client (Windows Settings → Optional features). Confirm that CPU virtualization is enabled in the BIOS. Then install the [VirtualBox](https://www.virtualbox.org/wiki/Downloads) base package. Do not install the Extension Pack. If VirtualBox is not installed yet, see the question below.
 
 **Step 2: Run the installer and paste a single-node link**
 
@@ -59,7 +59,7 @@ If installation fails, it stops on the step that failed. Fix the cause it prints
 
 **Step 3: Open the VM desktop, and sign in only after every network check passes**
 
-On a Mac, after verification passes, the installer opens the guest window. In the guest's Chromium, look at the Network Check page (the picture above). On Windows, the installer does not open a window. Open the virtual machine named claude-cc01 in VMware or VirtualBox, and look at the same page in the guest's Chromium. After every network check passes, sign in to Claude in **the browser inside the VM**. That page checks the network only. It does not say anything about the account.
+On a Mac, after verification passes, the installer opens the guest window. In the guest's Chromium, look at the Network Check page (the picture above). On Windows, the installer does not open a window. Open claude-cc01 in VirtualBox, and look at the same page in the guest's Chromium. After every network check passes, sign in to Claude in **the browser inside the VM**. That page checks the network only. It does not say anything about the account.
 
 > The authorization link shown when you sign in to Claude Code must also be opened in the browser inside the VM. Do not copy it into the browser on your own computer.
 
@@ -72,7 +72,7 @@ To run each step yourself, or to have an AI agent install it for you, see [docs/
 | Your computer | VM software | Status |
 |---|---|---|
 | Apple Silicon Mac (M series) | Tart | ✅ Public `v2.0.0-preview.2` cold install finished on a Mac mini |
-| Windows (x64) | VMware Workstation Pro | ✅ `preview.2` passed real-machine import and desktop verification |
+| Windows (x64) | VirtualBox | ✅ `preview.2` passed real-machine import and desktop verification |
 | Intel Mac | — | Not supported for now |
 
 The guest is always Debian 13 + Chromium + Claude Code. A Linux computer is not supported as the host.
@@ -80,14 +80,14 @@ The guest is always Debian 13 + Chromium + Claude Code. A Linux computer is not 
 **First install with an empty cache** (includes the image and Claude Code downloads)
 
 - **Apple Silicon Mac**: a public `v2.0.0-preview.2` empty-cache install on a Mac mini took **2 minutes 15 seconds**, covering the download, automated verification, and saving a clean snapshot. The download went through the host proxy. The image averaged 20.67 MiB/s, and Claude Code averaged 16.31 MiB/s.
-- **Windows (VMware)**: `v2.0.0-preview.2` took about **3 minutes 5 seconds** from import through a passing desktop verification. The image is about 1.58 GB. A full empty-cache run that includes the download has not been measured yet.
+- **Windows (VirtualBox)**: the image is about 1.58 GB. A full empty-cache run that includes the download has not been measured on this route yet.
 
 ---
 
 ## What you need
 
 - **One node** (cchouse does not provide one). SOCKS5, HTTP(S), VLESS, Trojan, and Shadowsocks are supported. UDP protocols such as Hysteria2, TUIC, and WireGuard are not. A node with a fixed IP and a stable region is best.
-- **The computer**: 16 GB of memory or more is recommended. Disk: on Apple Silicon, at least 9 GB, 12 GB recommended; on Windows, at least 9 GB, 12 GB recommended (one complete install, including the downloaded image).
+- **The computer**: 16 GB of memory or more is recommended. Disk: on Apple Silicon, at least 9 GB, 12 GB recommended; on Windows, at least 6 GB, 9 GB recommended (one complete install, including the downloaded image).
 
 > **About Stripe**: some nodes block the payment service Stripe. That only affects paying on the claude.ai website. It does not affect signing in or day-to-day use. The installer warns you and does not stop the install. The check only tests whether Stripe can be reached. It does not mean a payment will succeed. You can add a node used only for payment. See [docs/proxy-modes.md](docs/proxy-modes.md).
 
@@ -160,13 +160,27 @@ If the install has not created `instance.env` yet, omit `--env` and collect the 
 </details>
 
 <details>
-<summary><b>Why does VMware require a Broadcom account?</b></summary>
+<summary><b>What if VirtualBox is not installed?</b></summary>
 
-VMware is free for personal use now, but the vendor requires a Broadcom account before you can download it. That step cannot be skipped today. We are evaluating alternatives that do not require an account. Tart, used on Apple Silicon Mac, does not require one.
+Open the [VirtualBox download page](https://www.virtualbox.org/wiki/Downloads) and install the Windows base package. Do not install the Extension Pack. If Windows asks for permission, allow it. After that, open Oracle VM VirtualBox from the Start menu. If it is already installed, do not install it again.
 
 </details>
 
 ---
+
+## Uninstall
+
+Once the install command has finished, run this from the cloned cchouse folder. Replace `cc01` with the `--tag` you used to install.
+
+```bash
+python3 -I scripts/cchouse.py remove --tag cc01
+```
+
+In Windows PowerShell, use `py -3 -I scripts/cchouse.py remove --tag cc01`. If you installed with `--private-dir`, pass the same path when uninstalling.
+
+The installer lists the VM, clean snapshot, private folder, and temporary plaintext it can verify before asking for confirmation. Enter cancels by default. Use `--yes` to skip confirmation. On Windows this command cannot yet delete a VirtualBox guest. Delete claude-cc01 yourself in VirtualBox. If an older installation lacks a record that verifies ownership, check it in VirtualBox and follow the manual cleanup instructions.
+
+The golden image and downloads stay in place by default so other instances can reuse them. If you no longer need them, add `--purge-cache` to list the associated Tart golden image and recognized downloads with their sizes for removal. The installer reports what remains and how to clean it up manually.
 
 ## Security design
 

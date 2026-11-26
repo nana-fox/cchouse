@@ -2,8 +2,9 @@
 
 ## v2.0-preview
 
-- `scripts/preflight.py` 与 `scripts/preflight.ps1` 检查安装目录所在卷的剩余空间。Apple Silicon 的 Tart 路线按实测占用：低于 9 GB 直接失败并写明需要多少，低于 12 GB 只警告。Windows 取 GTR 上 VMware 与 VirtualBox 实测的较大值（VMware：缓存加快照后客机 8.108 GiB，安装过程中该卷可用空间减少 8.772 GiB；VirtualBox 较小，分别是 5.518 GiB 和 5.771 GiB）：低于 9 GB 失败，低于 12 GB 只警告。不是估算。
-- README 快速开始说明从 main 运行当前安装器、使用 `v2.0.0-preview.2` 镜像。硬盘一行只写至少和建议多少 GB：Apple Silicon 9/12，Windows 9/12（一次完整安装，含下载的镜像）。镜像缓存、黄金镜像、客机和快照的组成写在 preflight 注释里。第 3 步写明 Mac 验收通过后自动打开客机窗口；Windows 不自动打开窗口，需在 VMware 或 VirtualBox 里打开名为 claude-cc01 的虚拟机。两边都在客机 Chromium 里看 Network Check。
+- `scripts/preflight.py` 与 `scripts/preflight.ps1` 检查安装目录所在卷的剩余空间。Apple Silicon 的 Tart 路线按实测占用：低于 9 GB 直接失败并写明需要多少，低于 12 GB 只警告。Windows 只按 GTR 上 VirtualBox 实测：缓存加快照后客机 5.518 GiB，安装过程中该卷可用空间减少 5.771 GiB。低于 6 GB 失败，低于 9 GB 只警告。
+- README 快速开始说明从 main 运行当前安装器、使用 `v2.0.0-preview.2` 镜像。硬盘一行只写至少和建议多少 GB：Apple Silicon 9/12，Windows 6/9（一次完整安装，含下载的镜像）。镜像缓存、黄金镜像、客机和快照的组成写在 preflight 注释里。第 3 步写明 Mac 验收通过后自动打开客机窗口；Windows 不自动打开窗口，在 VirtualBox 里打开 claude-cc01。两边都在客机 Chromium 里看 Network Check。Windows 主流程不再写 VMware。
+- 新增 `cchouse.py remove --tag`。根据安装记录精确清理 Tart 或 VMware 实例，先列清单再确认。默认保留共享黄金镜像和下载缓存，可用 `--purge-cache` 同时清理。
 - 安装器遇到输入结束（EOF）时，有默认值就采用并说明。没有默认值时给出中文提示，清理临时明文后退出。
 - 重写 README 面向首次使用者（大白话价值、三个痛点、原理图、3 步快速开始、支持矩阵、FAQ、安全设计、免责声明），新增英文版 `README.en.md` 与脱敏检查页截图 `docs/assets/check-all-green.png`；原 README 中的出口模式、目录结构、手动安装步骤移至新增的 `docs/manual-install.md`。
 - 按读者审阅修订：`guest-linux/check.html` 全部通过时的提示由 "All good — you can sign in." 改为 "All network checks passed."（只表示网络检查通过，不暗示账号状态）；`docs/install-vmware-linux.md`、`docs/install-tart-linux.md` 与 `docs/manual-install.md` 把生成 SSH 密钥、填 `SSH_PUBKEY`、填节点与预期出口移到渲染之前（渲染器缺 `SSH_PUBKEY` 会直接退出）。
@@ -30,3 +31,4 @@
 - 修复 Tart 联网重启后的 mihomo 预热探针未引用 `known_hosts` 路径的问题。macOS 默认私有目录含空格，旧写法导致 SSH 主机密钥校验失败。
 - Tart 黄金镜像构建的 USTC apt 镜像仅在构建期间生效。关机前恢复 Debian 官方普通源和安全源，并在空状态断言中拒绝交付 `/etc/apt` 仍含 USTC 的镜像。
 - Linux 桌面网络检查页在客机代理启动或查询服务暂不可用时进行限时重试，等待期间显示黄色状态。出口元数据优先查询 IPQuery，备用 IPinfo，仍用 ipify 独立核对 IP。全部尝试结束后仍无法完成核对时提示刷新或运行自动验收。
+- 修复 `scripts/verify-linux.sh` 在 VirtualBox NAT 端口转发下仍连 22 端口的问题：`instance.env` 可选 `SSH_PORT`（默认 22），ssh 使用 `-p`、scp 使用 `-P`。Windows 上按绝对路径调用 `C:\Windows\System32\OpenSSH\ssh.exe` 与同目录 `scp.exe`，避免 Git Bash 把 `/usr/bin/ssh` 放在 PATH 最前盖住 `cchouse.py` 预置的 System32 OpenSSH，也避开会忽略 `ConnectTimeout` 的 `C:\Program Files\OpenSSH\ssh.exe`。System32 ssh 认 `-i` 的 `/c/...`，但不认 `UserKnownHostsFile="/c/..."`；选中该客户端时用 `cygpath -m` 把密钥和 `known_hosts` 转成 `C:/...`，没有 `cygpath` 时保持原路径。

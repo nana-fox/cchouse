@@ -41,7 +41,7 @@ cchouse 的做法：只走你配置的那一个节点，把虚拟机的时区、
 **第 1 步：装好基础软件和虚拟机软件**（一次性）
 
 - 在 **Apple Silicon Mac** 上先装 [Homebrew](https://brew.sh)、Git 和 Python 3，再运行 `brew install cirruslabs/cli/tart`。
-- 在 **Windows（x64）** 上先装 [Git for Windows](https://git-scm.com/download/win)、Python 3（在 PowerShell 里用 `py -3` 运行）、OpenSSH 客户端（Windows 设置 → 可选功能），并确认 BIOS 里已开启 CPU 虚拟化。再安装 VMware Workstation Pro（下载需要 Broadcom 账号），安装器会用到它的 `vmrun.exe` 和 `ovftool.exe`。
+- 在 **Windows（x64）** 上先装 [Git for Windows](https://git-scm.com/download/win)、Python 3（在 PowerShell 里用 `py -3` 运行）、OpenSSH 客户端（Windows 设置 → 可选功能），并确认 BIOS 里已开启 CPU 虚拟化。再安装 [VirtualBox](https://www.virtualbox.org/wiki/Downloads) 基础包，不要安装 Extension Pack。还没有 VirtualBox 时，见下面的常见问题。
 
 **第 2 步：运行安装器，粘贴单节点链接**
 
@@ -59,7 +59,7 @@ Windows PowerShell 用 `py -3 -I scripts/cchouse.py up --tag cc01`。
 
 **第 3 步：打开虚拟机桌面，网络检查全部通过后再登录**
 
-Mac 上，安装器验收通过后会自动打开客机窗口。在客机的 Chromium 里看 Network Check 检查页（就是上面那张图）。Windows 上，安装器不会自动打开窗口，请在 VMware 或 VirtualBox 里打开名为 claude-cc01 的虚拟机，同样在客机的 Chromium 里看这一页。网络检查全部通过后，再在**虚拟机里的浏览器**登录 Claude。这一页只检查网络，不代表账号状态。
+Mac 上，安装器验收通过后会自动打开客机窗口。在客机的 Chromium 里看 Network Check 检查页（就是上面那张图）。Windows 上，安装器不会自动打开窗口，请在 VirtualBox 里打开 claude-cc01，同样在客机的 Chromium 里看这一页。网络检查全部通过后，再在**虚拟机里的浏览器**登录 Claude。这一页只检查网络，不代表账号状态。
 
 > 登录 Claude Code 时弹出的授权链接，也只能在虚拟机里的浏览器打开，不要复制到你本机的浏览器。
 
@@ -72,7 +72,7 @@ Mac 上，安装器验收通过后会自动打开客机窗口。在客机的 Chr
 | 你的电脑 | 用什么虚拟机软件 | 状态 |
 |---|---|---|
 | Apple Silicon Mac（M 系列） | Tart | ✅ `v2.0.0-preview.2` 已在 Mac mini 完成公开版冷安装 |
-| Windows（x64） | VMware Workstation Pro | ✅ `preview.2` 已通过真机导入和桌面验收 |
+| Windows（x64） | VirtualBox | ✅ `preview.2` 已通过真机导入和桌面验收 |
 | Intel Mac | — | 暂不支持 |
 
 虚拟机里统一是 Debian 13 + Chromium + Claude Code。不支持 Linux 电脑作为宿主机。
@@ -80,14 +80,14 @@ Mac 上，安装器验收通过后会自动打开客机窗口。在客机的 Chr
 **空缓存首次安装耗时**（包括镜像和 Claude Code 下载）
 
 - **Apple Silicon Mac** 在 Mac mini 实测 `v2.0.0-preview.2` 公共版空缓存安装用时 **2 分 15 秒**，涵盖下载、自动验收和保存干净快照。下载经宿主代理，镜像平均 20.67 MiB/s，Claude Code 平均 16.31 MiB/s。
-- **Windows（VMware）** 实测 `v2.0.0-preview.2` 从导入到桌面验收通过约 **3 分 05 秒**。镜像约 1.58 GB，含下载的空缓存全程待测。
+- **Windows（VirtualBox）** 镜像约 1.58 GB。含下载的空缓存全程尚未按这条路线测完。
 
 ---
 
 ## 你需要准备什么
 
 - **一个节点**（cchouse 不提供节点）。支持 SOCKS5、HTTP(S)、VLESS、Trojan、Shadowsocks；不支持 Hysteria2、TUIC、WireGuard 这类走 UDP 的协议。最好是固定 IP、地区稳定的节点。
-- **电脑配置**：建议内存 16 GB 以上。硬盘：Apple Silicon 至少 9 GB、建议 12 GB；Windows 至少 9 GB、建议 12 GB（一次完整安装，含下载的镜像）。
+- **电脑配置**：建议内存 16 GB 以上。硬盘：Apple Silicon 至少 9 GB、建议 12 GB；Windows 至少 6 GB、建议 9 GB（一次完整安装，含下载的镜像）。
 
 > **关于 Stripe**：有些节点会拦截付款服务 Stripe。这只影响在 claude.ai 网页上付款，不影响登录和日常使用；安装时会提示你，但不会拦着你装。这只检查能否连通，不代表付款一定成功。需要的话可以加一个付款专用节点，见 [docs/proxy-modes.md](docs/proxy-modes.md)。
 
@@ -160,13 +160,27 @@ py -3 -I scripts/doctor.py --env "$env:LOCALAPPDATA\cchouse\cc01\instance.env"
 </details>
 
 <details>
-<summary><b>VMware 为什么要注册 Broadcom 账号？</b></summary>
+<summary><b>还没有 VirtualBox 怎么办？</b></summary>
 
-VMware 现在个人免费使用，但官方要求先在 Broadcom 官网注册账号才能下载，这一步目前绕不开。我们在评估不需要注册的替代方案。Apple Silicon Mac 用的 Tart 不需要注册。
+打开 [VirtualBox 下载页](https://www.virtualbox.org/wiki/Downloads)，安装 Windows 版基础包。不要安装 Extension Pack。若 Windows 弹出提权确认，点允许。装完后从开始菜单打开 Oracle VM VirtualBox。已经装好时不用重装。
 
 </details>
 
 ---
+
+## 卸载
+
+等安装命令结束后，在克隆的 cchouse 目录运行，`cc01` 换成安装时使用的 `--tag`。
+
+```bash
+python3 -I scripts/cchouse.py remove --tag cc01
+```
+
+Windows PowerShell 用 `py -3 -I scripts/cchouse.py remove --tag cc01`。安装时指定过 `--private-dir`，卸载时也传同一路径。
+
+安装器会先列出它能确认归属的虚拟机、干净快照、私有目录和临时明文，再询问是否删除。回车默认取消，`--yes` 会跳过确认。Windows 上这条命令还不能删除 VirtualBox 客机，请在 VirtualBox 里手动删除 claude-cc01。旧安装缺少能验证归属的记录时，请在 VirtualBox 里核对后，按提示手动清理。
+
+黄金镜像和下载缓存默认保留，供其他实例复用。确认无需复用时，可加 `--purge-cache`，清单会列出对应 Tart 黄金镜像和可识别的下载缓存及大小。结束时会显示剩余内容和手动清理方法。
 
 ## 安全设计
 
