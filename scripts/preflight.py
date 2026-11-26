@@ -196,15 +196,14 @@ def find_tart_linux_golden_images(th=None):
 # 默认 ~/.tart 与缓存目录在同一卷。TART_HOME 在另一卷时，仍按这一合计检查该卷。
 TART_LINUX_DISK_MIN_GB = 9
 TART_LINUX_DISK_RECOMMENDED_GB = 12
-# 2026-11-26 GTR VirtualBox 7.2.22 实测（HVCI 开，正式 OVA，NTFS 分配字节）。
-# Windows 只用 VirtualBox，不采用另一次 VMware 占用。
-#   缓存 1770708992 + 快照后客机目录 4154236928 = 5924945920（5.518 GiB）。
-#   安装前后该卷可用空间减少 6196707328（5.771 GiB，含安装过程里的临时文件）。
-# Windows 不另存黄金镜像。快照增量已含在快照后的客机目录里。
-# 至少 6 GB 向上取整，盖住这次体积减少。建议 9 GB，与 Mac 一样再留约 3 GB 给客机磁盘增长。
-# 预检路线键仍是 vmware-linux；数字是 VirtualBox 实测。
-VMWARE_LINUX_DISK_MIN_GB = 6
-VMWARE_LINUX_DISK_RECOMMENDED_GB = 9
+# 实测来源：status-w7.md 2026-11-26 12:01 DISK_MEASURED。
+# GTR，VirtualBox 7.2.22，HVCI 开，正式 OVA。NTFS 实际分配：
+#   缓存 + 客机 + 干净快照 = 5924945920 字节
+#   安装前后该卷可用空间减少 6196707328 字节（约 5.8 GiB，十进制 6.197 GB）
+# 与 Mac 相同：按十进制 GB 向上取整（6.197 → 7），建议值再留约 3 GB（10）。
+# 预检路线键仍是 vmware-linux。磁盘数字不看 vmrun 在不在。
+VMWARE_LINUX_DISK_MIN_GB = 7
+VMWARE_LINUX_DISK_RECOMMENDED_GB = 10
 
 
 def default_install_dir():

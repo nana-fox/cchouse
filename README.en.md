@@ -87,7 +87,7 @@ The guest is always Debian 13 + Chromium + Claude Code. A Linux computer is not 
 ## What you need
 
 - **One node** (cchouse does not provide one). SOCKS5, HTTP(S), VLESS, Trojan, and Shadowsocks are supported. UDP protocols such as Hysteria2, TUIC, and WireGuard are not. A node with a fixed IP and a stable region is best.
-- **The computer**: 16 GB of memory or more is recommended. Disk: on Apple Silicon, at least 9 GB, 12 GB recommended; on Windows, at least 6 GB, 9 GB recommended (one complete install, including the downloaded image).
+- **The computer**: 16 GB of memory or more is recommended. Disk: on Apple Silicon, at least 9 GB, 12 GB recommended; on Windows, at least 7 GB, 10 GB recommended (one complete install, including the downloaded image).
 
 > **About Stripe**: some nodes block the payment service Stripe. That only affects paying on the claude.ai website. It does not affect signing in or day-to-day use. The installer warns you and does not stop the install. The check only tests whether Stripe can be reached. It does not mean a payment will succeed. You can add a node used only for payment. See [docs/proxy-modes.md](docs/proxy-modes.md).
 
