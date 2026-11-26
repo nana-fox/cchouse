@@ -1,6 +1,6 @@
 # 手动安装与进阶说明
 
-> 本页给想手动控制每一步、要用链式代理、或在维护 v1 macOS 客机的人。一条命令安装见 [README](../README.md) 的「快速开始」。
+> 本页供进阶配置、维护与开发使用。公开版安装见 [README 快速开始](../README.md#快速开始)。
 
 ---
 
@@ -8,7 +8,7 @@
 
 把下面这句话发给你的 AI Agent（Codex、Claude Code、Cursor、Antigravity 等）：
 
-> 帮我拉取 `https://github.com/nana-fox/cchouse`（当前使用 `main` 分支或指定 commit），严格按根目录 `AGENTS.md` 的 6 步状态机运行 `preflight` 检查我的电脑环境和代理前提，引导我选择路线、安装并完成 `--fail-closed` 验收。
+> 按 [cchouse 的 AGENTS.md](https://github.com/nana-fox/cchouse/blob/main/AGENTS.md) 用首页的公开锁定命令安装。节点由我在无回显提示中输入。请完成自动验收，随后把客机桌面检查与登录交给我。
 
 ---
 
@@ -26,14 +26,24 @@
 
 | 你的电脑 | 路线 | 客机环境 | 入口文档 |
 |---|---|---|---|
-| Apple Silicon Mac | Tart（`tart-linux`） | Debian 13 arm64 + Chromium + Claude Code CLI | [install-tart-linux.md](install-tart-linux.md) |
+| Apple Silicon Mac，macOS 13.0 或更新版本 | Tart（`tart-linux`） | Debian 13 arm64 + Chromium + Claude Code CLI | [install-tart-linux.md](install-tart-linux.md) |
 | Windows x64 | VirtualBox（`virtualbox-linux`） | Debian 13 amd64 + Chromium + Claude Code CLI | [install-virtualbox-linux.md](install-virtualbox-linux.md) |
 | Intel Mac | 暂不支持 | — | — |
-| Apple Silicon Mac（v1，已冻结） | Tart（`macos-tart`） | macOS + Safari + Claude Code CLI | [build.md](build.md) |
 
 > v1 macOS 客机已冻结，不再新增功能，只保留文档供已有用户维护。仅支持 `EXIT_MODE=chain`。已知限制见 [architecture.md#已知限制](architecture.md#已知限制)。
 
 ---
+
+## Mac 源码直装（维护与开发）
+
+准备 [Homebrew](https://brew.sh)、Git 与 Python 3。用维护任务指定的分支或提交运行，日常用户可直接使用首页公开命令。
+
+```bash
+brew install openai/tools/tart
+git clone https://github.com/nana-fox/cchouse.git
+cd cchouse
+python3 -I scripts/cchouse.py up --tag cc01
+```
 
 ## 手动快速上手（命令行）
 

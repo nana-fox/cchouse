@@ -260,7 +260,8 @@ class TestUpPipeline(unittest.TestCase):
             env = ctx.env_path.read_text(encoding="utf-8")
             self.assertIn("TIMEZONE=America/New_York\n", env)
             self.assertIn("EXPECTED_EGRESS_IP=203.0.113.9\n", env)
-            self.assertIn("时区=America/New_York，预期出口 IP=203.0.113.9", out.getvalue())
+            self.assertIn("已取得出口 IPv4、国家/地区、ASN 与时区", out.getvalue())
+            self.assertNotIn("203.0.113.9", out.getvalue())
             self.assertNotIn("test-password", out.getvalue())
 
     def test_background_download_logs_pause_only_during_hidden_prompt(self):
@@ -297,6 +298,19 @@ class TestUpPipeline(unittest.TestCase):
             self.assertIn("请粘贴单节点代理链接", out.getvalue())
             self.assertNotIn("during input", out.getvalue())
             self.assertIn("after input", out.getvalue())
+
+    def test_advanced_link_or_missing_probe_cannot_create_instance_env(self):
+        for scheme in ("vless", "trojan", "ss", "http"):
+            with self.subTest(scheme=scheme), tempfile.TemporaryDirectory() as td:
+                ctx = _ctx(td, link_stdin=True, no_probe=False)
+                with mock.patch("sys.stdin", io.StringIO(f"{scheme}://private-secret@203.0.113.9:443\n")), \
+                        mock.patch("sys.stdout", io.StringIO()) as out, \
+                        mock.patch.object(cchouse_mod, "probe_egress_via_proxy", return_value=None) as probe, \
+                        self.assertRaisesRegex(cchouse_mod.StepError, "IPv4.*ASN.*时区") as failure:
+                    cchouse_mod.do_config(ctx)
+                self.assertNotIn("private-secret", str(failure.exception) + out.getvalue())
+                self.assertEqual(probe.call_count, int(scheme == "http"))
+                self.assertFalse(ctx.env_path.exists())
 
     def test_required_input_eof_fails_and_cleans_plaintext(self):
         for link_stdin in (True, False):
@@ -478,16 +492,17 @@ class TestUpPipeline(unittest.TestCase):
                 proc = subprocess.run(
                     [sys.executable, "-I", str(ROOT / "scripts" / "cchouse.py"), "up", "--tag", "cc06",
                      "--route", route, "--vm-backend", backend, "--private-dir", str(priv), "--cache-dir", str(Path(td) / "cache"),
-                     "--link-stdin", "--no-probe", "--expected-ip", "203.0.113.9",
+                     "--link-stdin", "--no-probe", "--expected-ip", "203.0.113.9", "--expected-country", "US",
+                     "--expected-asn", "AS64500", "--timezone", "America/Los_Angeles",
                      "--reconfigure", "--dry-run", "--image-mirror", "https://mirror.example/cc"],
-                    input=f"trojan://{secret}@203.0.113.9:443?sni=a.example#n\n",
+                    input=f"socks5://test-user:{secret}@203.0.113.9:1080#n\n",
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
                     env=dict(os.environ, PYTHONIOENCODING="utf-8"), timeout=60,
                 )
                 out = proc.stdout + proc.stderr
                 self.assertEqual(proc.returncode, 0, out)
                 self.assertNotIn(secret, out)
-                self.assertNotIn("trojan://", out)
+                self.assertNotIn("socks5://", out)
                 self.assertIn("[9/9]", out)
                 self.assertIn("耗时表", out)
                 self.assertIn("https://mirror.example/cc/cchouse-debian13-", out)

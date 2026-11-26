@@ -28,6 +28,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import preflight as preflight_mod  # noqa: E402
 import render as render_mod  # noqa: E402
+from cchouse import image_identity  # noqa: E402
 
 # 明确非敏感、允许在 env-summary.json 中保留的结构性配置键（白名单）
 SAFE_ENV_SUMMARY_KEYS = (
@@ -448,6 +449,7 @@ def collect_guest_diagnostics(env, env_path, ssh_timeout=8):
         "guest/verify-linux.json",
         "guest/mihomo-status.txt",
         "guest/nft-ruleset.txt",
+        "guest/image-release.json",
     )
 
     if not env:
@@ -465,6 +467,26 @@ def collect_guest_diagnostics(env, env_path, ssh_timeout=8):
 
     guest_os = (env.get("GUEST_OS") or "macos").strip().lower()
     tag = (env.get("TAG") or "cchouse").strip()
+
+    if guest_os == "linux":
+        rc, out, _, err = run_ssh_command(env, "cat /etc/cchouse-image-release", timeout=ssh_timeout)
+        identity = {}
+        for line in out.splitlines() if err is None and rc == 0 else ():
+            key, _, value = line.partition("=")
+            patterns = {
+                "SOURCE_COMMIT": r"[0-9a-f]{7,40}(?:-dirty)?",
+                "BUILD_TIME": r"[0-9T:Z+-]{10,32}",
+                "ARCH": r"amd64|arm64",
+                "HYPERVISOR": r"tart|vmware|virtualbox",
+            }
+            if key in patterns and re.fullmatch(patterns[key], value):
+                identity[key] = value
+        if identity:
+            guest_files["guest/image-release.json"] = json.dumps(identity, indent=2) + "\n"
+        else:
+            missing.append({"item": "guest/image-release.json", "reason": "guest_image_identity_unavailable"})
+    else:
+        missing.append({"item": "guest/image-release.json", "reason": f"not_applicable_for_{guest_os}"})
 
     # 2. firstboot.log
     if guest_os == "linux":
@@ -575,7 +597,20 @@ def _write_redacted_json(zf, arcname, obj, secrets):
     zf.writestr(arcname, payload.encode("utf-8"))
 
 
-def build_doctor_bundle(env_path=None, vm_ssh=False, out_path=None, route="auto", ssh_timeout=8):
+def installed_image_from_state(state_path):
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        artifact = state.get("image_artifact")
+        if (state.get("vm_created_by_up") is True and isinstance(artifact, dict)
+                and isinstance(artifact.get("sha256"), str) and re.fullmatch(r"[0-9a-f]{64}", artifact["sha256"])):
+            origin = state.get("image_artifact_origin")
+            return dict(image_identity(artifact), origin=origin)
+    except (OSError, ValueError, AttributeError):
+        pass
+    return None
+
+
+def build_doctor_bundle(env_path=None, vm_ssh=False, out_path=None, route="auto", ssh_timeout=8, state_path=None):
     """收集宿主机与可选客机诊断信息，统一脱敏并写入 zip 包，返回摘要字典。"""
     env = {}
     env_load_error = None
@@ -591,8 +626,12 @@ def build_doctor_bundle(env_path=None, vm_ssh=False, out_path=None, route="auto"
     secrets = extract_sensitive_values(env)
     host_info = collect_host_info()
     preflight_res = run_preflight(env_path=env_path, route=route)
+    state_file = Path(state_path) if state_path else Path(env_path).with_name("state.json") if env_path else None
+    installed_image = installed_image_from_state(state_file) if state_file else None
 
     missing = []
+    if state_file and not installed_image:
+        missing.append({"item": "installed_image", "reason": "state_has_no_imported_image_identity"})
     if env_load_error:
         missing.append({"item": "env-summary.json", "reason": env_load_error})
 
@@ -609,6 +648,7 @@ def build_doctor_bundle(env_path=None, vm_ssh=False, out_path=None, route="auto"
             "guest/verify-linux.json",
             "guest/mihomo-status.txt",
             "guest/nft-ruleset.txt",
+            "guest/image-release.json",
         ):
             missing.append({"item": item, "reason": "vm_ssh_not_requested"})
 
@@ -628,6 +668,8 @@ def build_doctor_bundle(env_path=None, vm_ssh=False, out_path=None, route="auto"
 
     manifest = {
         "schema_version": 1,
+        "cchouse_version": (ROOT / "VERSION").read_text(encoding="ascii").strip(),
+        "installed_image": installed_image,
         "generated_at": now.isoformat(),
         "route_requested": route,
         "env_provided": bool(env_path),
@@ -675,6 +717,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="cchouse redacted diagnostic bundle exporter")
     parser.add_argument("--env", dest="env_path", default=None, help="instance.env 路径（仅用于自检、脱敏规则与可选 SSH 连接，绝不打包原文）")
+    parser.add_argument("--state", dest="state_path", help="可选 state.json 路径，用于读取已导入镜像身份")
     parser.add_argument("--vm-ssh", action="store_true", help="尝试通过 SSH 拉取客机诊断日志（不可达时仍正常出包并标明缺失项）")
     parser.add_argument("--out", dest="out_path", default=None, help="输出 zip 文件路径（默认输出到当前目录）")
     parser.add_argument("--route", choices=("auto", "macos-tart", "tart-linux", "virtualbox-linux"), default="auto")
@@ -687,6 +730,7 @@ def main():
         out_path=args.out_path,
         route=args.route,
         ssh_timeout=args.ssh_timeout,
+        state_path=args.state_path,
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     sys.exit(0)

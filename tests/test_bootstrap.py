@@ -25,7 +25,7 @@ def load_script(name, path):
 
 release = load_script("build_bootstrap_release", "tools/build-bootstrap-release.py")
 verify = load_script("verify_linux_native", "scripts/verify-linux-native.py")
-VERSION = "v2.0.0-preview.3"
+VERSION = (ROOT / "VERSION").read_text(encoding="ascii").strip()
 
 
 def bootstrap_text(platform, source_hash):
@@ -46,12 +46,12 @@ class BootstrapReleaseTests(unittest.TestCase):
         fixture = b"frozen source ZIP fixture"
         template = b"# @CCHOUSE_VERSION@ @CCHOUSE_SHA256@"
         with tempfile.TemporaryDirectory() as td, mock.patch.object(
-            release, "run_git", side_effect=[commit.encode(), b"", template, template, fixture],
+            release, "run_git", side_effect=[commit.encode(), VERSION.encode(), b"", template, template, fixture],
         ) as git:
             out = Path(td) / "assets"
-            release.build("v2.0.0-preview.3", "HEAD", out)
+            release.build(None, "HEAD", out)
             self.assertEqual(git.call_args_list[-1].args[-1], commit)
-            source = out / "cchouse-v2.0.0-preview.3.zip"
+            source = out / f"cchouse-{VERSION}.zip"
             self.assertEqual(source.read_bytes(), fixture)
             fixtures = [source, out / "bootstrap-macos.sh", out / "bootstrap-windows.ps1"]
             sums = (out / "SHA256SUMS").read_text().splitlines()
@@ -61,14 +61,15 @@ class BootstrapReleaseTests(unittest.TestCase):
                 self.assertEqual(entry, f"{digest}  {artifact.name}")
                 if artifact != source:
                     self.assertIn(hashlib.sha256(fixture).hexdigest(), artifact.read_text(encoding="utf-8-sig"))
-                    self.assertIn(f"/releases/download/v2.0.0-preview.3/{artifact.name}", readme)
+                    self.assertIn(f"/releases/download/{VERSION}/{artifact.name}", readme)
                     self.assertIn(digest, readme)
             self.assertTrue(fixtures[-1].read_bytes().startswith(b"\xef\xbb\xbf"))
             self.assertNotIn("ScriptBlock", readme)
             self.assertNotIn("trap '", readme)
 
     def test_tag_is_not_a_moving_alias(self):
-        with self.assertRaises(ValueError):
+        with mock.patch.object(release, "run_git", side_effect=[b"a" * 40, VERSION.encode()]), \
+                self.assertRaisesRegex(ValueError, "does not match"):
             release.build("latest", "HEAD", Path("unused"))
 
 
@@ -126,6 +127,7 @@ class MacBootstrapTests(unittest.TestCase):
             for name, body in {
                 "uname": "echo Darwin",
                 "sysctl": "echo 1",
+                "sw_vers": "echo 13.0",
                 "curl": 'for arg in "$@"; do dest="$arg"; done; printf tampered > "$dest"',
             }.items():
                 command = binary / name
@@ -152,7 +154,8 @@ class MacBootstrapTests(unittest.TestCase):
             source = root / "source.zip"
             text = bootstrap_text("mac", source_zip(source))
             for variable, name, member, code in (
-                ("python_sha", "python", "python/bin/python3", 'printf "UP %s\\n" "$*"'),
+                ("python_sha", "python", "python/bin/python3",
+                 f'[ "$3" != --version ] || {{ echo "cchouse {VERSION}"; exit 0; }}; printf "UP %s\\n" "$*"'),
                 ("tart_sha", "tart", "tart.app/Contents/MacOS/tart", "exit 0"),
             ):
                 path = root / f"{name}.tar.gz"
@@ -166,6 +169,7 @@ class MacBootstrapTests(unittest.TestCase):
             tools = {
                 "uname": "echo Darwin",
                 "sysctl": "echo 1",
+                "sw_vers": "echo 13.0",
                 "curl": """for arg in "$@"; do
   case "$arg" in *.zip) kind=source.zip ;; *install_only*.tar.gz) kind=python.tar.gz ;; */tart.tar.gz) kind=tart.tar.gz ;; esac
   dest="$arg"
@@ -181,12 +185,12 @@ cp "$HOME/$kind" "$dest"
             script = root / "launch.sh"
             script.write_text(text, encoding="utf-8")
             env = dict(os.environ, HOME=td, PATH=f"{binary}:/usr/bin:/bin:/usr/sbin:/sbin")
-            for _ in range(2):
+            for args, tag in (([], "cc01"), (["--tag", "cc02"], "cc02")):
                 run = subprocess.run(
-                    ["/bin/bash", script], env=env, capture_output=True, text=True, encoding="utf-8", timeout=30,
+                    ["/bin/bash", script, *args], env=env, capture_output=True, text=True, encoding="utf-8", timeout=30,
                 )
                 self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
-                self.assertIn("UP -I scripts/cchouse.py up --tag cc01", run.stdout)
+                self.assertIn(f"UP -I scripts/cchouse.py up --tag {tag}", run.stdout)
             self.assertEqual((root / "downloads.log").read_text().splitlines(), ["source.zip", "python.tar.gz", "tart.tar.gz"])
 
 
@@ -234,6 +238,10 @@ Add-Type -OutputType ConsoleApplication -OutputAssembly $env:TEST_EXE -TypeDefin
 using System;
 public class BootstrapFixture {
   public static int Main(string[] args) {
+    if (Array.IndexOf(args, "--version") >= 0) {
+      Console.WriteLine("cchouse " + Environment.GetEnvironmentVariable("TEST_VERSION"));
+      return 0;
+    }
     Console.WriteLine("UP " + String.Join(" ", args));
     return 7;
   }
@@ -264,7 +272,8 @@ exit $LASTEXITCODE
         with tempfile.TemporaryDirectory(prefix="cchouse 中文 ") as td:
             root = Path(td)
             exe, script = root / "python.exe", root / "bootstrap.ps1"
-            env = dict(os.environ, TEST_ROOT=td, LOCALAPPDATA=td, TEST_BOOTSTRAP=str(script), TEST_EXE=str(exe))
+            env = dict(os.environ, TEST_ROOT=td, LOCALAPPDATA=td, TEST_BOOTSTRAP=str(script), TEST_EXE=str(exe),
+                       TEST_VERSION=VERSION)
             compile_result = run_ps(compile_exe, env)
             self.assertEqual(compile_result.returncode, 0, compile_result.stderr)
             python = root / "python.zip"

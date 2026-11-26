@@ -28,9 +28,7 @@ import platform
 import re
 import shutil
 import socket
-import ssl
 import stat
-import struct
 import subprocess
 import sys
 import threading
@@ -47,6 +45,13 @@ import render as render_mod  # noqa: E402
 
 REJECTED_SCHEMES = frozenset(set(render_mod.REJECTED_UDP_TYPES) | {"wg", "quic"})
 SUPPORTED_SCHEMES = frozenset({"socks5", "socks5h", "socks", "http", "https", "vless", "trojan", "ss"})
+QUICK_NODE_TYPES = frozenset({"socks5", "http"})
+ADVANCED_NODE_GUIDE = "https://github.com/nana-fox/cchouse/blob/main/docs/proxy-modes.md#单节点支持的协议single_type"
+ADVANCED_NODE_MESSAGE = (
+    "一键安装接收 SOCKS5 / HTTP(S)。该协议请按进阶文档手动配置，"
+    "需要节点参数、实际出口 IPv4、国家/地区代码、ASN 和 IANA 时区。"
+    f"\n  {ADVANCED_NODE_GUIDE}"
+)
 SAFE_HOST_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 SAFE_CIPHER_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 SAFE_TAG_RE = re.compile(r"^[a-z][a-z0-9_-]{1,15}$")
@@ -318,87 +323,43 @@ def resolve_server_ipv4(server):
         return ""
 
 
-def probe_egress_via_proxy(fields, timeout=10):
-    """对 socks5/http 节点在宿主机轻量探测出口 IP/时区/ASN（绝不打印凭据）。"""
-    stype = fields.get("SINGLE_TYPE", "")
-    if stype not in ("socks5", "http"):
+def probe_egress_via_proxy(fields, timeout=15):
+    """用系统 curl 通过该节点探测实际出口，代理凭据只经 stdin 传入。"""
+    curl = shutil.which("curl.exe" if platform.system() == "Windows" else "curl")
+    if curl is None:
         return None
-    host = fields.get("SINGLE_SERVER_IP") or fields.get("SINGLE_SERVER")
-    port_s = fields.get("SINGLE_PORT", "")
-    if not host or not port_s.isdigit():
-        return None
-    port = int(port_s)
-    user = fields.get("SINGLE_USER", "")
-    pwd = fields.get("SINGLE_PASS", "")
-    target_host = "ipinfo.io"
-    target_port = 443
-
-    sock = None
-    tls_sock = None
+    host = fields["SINGLE_SERVER_IP"]
+    port = fields["SINGLE_PORT"]
+    scheme = "socks5h" if fields["SINGLE_TYPE"] == "socks5" else "http"
+    config = []
+    if fields["SINGLE_TLS"] == "true":
+        scheme = "https"
+        server = fields["SINGLE_SERVER"]
+        config.append(f'resolve = "{server}:{port}:{host}"')
+        host = server
+    user = urllib.parse.quote(fields["SINGLE_USER"], safe="")
+    password = urllib.parse.quote(fields["SINGLE_PASS"], safe="")
+    auth = f"{user}:{password}@" if user or password else ""
+    config.append(f'proxy = "{scheme}://{auth}{host}:{port}"')
     try:
-        sock = socket.create_connection((host, port), timeout=timeout)
-        sock.settimeout(timeout)
-        if stype == "socks5":
-            sock.sendall(b"\x05\x02\x00\x02" if (user or pwd) else b"\x05\x01\x00")
-            resp = sock.recv(2)
-            if len(resp) < 2 or resp[0] != 5:
-                return None
-            if resp[1] == 0x02:
-                ub, pb = user.encode("utf-8"), pwd.encode("utf-8")
-                sock.sendall(bytes([1, len(ub)]) + ub + bytes([len(pb)]) + pb)
-                if sock.recv(2) != b"\x01\x00":
-                    return None
-            elif resp[1] != 0x00:
-                return None
-            hb = target_host.encode("ascii")
-            sock.sendall(b"\x05\x01\x00\x03" + bytes([len(hb)]) + hb + struct.pack("!H", target_port))
-            rep = sock.recv(10)
-            if len(rep) < 2 or rep[1] != 0x00:
-                return None
-        else:
-            headers = [f"CONNECT {target_host}:{target_port} HTTP/1.1", f"Host: {target_host}:{target_port}"]
-            if user or pwd:
-                token = base64.b64encode(f"{user}:{pwd}".encode("utf-8")).decode("ascii")
-                headers.append(f"Proxy-Authorization: Basic {token}")
-            sock.sendall(("\r\n".join(headers) + "\r\n\r\n").encode("ascii"))
-            raw = sock.recv(1024).decode("latin1", errors="ignore")
-            first = raw.splitlines()[0] if raw else ""
-            parts = first.split()
-            if len(parts) < 2 or parts[1] != "200":
-                return None
-
-        ctx = ssl.create_default_context()
-        tls_sock = ctx.wrap_socket(sock, server_hostname=target_host)
-        tls_sock.settimeout(timeout)
-        req = f"GET /json HTTP/1.1\r\nHost: {target_host}\r\nUser-Agent: cchouse-up/1\r\nConnection: close\r\n\r\n"
-        tls_sock.sendall(req.encode("ascii"))
-        chunks = []
-        while True:
-            data = tls_sock.recv(4096)
-            if not data:
-                break
-            chunks.append(data)
-        raw_http = b"".join(chunks).decode("utf-8", errors="replace")
-        if "\r\n\r\n" not in raw_http:
+        proc = subprocess.run(
+            [curl, "-q", "--silent", "--fail", "--noproxy", "", "--max-time", str(timeout),
+             "--config", "-", "https://ipinfo.io/json"],
+            input="\n".join(config) + "\n", capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=timeout + 2,
+        )
+        if proc.returncode != 0:
             return None
-        body = raw_http.split("\r\n\r\n", 1)[1].strip()
-        info = json.loads(body)
-        org = (info.get("org") or "").split()
+        info = json.loads(proc.stdout)
+        asn = (info.get("org") or "").split(maxsplit=1)
         return {
-            "ip": (info.get("ip") or "").strip(),
-            "timezone": (info.get("timezone") or "").strip(),
-            "country": (info.get("country") or "").strip(),
-            "asn": org[0] if org else "",
+            "ip": info.get("ip") or "",
+            "timezone": info.get("timezone") or "",
+            "country": info.get("country") or "",
+            "asn": asn[0] if asn else "",
         }
-    except Exception:
+    except (OSError, ValueError, AttributeError, subprocess.TimeoutExpired):
         return None
-    finally:
-        for s in (tls_sock, sock):
-            if s is not None:
-                try:
-                    s.close()
-                except OSError:
-                    pass
 
 
 def generate_ssh_keypair(private_dir, tag):
@@ -891,6 +852,7 @@ class UpContext:
             return
         self.state["updated_at"] = _now_iso()
         self.state["route"] = self.route
+        self.state["cchouse_version"] = (ROOT / "VERSION").read_text(encoding="ascii").strip()
         self.state.setdefault("tag", self.tag)
         self.state.setdefault("private_dir", str(self.private_dir.resolve()))
         self.state["cache_dir"] = str(self.cache_dir.resolve())
@@ -1029,13 +991,15 @@ def do_config(ctx):
             raw_link = raw_link.rstrip("\r\n")
         else:
             with ctx.downloader.pause_logs():
-                raw_link = getpass.getpass("请粘贴单节点代理链接（输入不回显，支持 socks5/http/vless/trojan/ss）: ")
+                raw_link = getpass.getpass("请粘贴单节点代理链接（输入不回显，支持 SOCKS5 / HTTP(S)）: ")
     except EOFError:
         raise StepError("输入已结束，请在终端交互运行，或用 --link-stdin 提供节点链接") from None
     except KeyboardInterrupt:
         raise StepError("已取消输入节点链接") from None
 
     try:
+        if raw_link.strip().split("://", 1)[0].strip().lower() in ("vless", "trojan", "ss"):
+            raise StepError(ADVANCED_NODE_MESSAGE)
         single_fields = parse_node_link(raw_link)
     except NodeLinkError as exc:
         raise StepError(f"节点链接校验失败：{exc}") from None
@@ -1046,25 +1010,32 @@ def do_config(ctx):
         resolved = resolve_server_ipv4(single_fields["SINGLE_SERVER"])
         if resolved:
             single_fields["SINGLE_SERVER_IP"] = resolved
+        else:
+            raise StepError("宿主机无法解析节点的 IPv4 地址。请检查节点地址与 DNS 后重试。")
 
-    print(f"[cchouse up] 虚拟机后端：{ctx.backend} | 协议：{single_fields['SINGLE_TYPE']} | 端口：{single_fields['SINGLE_PORT']}")
+    print(f"[cchouse up] 虚拟机后端：{ctx.backend} | 协议：{single_fields['SINGLE_TYPE']}")
 
     probed = None
-    if not args.no_probe and single_fields["SINGLE_TYPE"] in ("socks5", "http"):
+    if not args.no_probe:
         print("[cchouse up] 正在通过代理探测出口 IP 与时区（凭据不落盘不回显）...")
         probed = probe_egress_via_proxy(single_fields)
     probed = probed or {}
     egress_cfg = {
-        "timezone": args.timezone or probed.get("timezone") or "America/Los_Angeles",
-        "ip": args.expected_ip or probed.get("ip") or "",
-        "loc": probed.get("country") or "US",
-        "asn": probed.get("asn") or "",
+        "timezone": args.timezone or probed.get("timezone", ""),
+        "ip": args.expected_ip or probed.get("ip", ""),
+        "loc": getattr(args, "expected_country", None) or probed.get("country", ""),
+        "asn": getattr(args, "expected_asn", None) or probed.get("asn", ""),
     }
-    print(
-        f"[cchouse up] 采用出口配置：时区={egress_cfg['timezone']}，"
-        f"预期出口 IP={egress_cfg['ip'] or '未设置'}，"
-        f"国家={egress_cfg['loc']}，ASN={egress_cfg['asn'] or '未知'}"
-    )
+    if not (all(isinstance(value, str) for value in egress_cfg.values())
+            and render_mod.is_ipv4(egress_cfg["ip"])
+            and re.fullmatch(r"[A-Z]{2}", egress_cfg["loc"])
+            and re.fullmatch(r"AS[0-9]+", egress_cfg["asn"])
+            and re.fullmatch(r"[A-Za-z0-9_+-]+(?:/[A-Za-z0-9_+-]+)*", egress_cfg["timezone"])):
+        raise StepError(
+            "未获得完整出口信息。请确认节点可用后重试，或按进阶文档填写"
+            f"出口 IPv4、国家/地区代码、ASN 和 IANA 时区。\n  {ADVANCED_NODE_GUIDE}"
+        )
+    print("[cchouse up] 已取得出口 IPv4、国家/地区、ASN 与时区。")
 
     try:
         ssh_key, ssh_pubkey = generate_ssh_keypair(private_dir, tag)
@@ -1137,6 +1108,10 @@ def step_preflight(ctx):
 
 
 def step_seed(ctx):
+    if not ctx.state.get("vm_created_by_up") and ctx.env_path.is_file():
+        node_type = _env_raw_value(ctx.env_path, "SINGLE_TYPE")
+        if node_type and node_type not in QUICK_NODE_TYPES:
+            raise StepError(ADVANCED_NODE_MESSAGE)
     apply_virtualbox_guest_net(ctx)
     ctx.wait_download("claude")
     py = sys.executable
@@ -1177,6 +1152,28 @@ def vm_exists(ctx):
     return False
 
 
+def tart_vm_dir(name):
+    return preflight_mod.tart_home_dir() / "vms" / name
+
+
+def tart_vm_identity(name):
+    try:
+        info = tart_vm_dir(name).lstat()
+    except FileNotFoundError:
+        return None
+    return [info.st_dev, info.st_ino] if stat.S_ISDIR(info.st_mode) else None
+
+
+def vm_name_conflict(name):
+    return (f"已存在同名虚拟机或快照 {name}，此安装记录无法确认归属。"
+            "请用 --tag 换一个实例名（Mac 首页命令末尾加 --tag cc02），原虚拟机不会被改动。")
+
+
+def image_identity(artifact):
+    fields = ("image_version", "route", "arch", "format", "filename", "size_bytes", "sha256", "source_commit")
+    return {key: artifact[key] for key in fields if key in artifact}
+
+
 def _ensure_virtualbox_installed(ctx):
     man = ctx.vbox_manifest
     if not man:
@@ -1200,12 +1197,13 @@ def step_import(ctx):
     owned = ctx.state.get("vm_created_by_up") is True
     if ctx.backend == "virtualbox":
         _ensure_virtualbox_installed(ctx)
-    if not owned and vm_exists(ctx):
-        raise StepError(
-            f"已存在同名虚拟机 {ctx.vm_name}（非本次 up 创建），为避免覆盖已登录环境不会删除；"
-            "请换 --tag，或确认无用后自行删除再运行"
-        )
+    exists = vm_exists(ctx)
+    if exists and not owned:
+        raise StepError(vm_name_conflict(ctx.vm_name))
     if ctx.backend == "tart":
+        if exists and (not ctx.state.get("tart_vm_identity")
+                or tart_vm_identity(ctx.vm_name) != ctx.state["tart_vm_identity"]):
+            raise StepError(vm_name_conflict(ctx.vm_name))
         existed = (not ctx.dry_run) and subprocess.run(
             ["bash", str(ROOT / "scripts" / "vm-tart.sh"), "exists", ctx.golden_name],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -1213,15 +1211,18 @@ def step_import(ctx):
         if existed:
             print(f"  本机已有黄金镜像 {ctx.golden_name}，直接克隆（热缓存）")
         else:
-            ctx.tart("import", ctx.golden_name, ctx.image_path)
-        ctx.tart("clone" if owned else "clone-new", ctx.golden_name, ctx.vm_name)
-        ctx.state.update(vm_created_by_up=True, vm_name=ctx.vm_name, vm_backend=ctx.backend, golden_name=ctx.golden_name)
+            ctx.tart("import-new", ctx.golden_name, ctx.image_path)
+        if exists:
+            ctx.tart("delete", ctx.vm_name)
+        ctx.tart("clone-new", ctx.golden_name, ctx.vm_name)
+        ctx.state.update(vm_created_by_up=True, vm_name=ctx.vm_name, vm_backend=ctx.backend,
+                         golden_name=ctx.golden_name, tart_vm_identity=tart_vm_identity(ctx.vm_name),
+                         image_artifact=image_identity(ctx.artifact),
+                         image_artifact_origin="reused_tart_golden" if existed else "verified_download")
         ctx.save_state()
         return existed
     if ctx.backend == "virtualbox":
         apply_virtualbox_guest_net(ctx)
-        ctx.state.update(vm_created_by_up=True, vm_name=ctx.vm_name, vm_backend=ctx.backend)
-        ctx.save_state()
         ctx.virtualbox(
             "import",
             Ova=ctx.image_path,
@@ -1231,6 +1232,9 @@ def step_import(ctx):
             SshPort=str(ctx.vbox_ssh_port),
             HostKeyLog=str(ctx.hostkey_log),
         )
+        ctx.state.update(vm_created_by_up=True, vm_name=ctx.vm_name, vm_backend=ctx.backend,
+                         image_artifact=image_identity(ctx.artifact), image_artifact_origin="verified_download")
+        ctx.save_state()
         return False
     raise StepError("当前后端不支持自动导入")
 
@@ -1302,8 +1306,12 @@ def step_verify(ctx):
 def step_snapshot(ctx):
     if ctx.backend == "tart":
         snap = f"{ctx.vm_name}-clean"
-        ctx.tart("snapshot", ctx.vm_name, snap)
-        ctx.state["clean_snapshot"] = snap
+        if tart_vm_dir(snap).exists():
+            if not ctx.state.get("tart_snapshot_identity") or tart_vm_identity(snap) != ctx.state["tart_snapshot_identity"]:
+                raise StepError(vm_name_conflict(snap))
+        else:
+            ctx.tart("snapshot-new", ctx.vm_name, snap)
+        ctx.state.update(clean_snapshot=snap, tart_snapshot_identity=tart_vm_identity(snap))
         ctx.save_state()
         ctx.tart("gui", ctx.vm_name, ctx.logs / "tart-gui.log")
     elif ctx.backend == "virtualbox":
@@ -1474,12 +1482,33 @@ def cmd_up(args):
         sys.exit("错误：私有目录/缓存目录不能放在 cchouse 仓库内，请改用用户私有目录")
 
     ctx = UpContext(args, tag, route, private_dir)
+    if (ctx.state.get("tag", tag) != tag or ctx.state.get("route", route) != route
+            or Path(ctx.state.get("private_dir", private_dir)).resolve() != private_dir.resolve()):
+        sys.exit("错误：现有安装记录与当前标签、路线或私有目录不匹配，请使用新的 --tag")
     previous_backend = ctx.state.get("vm_backend")
     if previous_backend and previous_backend != ctx.backend:
         sys.exit("错误：该实例的安装记录属于另一个后端，请使用新的 --tag 创建实例")
     # 早期安装记录没有 vm_backend，但会在私有配置记录旧版虚拟机路径。
     if ctx.route == "virtualbox-linux" and ctx.env_path.is_file() and _env_raw_value(ctx.env_path, "VMX_PATH"):
         sys.exit("错误：该实例包含旧版虚拟机路径，请使用新的 --tag 创建 VirtualBox 实例")
+    live_run = not args.dry_run and not args.config_only
+    if live_run and vm_exists(ctx):
+        owned = (ctx.state.get("vm_created_by_up") is True and ctx.state.get("vm_name") == ctx.vm_name
+                 and previous_backend == ctx.backend)
+        if ctx.backend == "tart" and owned:
+            identity = ctx.state.get("tart_vm_identity")
+            owned = (tart_vm_identity(ctx.vm_name) == identity if identity is not None
+                     else ctx.done("snapshot"))
+        if not owned:
+            sys.exit(vm_name_conflict(ctx.vm_name))
+        print(f"检测到 {ctx.vm_name} 的安装记录，将沿用已完成步骤。")
+    elif live_run and ctx.done("import") and ctx.backend != "manual":
+        sys.exit(f"安装记录中的虚拟机 {ctx.vm_name} 已不存在。请使用新的 --tag，或先核对并卸载旧记录。")
+    if live_run and ctx.backend == "tart" and not ctx.done("snapshot"):
+        snapshot = f"{ctx.vm_name}-clean"
+        if tart_vm_dir(snapshot).exists() and (not ctx.state.get("tart_snapshot_identity")
+                or tart_vm_identity(snapshot) != ctx.state["tart_snapshot_identity"]):
+            sys.exit(vm_name_conflict(snapshot))
     return run_pipeline(ctx)
 
 
@@ -1633,6 +1662,9 @@ def cmd_remove(args):
             if not isinstance(golden_name, str) or not re.fullmatch(r"cchouse-debian13-arm64-[a-zA-Z0-9._-]+", golden_name):
                 raise StepError("state.json 的 Tart 黄金镜像名无效")
             inventory = _tart_inventory()
+            for name, key in ((vm_name, "tart_vm_identity"), (snapshot, "tart_snapshot_identity")):
+                if name in inventory and key in state and tart_vm_identity(name) != state[key]:
+                    raise StepError(vm_name_conflict(name))
         else:
             inventory = {}
 
@@ -1716,6 +1748,7 @@ def main():
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
     parser = argparse.ArgumentParser(description="cchouse CLI")
+    parser.add_argument("--version", action="version", version=f"cchouse {(ROOT / 'VERSION').read_text(encoding='ascii').strip()}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_up = sub.add_parser("up", help="一条命令：后台下载镜像，同时配置节点，下载完自动导入、首启注入、验收并打干净快照")
@@ -1727,9 +1760,11 @@ def main():
     p_up.add_argument("--npm-mirror", default=None, help=f"Claude Code tarball 镜像源（也可用环境变量 {downloads.NPM_MIRROR_ENV}），integrity 仍取官方 registry")
     p_up.add_argument("--timezone", default=None, help="覆盖自动采用的出口时区")
     p_up.add_argument("--expected-ip", default=None, help="覆盖自动采用的预期出口 IP")
+    p_up.add_argument("--expected-country", default=None, help="覆盖自动采用的两位出口国家/地区代码")
+    p_up.add_argument("--expected-asn", default=None, help="覆盖自动采用的预期出口 ASN（如 AS64500）")
     p_up.add_argument("--link-stdin", action="store_true", help="从标准输入读取一行节点链接（不回显，适合脚本/测试）")
     p_up.add_argument("--non-interactive", action="store_true", help=argparse.SUPPRESS)
-    p_up.add_argument("--no-probe", action="store_true", help="跳过宿主机代理出口与 Stripe 探测")
+    p_up.add_argument("--no-probe", action="store_true", help="跳过宿主探测，手工提供 IP、国家、ASN 和时区")
     p_up.add_argument("--vm-backend", choices=("auto", "tart", "virtualbox", "manual"), default="auto",
                       help="虚拟机自动化后端（默认：Apple Silicon→tart；Windows→virtualbox；其余→manual）")
     p_up.add_argument("--reconfigure", action="store_true", help="忽略已有 instance.env，重新输入节点链接")

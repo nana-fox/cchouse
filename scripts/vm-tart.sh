@@ -6,6 +6,7 @@
 # 子命令：
 #   exists    <VM>
 #   import    <VM> <file.tvm>                 # 已存在则跳过
+#   import-new <VM> <file.tvm>                # 已存在则拒绝
 #   clone     <SRC> <DST>                     # DST 已存在先删除
 #   clone-new <SRC> <DST>                     # DST 已存在则拒绝
 #   firstboot <VM> <seed.iso> <SSH_KEY> [LOG]  # 挂只读 seed.iso 离线首启注入，完成后关机
@@ -13,6 +14,7 @@
 #   gui       <VM> [LOG]                      # 带图形界面后台开机（交给用户登录）
 #   stop      <VM>
 #   snapshot  <VM> <SNAP>                     # 关机后 tart clone 成干净快照（已存在先删除）
+#   snapshot-new <VM> <SNAP>                  # 已存在则拒绝
 #   delete    <VM>
 
 CCHOUSE_TART_PID=""
@@ -158,6 +160,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
   case "$op" in
     exists) cchouse_tart_exists "$@" ;;
     import) cchouse_tart_import "$@" ;;
+    import-new) tart import "$2" "$1" ;;
     clone) cchouse_tart_clone "$@" ;;
     clone-new) tart clone "$1" "$2" ;;
     firstboot) cchouse_tart_firstboot "$@" ;;
@@ -165,7 +168,8 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     gui) cchouse_tart_gui "$@" ;;
     stop) cchouse_tart_stop "$@" ;;
     snapshot) cchouse_tart_snapshot "$@" ;;
+    snapshot-new) cchouse_tart_stop "$1" && tart clone "$1" "$2" ;;
     delete) cchouse_tart_stop "$1" && tart delete "$1" ;;
-    *) echo "Usage: $0 exists|import|clone|clone-new|firstboot|boot|gui|stop|snapshot|delete ..." >&2; exit 2 ;;
+    *) echo "Usage: $0 exists|import|import-new|clone|clone-new|firstboot|boot|gui|stop|snapshot|snapshot-new|delete ..." >&2; exit 2 ;;
   esac
 fi

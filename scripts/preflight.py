@@ -390,7 +390,8 @@ def check_stripe_reachability(env_path, timeout=8):
     stripe_mode = render_mod.effective_stripe_mode(env, guest_os, exit_mode)
     prefix = "STRIPE_NODE" if stripe_mode == "node" else "SINGLE"
     stype = env.get(f"{prefix}_TYPE", "").strip().lower()
-    if stype not in ("socks5", "http"):
+    uses_tls = env.get(f"{prefix}_TLS", "").strip().lower() == "true"
+    if stype not in ("socks5", "http") or (stype == "http" and uses_tls):
         return {
             "skipped": True,
             "target": prefix,

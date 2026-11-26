@@ -11,7 +11,8 @@
 
 ### 单节点支持的协议（`SINGLE_TYPE`）
 
-- 支持：`socks5`、`http`、`vless`、`trojan`、`ss`、`ssh`（纯 TCP 传输）。
+- 首页一键安装接受 SOCKS5 或 HTTP(S) 链接，通过节点自动读取出口 IPv4、国家或地区、ASN 和时区。
+- VLESS、Trojan、Shadowsocks（`ss`）和 SSH 走[手动安装](manual-install.md#手动快速上手命令行)。使用私有 `instance.env` 填写对应 `SINGLE_*` 参数，并从服务商或经该节点的独立探测取得实际出口 IPv4（`EXPECTED_EGRESS_IP`）、两位国家或地区代码（`EXPECTED_EGRESS_LOC`）、ASN（`EXPECTED_EGRESS_ASN`）与 IANA 时区（`TIMEZONE`）。节点服务器地址只用于建立连接，出口值以实际探测为准。
 - **明确拒绝**：`hysteria2`、`tuic` 等基于 UDP 的代理协议。`cchouse` 默认全局封锁 UDP，`preflight.py` 与 `render.py` 会在渲染阶段直接拒收，避免运行时默默断网。
 
 > **国内直连提示**：如果在国内直连裸 `socks5` 住宅/ISP 代理，明文协议易被干扰或丢包；且若该 ISP 屏蔽 Stripe，单节点模式直接付款会失败。此时可配置可选的 Stripe 专用节点（`STRIPE_EXIT_MODE=node` + `STRIPE_NODE_*`），或改用 `EXIT_MODE=chain`。
@@ -37,7 +38,7 @@
 
 ### Stripe 可达性自检
 
-- **部署前（宿主机，支持 `socks5`/`http` 单节点）**：运行 `python3 -I scripts/preflight.py --env <instance.env> --check-stripe`，在宿主机探测 `js.stripe.com` / `api.stripe.com` 连通性（不打印凭据）。
+- **部署前（宿主机，支持 SOCKS5 和非 TLS 的 HTTP 代理）**：运行 `python3 -I scripts/preflight.py --env <instance.env> --check-stripe`，探测 `js.stripe.com` / `api.stripe.com` 连通性。HTTPS 代理在客机内验收。
 - **部署后（客机内，全协议通用）**：`scripts/verify-linux.sh` 会自动探测客机内 `js.stripe.com` 与 `api.stripe.com` 可达性：
   - 任何模式下 Stripe 不通都只输出 `WARN` 提示，**不判失败、不阻止安装**：Stripe 只影响在 claude.ai 网页上付款，已订阅或在其他地方付款的用户不受影响。
   - 单节点（`STRIPE_EXIT_MODE=off`）不通时提示会附解决办法：配置 Stripe 备用节点或改链式。

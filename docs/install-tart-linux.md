@@ -2,17 +2,15 @@
 
 本手册面向 **Apple Silicon Mac（M1/M2/M3/M4）**，采用 `tart` + 预装好的 **Debian 13 (`arm64`) 黄金镜像**（具体版本、体积与 `sha256` 以 `guest-linux/image-manifest.json` 为准；中文字体、`fcitx5` 简体拼音、`tint2` 任务栏与右键关机 `cchouse-power` sudoers 自 `v2.0.0-preview.2` 起内置），支持 `EXIT_MODE=single`（单节点）与 `chain`（链式），仅覆盖网页版与 Claude Code CLI（不含 Claude Desktop）。
 
-> 若需要 macOS 桌面与 Safari 高拟真环境，请改走 [build.md](build.md)（v1 `Tart + macOS`）。
+> 公开版安装见 [README 快速开始](../README.md#快速开始)。v1 macOS 相关操作见 [旧实例维护手册](build.md)。
 
 ---
 
-## 最快路径：一条命令 `cchouse up`
+## 维护与开发入口
 
-```bash
-python3 -I scripts/cchouse.py up --tag cc01
-```
+源码直装命令见 [手动安装](manual-install.md#mac-源码直装维护与开发)。
 
-启动后**先在后台下载**黄金镜像（`image-manifest.json` 的 URL + SHA-256）与 Claude Code 官方包（npm SRI），走宿主网络、默认跟随系统代理设置、断点续传、已校验则跳过；下载期间同时完成：粘贴节点链接（不回显）→ 探测出口 IP/时区（回车确认）→ 生成密钥与 `instance.env`（`600`）→ `preflight` → 渲染并生成 `seed.iso`。下载校验完成后自动：`tart import`/`clone` → 挂 `seed.iso` 首启注入 → 删除明文并联网重启 → `verify-linux.sh --fail-closed` → 保存干净快照 `claude-<TAG>-clean` 并以图形界面开机交给你。
+下载期间可无回显粘贴 SOCKS5 / HTTP(S) 节点链接。安装器探测实际出口、生成私有配置和首启光盘。镜像与 Claude Code 下载校验通过后自动导入、离线注入、清理明文，随后联网运行 `verify-linux.sh --fail-closed`。通过后保存干净快照 `claude-<TAG>-clean` 并以图形界面开机。
 
 - 每步开始/结束/耗时/是否命中缓存写入 `<私有目录>/state.json`，结束打印耗时表（区分冷启动/热缓存）。
 - 任一步失败即停：打印失败步骤，**再次运行同一命令从该步继续**；求助时用 `scripts/doctor.py` 导出脱敏诊断包。
@@ -25,7 +23,7 @@ python3 -I scripts/cchouse.py up --tag cc01
 
 ## 阶段 0：前提准备
 
-1. 安装 `tart`：`brew install cirruslabs/cli/tart`（或将官方 release 放外置盘并配置 `TART_HOME`）。
+1. 安装 Tart（维护环境可运行 `brew install openai/tools/tart`）。
 2. 自备外部 IP 代理，按 [proxy-modes.md](proxy-modes.md) 确定 `EXIT_MODE=single` 或 `chain`。
 
 ---

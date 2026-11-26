@@ -1,48 +1,27 @@
 # 变更记录
 
-## v2.0-preview
+## 未发布（preview.4）
 
-- 交互式 `cchouse up` 等待输入节点链接时暂停后台下载日志，下载继续进行。输入结束后恢复输出。
-- VirtualBox 离线首启等待客机刷盘、串口确认和正常关机后才卸载配置盘并联网。联网 SSH 就绪探测单次最多 10 秒，总等待预算为 180 秒。
-- 中英 README 增加 Windows 单行引导入口。安装器准备私有 Python，缺少 VirtualBox 时会发起安装并提示用户确认 UAC。
-- 自检按安装卷的剩余空间检查完整安装。VirtualBox 路线至少 7 GB、建议 10 GB。Tart Debian 13 路线至少 9 GB、建议 12 GB。低于建议值时只提示。
+- 中英首页增加 Apple Silicon Mac 的 SHA-256 锁定引导入口。Mac 引导支持 `--tag`，续跑核对实例归属，遇到同名的外部虚拟机或快照时停止并提示换名。
+- 快速安装接受 SOCKS5 和 HTTP(S)，通过节点读取实际出口 IPv4、国家或地区、ASN 与时区。VLESS、Trojan、Shadowsocks 指向进阶配置。节点输入期间暂停后台下载日志。
+- `VERSION` 统一 CLI、引导和打包版本。诊断包记录安装器版本、已导入镜像身份和可读取的客机构建信息。
+- amd64 和 arm64 继续使用 preview.2 的公开镜像。
 
-- Windows 卸载支持安装记录中的扩展路径前缀，保留虚拟机名称与配置路径的归属核对。Linux 验收为 SSH 和客机探针设置硬超时，连接建立后卡住也会退出探测。
-- Windows 首次运行 `up` 时，若缺 VirtualBox，则从 Oracle 下载锁定的 7.2.22 并核对官方 SHA-256。安装前显示说明，至多一次 UAC。下载、校验或安装失败时退出并给出官方链接。`remove` 在现有预览与确认流程中核对实例名称和虚拟机配置路径，关机后按核对过的 UUID 注销并删除虚拟机。
-- Windows 安装与验收统一使用 VirtualBox（`virtualbox-linux`）。环境自检、诊断、卸载与 GTR 验收同步切换。旧后端的实例留在原私有目录，请为新安装使用新的 tag。
+## [v2.0.0-preview.3](https://github.com/nana-fox/cchouse/releases/tag/v2.0.0-preview.3) · 2026-11-26
 
-- 云端 `build-ova` 按 `guest-linux/virtualbox-manifest.json` 下载并校验 Guest Additions ISO，再传进构建客机。缺这份 ISO 时 amd64 黄金镜像脚本会停。
-- amd64 黄金镜像在 `open-vm-tools` 之外安装 VirtualBox Guest Additions 7.2.22。ISO 为 `VBoxGuestAdditions_7.2.22.iso`，SHA-256 来自同目录官方 `SHA256SUMS`，只使用这份 GPL 安装器。`open-vm-tools` 仅在 DMI 为 VMware 时启动，`vboxadd` 仅在 VirtualBox（systemd `ConditionVirtualization=oracle`）时启动。Openbox 只在 VirtualBox 下启动 `VBoxClient --clipboard` 与 `--vmsvga`，不启动拖放或无缝模式，不挂共享目录。模块编进当前内核后删除 ISO，并 purge `dkms`、`linux-headers` 与 `build-essential`。镜像已 purge `unattended-upgrades` 并禁用 `apt-daily.timer` 与 `apt-daily-upgrade.timer`，内核不会自动升级，因此不保留编译器，也不锁定内核包；之后若手动升级内核，需要重做镜像。Tart/arm64 仍只装 `spice-vdagent`。
-- Windows PowerShell 5.1 的 SSH 探测遇到超时会继续重试，主机密钥不符仍立即停止。Windows 脚本统一按原生命令退出码处理失败，保留独立的标准错误输出。CI 覆盖首次 SSH 超时后重试成功的路径。
-- Windows 上的 `cchouse up` 默认使用 VirtualBox，已有 VMware 实例的安装记录需使用新的 tag 创建 VirtualBox 实例。安装器直接采用并显示出口时区和预期出口 IP。修复 Windows PowerShell 5.1 遇到 VBoxManage 探测 stderr 时中止的问题，CI 增加 5.1 回归测试。首次 SSH 连接须同时通过本实例 NAT 转发与监听进程核对：优先核对 `VBox.log` 中的 PID，日志未提供 PID 时核对 VirtualBox 安装目录下的进程路径。
-- `cchouse.py remove` 增加 VirtualBox：按 `state.json` 里的虚拟机名精确匹配，先关机，再 `VBoxManage unregistervm --delete`。Windows 开机若串口没有主机公钥，要先确认 NAT 转发属于本实例，才用 `accept-new` 收录 `known_hosts`；`verify-linux.sh` 会记一条 WARN「未经串口核对主机密钥」。
-- 新增 `cchouse.py remove --tag`。根据安装记录精确清理 Tart 或 VMware 实例，先列清单再确认。默认保留共享黄金镜像和下载缓存，可用 `--purge-cache` 同时清理。
-- 安装器遇到输入结束（EOF）时，有默认值就采用并说明。没有默认值时给出中文提示，清理临时明文后退出。
-- 重写 README 面向首次使用者（大白话价值、三个痛点、原理图、3 步快速开始、支持矩阵、FAQ、安全设计、免责声明），新增英文版 `README.en.md` 与脱敏检查页截图 `docs/assets/check-all-green.png`；原 README 中的出口模式、目录结构、手动安装步骤移至新增的 `docs/manual-install.md`。
-- 按读者审阅修订：`guest-linux/check.html` 全部通过时的提示由 "All good — you can sign in." 改为 "All network checks passed."（只表示网络检查通过，不暗示账号状态）；`docs/install-vmware-linux.md`、`docs/install-tart-linux.md` 与 `docs/manual-install.md` 把生成 SSH 密钥、填 `SSH_PUBKEY`、填节点与预期出口移到渲染之前（渲染器缺 `SSH_PUBKEY` 会直接退出）。
-- 新增跨平台 Linux 客机模板（`guest-linux/`，Debian 13 + VMware Workstation/Fusion Pro 路线，开发预览）。
-- 出口层与客机隔离层解耦：支持 `EXIT_MODE=single`（单节点）与 `EXIT_MODE=chain`（前置 → 固定 ISP），可选 `STRIPE_EXIT_MODE`。
-- 新增面向外部 AI Agent 的 6 步状态机手册（`AGENTS.md`）、`scripts/preflight.py(.ps1)`、`scripts/make-seed-iso.py`、`scripts/verify-linux.sh` 与单元测试 `tests/test_v2.py`。
-- 保留 Apple Silicon Mac `tart` + macOS 客机路线（`guest/`、`host/`）。
-- 完善 v1 macOS 文档与模板：`docs/build.md` 补充 `mihomo` / `tart-guest-agent` 下载与 sha256 核对命令、明确基础镜像版本及本地 vanilla 底包 CoW 复用说明、移除私有目录硬引用；`instance.env.example` 显式声明 `GUEST_OS`/`EXIT_MODE` 并将外置盘 `VM_STORAGE` 默认置空。
-- 修正 `scripts/preflight.py` 的 Tart 底包缓存判定：仅在 `cache/OCIs` 或命名含 `vanilla`/`base` 的本地底包下存在真实 `disk.img` 时视为命中缓存，避免 `tart prune` 残留悬空软链或已有成品实例导致低磁盘误放行，并按是否命中底包区分 30–50 GB 警告文案。
-- 修复 Linux v2 真机实测发现的两处跨平台缺陷：`guest-linux/nftables.conf` 的 `chain input` 补全 `iifname "cchouse0" meta nfproto ipv4 accept`（修复 `mihomo` `stack: system` 模式下客机 TCP 连接全被 `policy drop` 拦截的 P0 阻断）；`scripts/verify-linux.sh` 补齐 `-F none` 与 `UserKnownHostsFile` 内层引号以兼容含空格路径（如 macOS `Application Support`）。
-- 全面升级 Debian 13 黄金镜像桌面体验（Closes #9）：补齐 `fonts-noto-cjk`/`fonts-noto-color-emoji` 解决中文方块乱码，显式安装 `dbus-user-session` 并预装 `fcitx5` 简体拼音（关闭云拼音、由 `firstboot.sh` 按 `GUEST_KEYBOARD` 动态生成 profile，移除 Openbox 默认 `A-space` 冲突热键以兼容 macOS 左 `Shift`/`Option+Space` 与 Windows `Ctrl+Space`），新增 `tint2` 底部任务栏（`TSC`）/系统托盘与柔和背景色解决最小化黑屏，通过无通配符 `cchouse-power` sudoers 保障右键安全关机/重启，关闭 Xorg 10 分钟 DPMS 熄屏，错峰启动窗口消除竞态，以 `lxterminal`（10000 行回滚）替换 `xterm` 并安装 `xclip`，为 `TARGET_HYPERVISOR=tart` 补装 `spice-vdagent`，在 `20-cchouse-dhcp.network` 配置 `ClientIdentifier=mac`，并统一通过 `/etc/chromium.d/cchouse`（`--hide-crash-restore-bubble`）与托管策略关闭默认书签栏和崩溃恢复弹窗。
-- 优化 Apple Silicon `tart-linux` 镜像构建与本地复用：`guest-linux/image-builder/build-tart-linux-from-cloud-image.sh` 改拉锁版本的官方压缩云镜像 `.tar.xz`（~288 MB，替代 3.00 GiB 未压缩 `.raw`），支持先校验再原子落盘、自动清理损坏缓存、同卷临时解压与自定义版本/后缀防呆；`scripts/preflight.py` 统一解析 `tart` 包装脚本中的 `TART_HOME` 并在 `host.tart_home` / `host.tart_linux_golden_images` 输出精确匹配的本地黄金镜像列表。
-- 修复 `preview.2` 独立审查发现的构建、校验与文档问题：修复 `build-tart-linux-from-cloud-image.sh` 与 `build-ova-from-cloud-image.ps1` 将整条构建命令链放后台导致吞掉失败退出码的 P0 缺陷（改为仅将关机放后台）；构建镜像时写入 `/etc/cchouse-image-release`（含 `SOURCE_COMMIT`、`BUILD_TIME`、`ARCH`、`HYPERVISOR`），`guest-linux/image-manifest.json` 补齐 `source_commit` 并增加 schema 2 单测校验与 `preflight.py` `host.expected_image` 对齐；`build-tart-linux-from-cloud-image.sh` 改为在临时名 `${VM_NAME}-building` 上构建、成功后 `tart rename` 成正式名、失败只清理临时名（兼容 `tart import` 导入的黄金镜像），`preflight.py` 排除 `-building` 临时构建机；修正两份 Linux 安装手册的版本边界与 `GUEST_KEYBOARD` 说明；`preflight.py` 拒收空 `GUEST_KEYBOARD`，`verify-linux.sh` 强制要求 `cchouse-power` sudoers 规则存在；修复 `tests/test_v2.py` 在 Windows 下的非法路径名问题。
-- 修复 `tart-linux` 真机全链路验证发现的三处隐患：`guest-linux/firstboot.sh` 离线安装 Claude Code 二进制改为同目录临时文件 + `sync` + 原子 `mv` 并在脚本末尾强制 `sync`（防止首次注入后 `tart stop` 硬断电导致 ext4 脏页未刷盘、截断 `/usr/local/bin/claude` 引发 `Segmentation fault`）；`guest-linux/cchouse-firstboot.service` 补全 `Wants=network-pre.target`；`guest-linux/image-builder/assert-empty-state.sh` 修正两处 `check ... >/dev/null 2>&1` 误重定向整个函数导致 `PASS`/`FAIL` 输出被静默吞掉的问题；`guest-linux/image-builder/build-tart-linux-from-cloud-image.sh` 改用唯一临时构建主机名并在 ARP 表未命中原始 Debian 云镜像 DUID 租约时回退读取 `/var/db/dhcpd_leases`。
-- 新增单节点模式 Stripe 可达性检查与可选 Stripe 专用节点支持：`EXIT_MODE=single` 支持 `STRIPE_EXIT_MODE=node` 与 `STRIPE_NODE_*`（全链路无 `DIRECT`、禁 UDP、`nftables` 同步放行主节点与 Stripe 节点 `IP:端口`）；`scripts/preflight.py` 新增 `--check-stripe` 宿主机探测（`socks5`/`http`）与 `STRIPE_NODE_*` 校验；`scripts/verify-linux.sh` 新增客机内 Stripe 可达性检查，单节点未配专用节点且 Stripe 不可达时明确 `WARN` 提示付款会失败及解决路径，已配置分流时不可达同样只 `WARN`（Stripe 仅影响网页付款，不阻止安装）；同步更新 `docs/proxy-modes.md`、`instance.env.linux.example` 与单元测试。
-- 新增跨平台脱敏诊断包工具 `scripts/doctor.py`：支持 `--env <instance.env>` 与可选 `--vm-ssh`，一键导出包含 `preflight` JSON、宿主机信息（OS 版本、`tart`/`vmrun` 版本、CPU 架构）及可选客机 `firstboot.log`/`verify-linux.sh --json`/`mihomo` 状态/`nft list ruleset` 的 zip 包；所有写入 zip 的文本与 JSON 均经统一脱敏管道过滤凭据（密码、UUID、私钥、节点地址、URL 用户名密码等），客机不可达时正常出包并在 `manifest.json` 标明缺失项；补充 `tests/test_doctor.py` 脱敏与离线单测并在 `docs/operations.md` 增加"出错怎么导诊断包"一节。
-- 新增一条命令安装向导 `scripts/cchouse.py up`：无回显读取单节点链接（支持 `socks5`/`http`/`https`/`vless`/`trojan`/`ss`，拒绝 UDP 类协议与非法注入），自动生成 ed25519 SSH 密钥对、按宿主自动选择 `tart-linux` 或 `vmware-linux` 路线、可选探测代理出口 IP/时区/ASN 与 Stripe 可达性（不通仅提示不拦截），在用户私有目录以 `600` 权限写出 `instance.env`（拒绝写入仓库），运行 `preflight.py` 并输出下一步命令；补充 `tests/test_cchouse_up.py` 单测。
-- `scripts/cchouse.py up` 第二轮：启动即后台下载黄金镜像与 Claude Code 包（新增共用模块 `scripts/downloads.py`：HTTP Range 断点续传、SHA-256/npm SRI 校验后原子落盘、`.verified` 标记免重复哈希、实时速度、前 10 秒过慢提示换直连或镜像源、`--image-mirror`/`CCHOUSE_IMAGE_MIRROR` 与 `--npm-mirror`/`CCHOUSE_NPM_MIRROR` 镜像源，默认跟随用户网络环境；`scripts/fetch-claude-code.py` 改为复用该模块），下载期间并行完成节点配置、`preflight`、渲染与 `seed.iso`，下载完成后自动导入/克隆、首启注入、删明文重启、`verify-linux.sh --fail-closed` 与干净快照；Tart 与 VMware 生命周期抽成 `scripts/vm-tart.sh`、`scripts/vm-vmware.ps1`，`tools/e2e/run-mac.sh` 与 `gtr-remote.ps1` 改为复用（顺带修正 `tart import` 参数顺序为 `<path> <name>`（含 `docs/install-tart-linux.md` 与 `image-manifest.json` 的 `import_command`），并修复 `run-mac.sh` 克隆/重启失败时在 `{ }` 组内 `exit` 导致报告误标 PASS 的问题）；每步计时与缓存命中写入 `state.json` 并打印耗时表（区分冷启动/热缓存），任一步失败即停、删明文、提示断点续跑与 `scripts/doctor.py`；新增 `--dry-run`、`--config-only`、`--reconfigure`、`--vm-backend`、`--cache-dir` 与 `tests/test_up_pipeline.py`。
-- 修复 `scripts/cchouse.py up` 遇到非预期异常（如 `KeyError`/`json` 错误）时跳过失败处理、`seed.iso` 明文残留的问题：任何异常都先删除 `seed.iso`/`rendered` 并写入 `FAILED` 状态，再原样抛出便于排查。
-- 新增手动触发的云上 arm64 Tart OCI 构建流程 `.github/workflows/build-tvm.yml`：在 `ubuntu-24.04-arm` 上以 QEMU（无 `/dev/kvm`，TCG 软件模拟）复用 `build-debian13-golden.sh` + `assert-empty-state.sh` 构建 Debian 13 arm64 黄金镜像，经 `guest-linux/image-builder/push-tart-oci.py` 以 Tart 兼容格式（LZ4 `disk.v2` + 确定性空 NVRAM + `config.v1`）推送到 `ghcr.io/<owner>/cchouse-debian13-arm64:<tag>`；云构建全程约 17 分钟（Mac mini 本地约 7 分钟）。GHCR 包默认私有，面向用户匿名 `tart clone` 前需人工改为公开。
-- 修复 macOS 宿主 `/bin/bash` 3.2 在 UTF-8 locale 下把紧跟变量的全角字符首字节并入变量名的问题：`scripts/verify-linux.sh` 的 Stripe 可达性一行 `$stripe_api_code）` 在 `set -u` 下报 `unbound variable` 并中止整个 `--fail-closed` 验收（PR #17 引入，所有 Mac 宿主必现）；同类写法在 `verify-linux.sh`、`verify.sh`、`host/run-vm.sh`、`host/watch-egress.sh` 共 7 处统一改为 `${var}`，新增单测 `test_shell_vars_braced_before_non_ascii` 扫描全仓 `*.sh` 防回归；`tools/e2e/report.py` 写 `status.json`/`report.html` 时对 `--detail` 等参数中的非法 UTF-8 字节改为替换（此前直接 `UnicodeEncodeError` 崩溃，失败步骤与原因丢失）。
-- 修复 `scripts/downloads.py` 在代理/服务器提前正常关闭连接（EOF、已下载 < 期望大小）时误当作下载完成去校验并删除 `.part` 的问题（Mac 冷跑实测 722 MB 镜像下到 189 MB 时触发）：未下完视为中断、保留 `.part`，同轮用 Range 自动续传最多 5 次（指数退避 2/4/8/16/32s，打印第几次续传）；只有大小完整但 SHA 不符才删除；服务器不支持 Range 时从头下载并提示；`cchouse up` 失败时耗时表先刷新下载记录，并把有失败步骤的运行标为「未完成」。
-- 修复云构建的 amd64 OVA 被 VMware OVF Tool 拒绝导入的问题。VMDK 转换使用包含压缩数据块对齐与结束标记修复的 QEMU，上载前重新读取归档，检查 OVF 的磁盘引用和 SHA-256 清单。
-- 修复 Tart 联网重启后的 mihomo 预热探针未引用 `known_hosts` 路径的问题。macOS 默认私有目录含空格，旧写法导致 SSH 主机密钥校验失败。
-- Tart 黄金镜像构建的 USTC apt 镜像仅在构建期间生效。关机前恢复 Debian 官方普通源和安全源，并在空状态断言中拒绝交付 `/etc/apt` 仍含 USTC 的镜像。
-- Linux 桌面网络检查页在客机代理启动或查询服务暂不可用时进行限时重试，等待期间显示黄色状态。出口元数据优先查询 IPQuery，备用 IPinfo，仍用 ipify 独立核对 IP。全部尝试结束后仍无法完成核对时提示刷新或运行自动验收。
-- 修复 `scripts/verify-linux.sh` 在 VirtualBox NAT 端口转发下仍连 22 端口的问题：`instance.env` 可选 `SSH_PORT`（默认 22），ssh 使用 `-p`、scp 使用 `-P`。Windows 上按绝对路径调用 `C:\Windows\System32\OpenSSH\ssh.exe` 与同目录 `scp.exe`，避免 Git Bash 把 `/usr/bin/ssh` 放在 PATH 最前盖住 `cchouse.py` 预置的 System32 OpenSSH，也避开会忽略 `ConnectTimeout` 的 `C:\Program Files\OpenSSH\ssh.exe`。System32 ssh 认 `-i` 的 `/c/...`，但不认 `UserKnownHostsFile="/c/..."`；选中该客户端时用 `cygpath -m` 把密钥和 `known_hosts` 转成 `C:/...`，没有 `cygpath` 时保持原路径。
-- Windows 的 `cchouse up` 不再调用 `ssh-keyscan.exe`（System32 的 keyscan 在 HVCI 下会卡住）。客机 `firstboot.sh` 生成 SSH 主机密钥后，最多用 2 秒把一行 `CCHOUSE_HOSTKEY` 写到串口（VirtualBox COM1 文件、VMware `serial0` 文件）。宿主据此写入 `known_hosts`，再用 System32 `ssh.exe` 和 `StrictHostKeyChecking=yes` 探测。串口没有这一行时，只在确认地址属于这台虚拟机之后用 `StrictHostKeyChecking=accept-new` 做第一次连接。等待有 180 秒上限，主机密钥对不上就立刻失败。Apple Silicon 的 Tart 仍用 `ssh-keyscan`。
-- Windows 上 `cchouse up` 检测到 VMware（`vmrun`）时仍用 VMware；没装时用 VirtualBox。基础包装只从 Oracle 官网下载，版本和 SHA-256 写在 `guest-linux/virtualbox-manifest.json`，静默参数为 `ADDLOCAL=VBoxApplication`（`--msiparams` 后每个属性单独一项），不含附加包，仓库不分发二进制。静默安装仍会弹出 Windows UAC。`scripts/vm-virtualbox.ps1` 导入同一份 Debian 13 OVA：只用 NAT，按 tag 在宿主 `127.0.0.1` 的 `2222`–`2421` 里选空闲端口写入 `SSH_PORT` 再转到客机 22（同一 tag 已写入且仍空闲的端口保持不变）；探测前确认本虚拟机的转发规则，对不上就不把主机钥写入 `known_hosts`。挂 `seed.iso` 离线首启，卸盘后开网卡、验收并打快照。`VMNET_CIDR=10.0.2.0/24` 在渲染前写入，`GUEST_IP=127.0.0.1`，`GUEST_IF=enp0s3`，不改 `ROUTER_IP`。Apple Silicon 仍走 Tart，Intel Mac 仍走 VMware。单测覆盖后端选择、清单校验和 IDE 控制器解析，CI 不安装 VirtualBox。
+- 发布锁定的源码 ZIP、Mac/Windows 引导脚本与 SHA-256 清单。Windows 提供单行 PowerShell 安装，缺少 VirtualBox 时校验后安装 Oracle VirtualBox 7.2.22 基础包。
+- Windows 安装改为 VirtualBox + NAT，移除 VMware 安装后端。Windows 和 Mac 加入按安装记录预览、确认、卸载的流程。
+- VirtualBox 经本地端口转发和 SSH 执行首启、注入与验收。首次主机密钥优先从串口读取，Windows 验收使用系统 OpenSSH。
+- 发布版沿用 preview.2 的 amd64 OVA 和 arm64 TVM。
+
+## [v2.0.0-preview.2](https://github.com/nana-fox/cchouse/releases/tag/v2.0.0-preview.2) · 2026-11-26
+
+- 发布 Debian 13 amd64 OVA（当时面向 VMware Workstation）和 Apple Silicon Tart arm64 TVM。镜像加入 CJK 字体、fcitx5、tint2、Chromium 桌面策略、受限的关机/重启授权与 Tart 剪贴板支持。
+- 引入 `up` 交互安装。后台并行下载、摘要校验、断点续传、计时、失败清理与续跑，自动离线注入、验收并保存干净快照。
+- 加入脱敏诊断、Stripe 可达性 WARN 和可选专用 Stripe 节点。镜像写入构建提交与时间，首启离线安装 Claude Code 时原子落盘。
+- 修复 VMware OVA 导入、Tart 私有路径空格、macOS bash 3.2 验收、下载提前 EOF 和构建镜像源残留。
+
+## [v2.0.0-preview.1](https://github.com/nana-fox/cchouse/releases/tag/v2.0.0-preview.1) · 2026-11-25
+
+- 首次发布空状态 Debian 13 黄金镜像。amd64 为 VMware Workstation/Fusion OVA，Apple Silicon 为 Tart arm64 TVM。两个制品随附 SHA-256，均通过 17 项空状态检查。
+- Linux 客机模板提供单节点与链式代理、默认断网防护和离线首启注入。Claude Code 由宿主校验后离线安装。
