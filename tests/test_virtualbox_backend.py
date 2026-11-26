@@ -230,6 +230,66 @@ class TestVirtualBoxSelection(unittest.TestCase):
         self.assertIn("ROUTER_IP=192.168.100.1\n", vbox)
 
 
+class TestVirtualBoxAutoinstall(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.installer = Path(temp.name) / "VirtualBox.exe"
+        self.installer.write_bytes(b"synthetic installer")
+        self.manifest = {
+            "version": "7.2.22",
+            "sha256": hashlib.sha256(self.installer.read_bytes()).hexdigest(),
+            "url": PINNED_URL,
+        }
+        self.ctx = types.SimpleNamespace(
+            backend="virtualbox", dry_run=False, state={},
+            vbox_manifest=self.manifest, vbox_installer=self.installer,
+            wait_download=mock.Mock(), virtualbox=mock.Mock(), save_state=mock.Mock(),
+        )
+
+    def test_missing_virtualbox_verifies_and_announces_before_launch(self):
+        out = io.StringIO()
+
+        def at_launch(*args, **kwargs):
+            self.assertIn("将安装 Oracle VirtualBox 7.2.22", out.getvalue())
+            self.assertIn("UAC", out.getvalue())
+
+        self.ctx.virtualbox.side_effect = at_launch
+        with mock.patch.object(cchouse_mod, "vboxmanage_present", return_value=False), mock.patch("sys.stdout", out):
+            cchouse_mod._ensure_virtualbox_installed(self.ctx)
+        self.ctx.wait_download.assert_called_once_with("virtualbox")
+        self.ctx.virtualbox.assert_called_once_with("install", Installer=self.installer, Sha256=self.manifest["sha256"])
+
+    def test_existing_virtualbox_skips_download_and_install(self):
+        with mock.patch.object(cchouse_mod, "vboxmanage_present", return_value=True):
+            cchouse_mod._ensure_virtualbox_installed(self.ctx)
+        self.ctx.wait_download.assert_not_called()
+        self.ctx.virtualbox.assert_not_called()
+
+    def test_bad_hash_stops_before_execution_and_keeps_instance_unclaimed(self):
+        self.installer.write_bytes(b"tampered")
+        with mock.patch.object(cchouse_mod, "vboxmanage_present", return_value=False):
+            with self.assertRaisesRegex(cchouse_mod.StepError, "校验") as failure:
+                cchouse_mod.step_import(self.ctx)
+        self.assertIn(PINNED_URL, str(failure.exception))
+        self.ctx.virtualbox.assert_not_called()
+        self.ctx.save_state.assert_not_called()
+        self.assertEqual(self.ctx.state, {})
+
+    def test_download_or_uac_failure_returns_official_link_without_retrying_install(self):
+        for fail_at in ("wait_download", "virtualbox"):
+            with self.subTest(fail_at=fail_at):
+                self.ctx.wait_download.reset_mock(side_effect=True)
+                self.ctx.virtualbox.reset_mock(side_effect=True)
+                getattr(self.ctx, fail_at).side_effect = cchouse_mod.StepError("synthetic failure")
+                with mock.patch.object(cchouse_mod, "vboxmanage_present", return_value=False), mock.patch("sys.stdout", io.StringIO()):
+                    with self.assertRaisesRegex(cchouse_mod.StepError, "synthetic failure") as failure:
+                        cchouse_mod.step_import(self.ctx)
+                self.assertIn(PINNED_URL, str(failure.exception))
+                self.assertEqual(self.ctx.virtualbox.call_count, int(fail_at == "virtualbox"))
+                self.ctx.save_state.assert_not_called()
+
+
 class TestVirtualBoxManifest(unittest.TestCase):
     def test_shipped_manifest_matches_pinned_oracle_package(self):
         got = downloads.load_virtualbox_installer(MANIFEST)
@@ -328,7 +388,7 @@ class TestVirtualBoxScript(unittest.TestCase):
         self.assertLess(delete.find("poweroff"), delete.find("unregistervm"))
         self.assertIn("--delete", delete)
         self.assertIn("-cne $Name", delete)
-        self.assertIn('"delete" { Remove-CchouseVBoxVM $CcVmName }', src)
+        self.assertIn('"delete" { Remove-CchouseVBoxVM -Name $CcVmName -VmDir $CcVmDir }', src)
         firstboot = src.split("function Invoke-CchouseVBoxFirstboot", 1)[1].split("function Invoke-CchouseVBoxBoot", 1)[0]
         self.assertLess(firstboot.find("Enable-CchouseVBoxSerialLog"), firstboot.find("Start-CchouseVmDetached"))
         self.assertLess(src.rfind("Resolve-CchouseFirstbootStop"), src.find("HARD_POWEROFF=1"))

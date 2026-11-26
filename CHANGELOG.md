@@ -2,6 +2,7 @@
 
 ## v2.0-preview
 
+- Windows 首次运行 `up` 时，若缺 VirtualBox，则从 Oracle 下载锁定的 7.2.22 并核对官方 SHA-256。安装前显示说明，至多一次 UAC。下载、校验或安装失败时退出并给出官方链接。`remove` 在现有预览与确认流程中核对实例名称和虚拟机配置路径，关机后按核对过的 UUID 注销并删除虚拟机。
 - Windows 安装与验收统一使用 VirtualBox（`virtualbox-linux`）。环境自检、诊断、卸载与 GTR 验收同步切换。旧后端的实例留在原私有目录，请为新安装使用新的 tag。
 
 - Windows PowerShell 5.1 的 SSH 探测遇到超时会继续重试，主机密钥不符仍立即停止。Windows 脚本统一按原生命令退出码处理失败，保留独立的标准错误输出。CI 覆盖首次 SSH 超时后重试成功的路径。

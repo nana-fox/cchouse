@@ -1166,18 +1166,22 @@ def _ensure_virtualbox_installed(ctx):
     if ctx.dry_run:
         ctx.virtualbox("install", Installer=ctx.vbox_installer, Sha256=man["sha256"])
         return
-    if not vboxmanage_present():
+    if vboxmanage_present():
+        return
+    try:
         ctx.wait_download("virtualbox")
-        try:
-            downloads.require_sha256(ctx.vbox_installer, man["sha256"])
-        except downloads.DownloadError as exc:
-            raise StepError(str(exc)) from None
-    ctx.virtualbox("install", Installer=ctx.vbox_installer, Sha256=man["sha256"])
+        downloads.require_sha256(ctx.vbox_installer, man["sha256"])
+        print(f"  将安装 Oracle VirtualBox {man['version']} 基础包。若弹出 Windows UAC，请确认一次。", flush=True)
+        ctx.virtualbox("install", Installer=ctx.vbox_installer, Sha256=man["sha256"])
+    except (StepError, downloads.DownloadError, OSError) as exc:
+        raise StepError(f"VirtualBox 自动安装失败：{exc}\n  Oracle 官方安装包：{man['url']}") from None
 
 
 def step_import(ctx):
     # 只重建 up 自己建过的虚拟机；同名的既有虚拟机（可能已登录）绝不覆盖
     owned = ctx.state.get("vm_created_by_up") is True
+    if ctx.backend == "virtualbox":
+        _ensure_virtualbox_installed(ctx)
     if not owned and vm_exists(ctx):
         raise StepError(
             f"已存在同名虚拟机 {ctx.vm_name}（非本次 up 创建），为避免覆盖已登录环境不会删除；"
@@ -1200,12 +1204,12 @@ def step_import(ctx):
         apply_virtualbox_guest_net(ctx)
         ctx.state.update(vm_created_by_up=True, vm_name=ctx.vm_name, vm_backend=ctx.backend)
         ctx.save_state()
-        _ensure_virtualbox_installed(ctx)
         ctx.virtualbox(
             "import",
             Ova=ctx.image_path,
             VmName=ctx.vm_name,
             VmDir=ctx.private_dir / "vm",
+            ReplaceExisting="yes" if owned else "no",
             SshPort=str(ctx.vbox_ssh_port),
             HostKeyLog=str(ctx.hostkey_log),
         )
@@ -1484,13 +1488,17 @@ def _tart_remove_plan(vm_name, snapshot, private_dir, inventory):
 def _virtualbox_remove_plan(vm_name, snapshot, private_dir, inventory):
     if not isinstance(vm_name, str) or not re.fullmatch(r"claude-[a-z][a-z0-9_-]{1,15}", vm_name):
         raise StepError("state.json 的 VirtualBox 虚拟机名无法精确匹配")
+    vm_dir = private_dir / "vm"
+    config = vm_dir / vm_name / f"{vm_name}.vbox"
+    if config.resolve() != config:
+        raise StepError("VirtualBox 配置或其上级目录为链接，需手动核对")
     label = f"虚拟机 {vm_name}（先关机，再 VBoxManage unregistervm --delete"
     if snapshot:
         label += f"，含快照 {snapshot}"
-    return [(f"{label}）", [
+    return [(f"{label}） {config}", [
         "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
         str(ROOT / "scripts" / "vm-virtualbox.ps1"),
-        "-CcOp", "delete", "-CcVmName", vm_name,
+        "-CcVmDir", str(vm_dir), "-CcOp", "delete", "-CcVmName", vm_name,
     ])]
 
 

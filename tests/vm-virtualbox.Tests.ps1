@@ -223,6 +223,102 @@ try {
     }
   }
 
+  & {
+    $installer = Join-Path $tmp "VirtualBox test installer.exe"
+    [System.IO.File]::WriteAllText($installer, "synthetic bytes")
+    $pinnedSha = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash
+    $launches = [System.Collections.Generic.List[object]]::new()
+    $installerExit = 0
+    function Start-Process {
+      param($FilePath, $ArgumentList, $Verb, [switch]$Wait, [switch]$PassThru, $ErrorAction)
+      $launches.Add($PSBoundParameters)
+      return [pscustomobject]@{ ExitCode = $installerExit }
+    }
+    function Get-CchouseVBoxManage {
+      if ($launches.Count -gt 0 -and $installerExit -eq 0) { return "installed-VBoxManage.exe" }
+    }
+
+    Assert-Throws "installer SHA-256 mismatch blocks elevation" {
+      Install-CchouseVirtualBox -Installer $installer -ExpectedSha ("b" * 64)
+    } "SHA-256 mismatch"
+    Assert-Equal "bad installer was not launched" $launches.Count 0
+    Install-CchouseVirtualBox -Installer $installer -ExpectedSha $pinnedSha
+    Install-CchouseVirtualBox -Installer $installer -ExpectedSha $pinnedSha
+    Assert-Equal "verified installer elevated exactly once" $launches.Count 1
+    Assert-Equal "elevated the verified executable" $launches[0].FilePath $installer
+    Assert-Equal "elevated via RunAs" $launches[0].Verb "RunAs"
+    Assert-True "installer is awaited with process exit status" ($launches[0].Wait -and $launches[0].PassThru)
+    Assert-True "elevated installer is silent NAT-only" (
+      $launches[0].ArgumentList -contains "--silent" -and $launches[0].ArgumentList -contains "ADDLOCAL=VBoxApplication"
+    )
+    $launches.Clear()
+    $installerExit = 1603
+    Assert-Throws "installation failure propagates" {
+      Install-CchouseVirtualBox -Installer $installer -ExpectedSha $pinnedSha
+    } "1603"
+    Assert-Equal "installer failure is not retried" $launches.Count 1
+  }
+
+  & {
+    $vmDir = Join-Path $tmp "vm 测试"
+    $ova = Join-Path $tmp "image.ova"
+    [System.IO.File]::WriteAllText($ova, "synthetic OVA")
+    $fixtureName = "claude-cc01"
+    $fixtureUuid = "11111111-aaaa-bbbb-cccc-111111111111"
+    $config = Join-Path (Join-Path $vmDir $fixtureName) "$fixtureName.vbox"
+    $vm = @{ Registered = $true; PowerOff = $true; Config = $config; ReportedName = $fixtureName; State = "running" }
+    $commands = [System.Collections.Generic.List[string]]::new()
+    function Invoke-CchouseVBox {
+      param($CcArgumentList, $FailureMessage)
+      switch ($CcArgumentList[0]) {
+        "list" {
+          Assert-Equal "only list registered VMs" ($CcArgumentList -join " ") "list vms"
+          '"claude-cc01-extra" {22222222-aaaa-bbbb-cccc-222222222222}'
+          if ($vm.Registered) { '"{0}" {{{1}}}' -f $fixtureName, $fixtureUuid }
+        }
+        "controlvm" { $commands.Add($CcArgumentList -join " ") }
+        "unregistervm" {
+          $commands.Add($CcArgumentList -join " ")
+          $vm.Registered = $false
+        }
+        default { throw "unexpected mocked VBoxManage operation" }
+      }
+    }
+    function Get-CchouseShowvminfoLines {
+      param($Name)
+      Assert-Equal "lookup uses the registry UUID" $Name $fixtureUuid
+      'name="{0}"' -f $vm.ReportedName
+      'CfgFile="{0}"' -f $vm.Config.Replace('\', '\\')
+      'VMState="{0}"' -f $vm.State
+    }
+    function Wait-CchousePowerOff {
+      param($Name, $Seconds)
+      $commands.Add("wait $Name")
+      return $vm.PowerOff
+    }
+
+    Assert-Throws "fresh import cannot overwrite a registered VM" {
+      Import-CchouseVBoxOva -OvaPath $ova -Name $fixtureName -DestDir $vmDir -SshPort 2301 -ReplaceExisting "no"
+    } "not owned"
+    $vm.ReportedName = "Claude-cc01"
+    Assert-Throws "remove rejects wrong exact name" { Remove-CchouseVBoxVM -Name $fixtureName -VmDir $vmDir } "name does not match"
+    $vm.ReportedName = $fixtureName
+    $vm.Config = Join-Path $tmp "foreign.vbox"
+    Assert-Throws "remove rejects same name outside instance path" { Remove-CchouseVBoxVM -Name $fixtureName -VmDir $vmDir } "outside"
+    Assert-Equal "ownership failures do not touch the VM" $commands.Count 0
+    $vm.Config = $config
+    $vm.PowerOff = $false
+    Assert-Throws "remove stops when VM does not power off" { Remove-CchouseVBoxVM -Name $fixtureName -VmDir $vmDir } "timed out"
+    Assert-Equal "failed poweroff never unregisters" ($commands -join "|") "controlvm $fixtureUuid poweroff|wait $fixtureUuid"
+    $commands.Clear()
+    $vm.PowerOff = $true
+    Remove-CchouseVBoxVM -Name $fixtureName -VmDir $vmDir
+    Remove-CchouseVBoxVM -Name $fixtureName -VmDir $vmDir
+    Assert-Equal "remove powers off then unregisters only the verified UUID" (
+      $commands -join "|"
+    ) "controlvm $fixtureUuid poweroff|wait $fixtureUuid|unregistervm $fixtureUuid --delete"
+  }
+
   $serial = Join-Path $tmp "logs\hostkey.serial"
   Initialize-CchouseHostKeyLog -Path $serial
   Assert-Equal "created empty" ([System.IO.File]::ReadAllText($serial)) ""

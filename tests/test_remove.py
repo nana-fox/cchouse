@@ -175,8 +175,21 @@ class TestRemove(unittest.TestCase):
         self.assertEqual(self.mock_run.call_count, 1)
         cmd = self.mock_run.call_args.args[0]
         self.assertEqual(cmd[-4:], ["-CcOp", "delete", "-CcVmName", self.vm_name])
-        self.assertTrue(cmd[-5].endswith("vm-virtualbox.ps1"))
+        self.assertTrue(cmd[-7].endswith("vm-virtualbox.ps1"))
+        self.assertEqual(cmd[-6:-4], ["-CcVmDir", str(vm_dir.parent)])
+        self.assertIn(str(vm_dir / f"{self.vm_name}.vbox"), text)
         self.assertTrue(self.image.is_file())
+
+    def test_virtualbox_cancel_after_preview_keeps_instance(self):
+        self.write_state(vm_backend="virtualbox", clean_snapshot="cchouse-clean")
+        with mock.patch("builtins.input", return_value="") as confirm:
+            rc, text = self.remove()
+        self.assertEqual(rc, 0, text)
+        self.assertIn("unregistervm --delete", text)
+        self.assertIn("已取消卸载", text)
+        confirm.assert_called_once()
+        self.assertTrue((self.private / "state.json").is_file())
+        self.mock_run.assert_not_called()
 
     def test_unrelated_virtualbox_directory_blocks_uninstall(self):
         self.write_state(vm_backend="virtualbox", route="virtualbox-linux", clean_snapshot="cchouse-clean")
