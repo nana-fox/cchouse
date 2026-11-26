@@ -36,6 +36,7 @@ import sys
 import threading
 import time
 import urllib.parse
+from contextlib import contextmanager
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -751,6 +752,23 @@ class Downloader:
     def __init__(self):
         self.items = {}
         self._last_print = 0.0
+        self._log_lock = threading.Lock()
+        self._logs_paused = False
+
+    @contextmanager
+    def pause_logs(self):
+        with self._log_lock:
+            self._logs_paused = True
+        try:
+            yield
+        finally:
+            with self._log_lock:
+                self._logs_paused = False
+
+    def log(self, msg):
+        with self._log_lock:
+            if not self._logs_paused:
+                print(f"\n  [下载] {msg}", flush=True)
 
     def start(self, key, label, fn):
         if key in self.items:
@@ -943,7 +961,7 @@ class UpContext:
                 f"镜像 {art['filename']}",
                 lambda prog: downloads.fetch_verified(
                     downloads.image_urls(art, self.args.image_mirror), self.image_path, sha256=art["sha256"],
-                    size=art.get("size_bytes"), progress=prog, log=self.download_log,
+                    size=art.get("size_bytes"), progress=prog, log=self.downloader.log,
                 ),
             )
         if need_claude:
@@ -952,7 +970,7 @@ class UpContext:
                 f"Claude Code {self.claude_platform}",
                 lambda prog: downloads.fetch_claude_code(
                     self.claude_platform, self.claude_path, progress=prog, mirror=self.args.npm_mirror,
-                    log=self.download_log,
+                    log=self.downloader.log,
                 )["status"],
             )
         if need_vbox:
@@ -962,13 +980,9 @@ class UpContext:
                 f"VirtualBox {man['version']}",
                 lambda prog, manifest=man, dest=self.vbox_installer: downloads.fetch_verified(
                     [manifest["url"]], dest, sha256=manifest["sha256"], size=manifest.get("size_bytes"),
-                    progress=prog, log=self.download_log,
+                    progress=prog, log=self.downloader.log,
                 ),
             )
-
-    @staticmethod
-    def download_log(msg):
-        print(f"\n  [下载] {msg}", flush=True)
 
     def wait_download(self, key):
         if self.dry_run:
@@ -1014,7 +1028,8 @@ def do_config(ctx):
                 raise EOFError
             raw_link = raw_link.rstrip("\r\n")
         else:
-            raw_link = getpass.getpass("请粘贴单节点代理链接（输入不回显，支持 socks5/http/vless/trojan/ss）: ")
+            with ctx.downloader.pause_logs():
+                raw_link = getpass.getpass("请粘贴单节点代理链接（输入不回显，支持 socks5/http/vless/trojan/ss）: ")
     except EOFError:
         raise StepError("输入已结束，请在终端交互运行，或用 --link-stdin 提供节点链接") from None
     except KeyboardInterrupt:
