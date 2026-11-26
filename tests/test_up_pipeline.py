@@ -395,6 +395,7 @@ class TestUpPipeline(unittest.TestCase):
             with self.assertRaises(cchouse_mod.StepError) as cm:
                 cchouse_mod.step_import(ctx)
             self.assertIn("不会删除", str(cm.exception))
+            self.assertFalse(ctx.state.get("vm_created_by_up"))
             self.assertEqual(ran, [])
             self.assertEqual(ctx.vmx.read_text(), "logged-in vm")
             # up 自己建的（首启失败后重来）允许重建
@@ -403,6 +404,34 @@ class TestUpPipeline(unittest.TestCase):
             cchouse_mod.write_env_secure(ctx.env_path, "TAG=cc05\n")
             cchouse_mod.step_import(ctx)
             self.assertTrue(any("-CcOp" in c and "import" in c for c in ran))
+            state = json.loads(ctx.state_path.read_text(encoding="utf-8"))
+            self.assertEqual(state["vm_name"], "claude-cc05")
+            self.assertEqual(state["vm_backend"], "vmware")
+            self.assertEqual(state["private_dir"], str(ctx.private_dir.resolve()))
+
+    def test_tart_import_refuses_existing_guest_without_claiming_it(self):
+        with tempfile.TemporaryDirectory() as td:
+            ctx = _ctx(td)
+            with mock.patch.object(cchouse_mod.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run, \
+                    self.assertRaisesRegex(cchouse_mod.StepError, "已存在同名虚拟机"):
+                cchouse_mod.step_import(ctx)
+            run.assert_called_once()
+            self.assertEqual(run.call_args.args[0][-2:], ["exists", ctx.vm_name])
+            self.assertFalse(ctx.state.get("vm_created_by_up"))
+            self.assertFalse(ctx.state_path.exists())
+
+    def test_failed_fresh_clone_leaves_no_ownership_marker(self):
+        with tempfile.TemporaryDirectory() as td:
+            ctx = _ctx(td)
+            results = [subprocess.CompletedProcess([], 1), subprocess.CompletedProcess([], 0)]
+            with mock.patch.object(cchouse_mod.subprocess, "run", side_effect=results), \
+                    mock.patch("sys.stdout", io.StringIO()), \
+                    mock.patch.object(ctx, "tart", side_effect=cchouse_mod.StepError("name already exists")) as tart, \
+                    self.assertRaises(cchouse_mod.StepError):
+                cchouse_mod.step_import(ctx)
+            tart.assert_called_once_with("clone-new", ctx.golden_name, ctx.vm_name)
+            self.assertFalse(ctx.state.get("vm_created_by_up"))
+            self.assertFalse(ctx.state_path.exists())
 
     def test_update_env_value_keeps_600_and_other_keys(self):
         with tempfile.TemporaryDirectory() as td:
