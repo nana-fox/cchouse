@@ -1,19 +1,19 @@
 {
   "schema_version": 2,
   "guest_os": "debian-13",
-  "image_version": "v2.0.0-preview.1",
+  "image_version": "v2.0.0-preview.2",
   "artifacts": [
     {
       "arch": "amd64",
       "route": "vmware-linux",
       "format": "ova",
       "filename": "cchouse-debian13-amd64.ova",
-      "size_bytes": 1390032896,
+      "size_bytes": 1584588800,
       "urls": [
-        "https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.1/cchouse-debian13-amd64.ova"
+        "https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.2/cchouse-debian13-amd64.ova"
       ],
-      "sha256": "8d84f1272c4c7173457e16ee782cb1bb0566d26d0b952ace0960b7b2bd1e2187",
-      "source_commit": "2cead1d2995cf27cd47723b04afc886f096e3072",
+      "sha256": "34067b331376048109d62ff6d20629eab472707f010094af104c6932e07bd855",
+      "source_commit": "37c887b2342f4f6ddd4bdd01f51f174d92eac16a",
       "included_components": [
         "debian-13-base",
         "openbox",
@@ -30,12 +30,13 @@
       "route": "tart-linux",
       "format": "tvm",
       "filename": "cchouse-debian13-arm64.tvm",
-      "size_bytes": 756561578,
+      "size_bytes": 915980115,
       "urls": [
-        "https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.1/cchouse-debian13-arm64.tvm"
+        "https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.2/cchouse-debian13-arm64.tvm"
       ],
-      "sha256": "05d6951d79c9e9d5ce6cc8ea9133763b7c66aec1fc669ce0c6d89e2eb717c7df",
-      "source_commit": "2cead1d2995cf27cd47723b04afc886f096e3072",
+      "sha256": "3b4fedb187d6bcf7d66a86e891255c695751c2c2cbbe257bf7453d5d1c064b83",
+      "source_commit": "37c887b2342f4f6ddd4bdd01f51f174d92eac16a",
+      "oci_ref": "ghcr.io/nana-fox/cchouse-debian13-arm64@sha256:50e71aa4fbe82b189f1d8b2a7c34edfd45526d200c0779da7eaa936f525c5998",
       "import_command": "tart import cchouse-debian13-arm64.tvm <VM_NAME>",
       "included_components": [
         "debian-13-base",
