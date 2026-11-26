@@ -553,16 +553,22 @@ Assert-Equal "state missing" (Get-CchouseVBoxState -Lines @()) "missing"
 
 # --- preview.5: bootstrap-windows.ps1 args, curl --http1.1 fallback, IWR fallback, cchouse.cmd ---
 $bootstrapPath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\scripts\bootstrap-windows.ps1"))
-. $bootstrapPath -CchouseLoadFunctionsOnly
-
-$defaultUp = @(Get-CchouseBootstrapUpArgs)
-Assert-Equal "bootstrap default up args" ($defaultUp -join " ") "up --tag cc01 --vm-backend virtualbox"
-$customUp = @(Get-CchouseBootstrapUpArgs -Tag "cc02" -ImageMirror "https://mirror.example/img" -NpmMirror "https://mirror.example/npm")
-Assert-Equal "bootstrap custom up args" ($customUp -join " ") "up --tag cc02 --vm-backend virtualbox --image-mirror https://mirror.example/img --npm-mirror https://mirror.example/npm"
-
 $bsTmp = Join-Path ([System.IO.Path]::GetTempPath()) ("cchouse-bs-test-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Force -Path $bsTmp | Out-Null
 try {
+  # Release assets are emitted with UTF-8 BOM by tools/build-bootstrap-release.py; mirror that for PS 5.1 dot-sourcing.
+  $bootstrapBom = Join-Path $bsTmp "bootstrap-windows-bom.ps1"
+  [System.IO.File]::WriteAllText(
+    $bootstrapBom,
+    [System.IO.File]::ReadAllText($bootstrapPath, [System.Text.UTF8Encoding]::new($false)),
+    [System.Text.UTF8Encoding]::new($true)
+  )
+  . $bootstrapBom -CchouseLoadFunctionsOnly
+
+  $defaultUp = @(Get-CchouseBootstrapUpArgs)
+  Assert-Equal "bootstrap default up args" ($defaultUp -join " ") "up --tag cc01 --vm-backend virtualbox"
+  $customUp = @(Get-CchouseBootstrapUpArgs -Tag "cc02" -ImageMirror "https://mirror.example/img" -NpmMirror "https://mirror.example/npm")
+  Assert-Equal "bootstrap custom up args" ($customUp -join " ") "up --tag cc02 --vm-backend virtualbox --image-mirror https://mirror.example/img --npm-mirror https://mirror.example/npm"
   $fakePy = Join-Path $bsTmp "python.exe"
   $fakeCode = Join-Path $bsTmp "code"
   $cmdPath = Write-CchouseCmdEntry -LocalAppData $bsTmp -PythonExe $fakePy -CodeDir $fakeCode
