@@ -5,6 +5,7 @@
 #
 # 子命令：
 #   exists    <VM>
+#   status    <VM>                            # 输出 running | stopped | missing
 #   import    <VM> <file.tvm>                 # 已存在则跳过
 #   import-new <VM> <file.tvm>                # 已存在则拒绝
 #   clone     <SRC> <DST>                     # DST 已存在先删除
@@ -12,12 +13,38 @@
 #   firstboot <VM> <seed.iso> <SSH_KEY> [LOG]  # 挂只读 seed.iso 离线首启注入，完成后关机
 #   boot      <VM> <SSH_KEY> <KNOWN_HOSTS> <IP_FILE> [LOG]  # 联网后台开机，等 SSH，写 known_hosts 与 IP
 #   gui       <VM> [LOG]                      # 带图形界面后台开机（交给用户登录）
+#   open      <VM> [LOG]                      # 已运行则不重复开；已关机则带图形界面启动
 #   stop      <VM>
+#   restore   <VM> <SNAP>                     # 停机后从干净快照克隆恢复 <VM>
 #   snapshot  <VM> <SNAP>                     # 关机后 tart clone 成干净快照（已存在先删除）
 #   snapshot-new <VM> <SNAP>                  # 已存在则拒绝
 #   delete    <VM>
 
 CCHOUSE_TART_PID=""
+
+cchouse_ensure_tart_in_path() {
+  if command -v tart >/dev/null 2>&1; then
+    return 0
+  fi
+  local cand
+  for cand in "$HOME/.local/bin/tart" "/opt/homebrew/bin/tart"; do
+    if [ -x "$cand" ]; then
+      PATH="$(dirname "$cand"):$PATH"
+      export PATH
+      return 0
+    fi
+  done
+  for cand in "$HOME/Library/Application Support/cchouse/bootstrap/tools"/tart-*/Contents/MacOS/tart; do
+    if [ -x "$cand" ]; then
+      PATH="$(dirname "$cand"):$PATH"
+      export PATH
+      return 0
+    fi
+  done
+  return 0
+}
+
+cchouse_ensure_tart_in_path
 
 cchouse_tart_ip() {
   tart ip "$1" --wait 2 2>/dev/null || tart ip --resolver=arp "$1" --wait 2 2>/dev/null || true
@@ -153,12 +180,56 @@ cchouse_tart_snapshot() {
   tart clone "$vm" "$snap"
 }
 
+cchouse_tart_status() {
+  local vm="$1" local_vms state
+  if ! cchouse_tart_exists "$vm"; then
+    echo "missing"
+    return 0
+  fi
+  local_vms="$(tart list --source local 2>/dev/null || true)"
+  state="$(printf '%s\n' "$local_vms" | awk -v n="$vm" '$2 == n {print $NF; exit}')"
+  if [ "$state" = "running" ]; then
+    echo "running"
+  else
+    echo "stopped"
+  fi
+}
+
+cchouse_tart_open() {
+  local vm="$1" runlog="${2:-/dev/null}" st
+  st="$(cchouse_tart_status "$vm")"
+  if [ "$st" = "missing" ]; then
+    echo "Tart VM $vm does not exist." >&2
+    return 1
+  fi
+  if [ "$st" = "running" ]; then
+    echo "VM $vm is already running."
+    return 0
+  fi
+  cchouse_tart_gui "$vm" "$runlog"
+}
+
+cchouse_tart_restore() {
+  local vm="$1" snap="$2"
+  if ! cchouse_tart_exists "$snap"; then
+    echo "Clean snapshot $snap does not exist." >&2
+    return 1
+  fi
+  if cchouse_tart_exists "$vm"; then
+    cchouse_tart_stop "$vm" || return 1
+    tart delete "$vm" || return 1
+  fi
+  echo "Restoring $vm from clean snapshot $snap..."
+  tart clone "$snap" "$vm"
+}
+
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
   set -uo pipefail
   op="${1:-}"
   [ $# -gt 0 ] && shift
   case "$op" in
     exists) cchouse_tart_exists "$@" ;;
+    status) cchouse_tart_status "$@" ;;
     import) cchouse_tart_import "$@" ;;
     import-new) tart import "$2" "$1" ;;
     clone) cchouse_tart_clone "$@" ;;
@@ -166,10 +237,12 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     firstboot) cchouse_tart_firstboot "$@" ;;
     boot) cchouse_tart_boot "$@" ;;
     gui) cchouse_tart_gui "$@" ;;
+    open) cchouse_tart_open "$@" ;;
     stop) cchouse_tart_stop "$@" ;;
+    restore) cchouse_tart_restore "$@" ;;
     snapshot) cchouse_tart_snapshot "$@" ;;
     snapshot-new) cchouse_tart_stop "$1" && tart clone "$1" "$2" ;;
     delete) cchouse_tart_stop "$1" && tart delete "$1" ;;
-    *) echo "Usage: $0 exists|import|import-new|clone|clone-new|firstboot|boot|gui|stop|snapshot|snapshot-new|delete ..." >&2; exit 2 ;;
+    *) echo "Usage: $0 exists|status|import|import-new|clone|clone-new|firstboot|boot|gui|open|stop|restore|snapshot|snapshot-new|delete ..." >&2; exit 2 ;;
   esac
 fi

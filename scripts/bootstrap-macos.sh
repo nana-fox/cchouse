@@ -15,6 +15,13 @@ stage=''
 lock=''
 bootstrap_to_remove=''
 tag="${CCHOUSE_TAG:-cc01}"
+image_mirror="${CCHOUSE_IMAGE_MIRROR:-}"
+npm_mirror="${CCHOUSE_NPM_MIRROR:-}"
+bootstrap_mirror="${CCHOUSE_BOOTSTRAP_MIRROR:-}"
+curl_bin="${CCHOUSE_CURL_BIN:-curl}"
+fetch_max_attempts="${CCHOUSE_BOOTSTRAP_RETRIES:-6}"
+fetch_base_backoff="${CCHOUSE_BOOTSTRAP_BACKOFF:-2}"
+
 cleanup() {
   if [ -n "$stage" ]; then rm -rf -- "$stage"; fi
   if [ -n "$lock" ]; then rmdir -- "$lock"; fi
@@ -37,7 +44,17 @@ while [ "$#" -gt 0 ]; do
       tag="$2"
       shift 2
       ;;
-    *) echo '用法：bootstrap-macos.sh [--tag <实例名>]' >&2; exit 2 ;;
+    --image-mirror)
+      if [ "$#" -lt 2 ]; then echo '--image-mirror 需要一个 URL。' >&2; exit 2; fi
+      image_mirror="$2"
+      shift 2
+      ;;
+    --npm-mirror)
+      if [ "$#" -lt 2 ]; then echo '--npm-mirror 需要一个 URL。' >&2; exit 2; fi
+      npm_mirror="$2"
+      shift 2
+      ;;
+    *) echo '用法：bootstrap-macos.sh [--tag <实例名>] [--image-mirror <URL>] [--npm-mirror <URL>]' >&2; exit 2 ;;
   esac
 done
 if [[ ! "$tag" =~ ^[a-z][a-z0-9_-]{1,15}$ ]]; then
@@ -66,6 +83,10 @@ echo "cchouse $version 将校验并准备私有 Python 和源码，写入 ${root
 if command -v tart >/dev/null && tart --version >/dev/null 2>&1; then
   echo '将复用本机 Tart。'
   needs_tart=0
+elif [ -x "$tart_home/Contents/MacOS/tart" ] && "$tart_home/Contents/MacOS/tart" --version >/dev/null 2>&1; then
+  echo '将复用已准备的私有 Tart。'
+  needs_tart=0
+  export PATH="$tart_home/Contents/MacOS:$PATH"
 else
   echo '将从官方 Release 校验并准备私有 Tart。'
   needs_tart=1
@@ -85,15 +106,102 @@ verified() {
 }
 
 fetch() {
-  local url="$1" sha="$2" dest="$3"
-  if verified "$dest" "$sha"; then return; fi
-  echo "下载 ${url##*/}..."
-  curl -fsSL --proto '=https' --proto-redir '=https' --retry 2 "$url" -o "$stage/download"
-  if ! verified "$stage/download" "$sha"; then
-    echo "SHA-256 校验失败：${url##*/}" >&2
-    exit 1
+  local label="$1" url="$2" sha="$3" dest="$4"
+  local part="${dest}.part"
+  local attempt=1
+  local use_http11=0
+  local wait_secs="$fetch_base_backoff"
+  local effective_url="$url"
+  local rc=0
+  local curl_args=()
+
+  if [ -n "$bootstrap_mirror" ]; then
+    effective_url="${bootstrap_mirror%/}/${url##*/}"
   fi
-  mv -f -- "$stage/download" "$dest"
+
+  if verified "$dest" "$sha"; then
+    echo "[引导依赖] ${label} 已缓存且校验通过，跳过。"
+    return 0
+  fi
+
+  while [ "$attempt" -le "$fetch_max_attempts" ]; do
+    local had_part=0
+    if [ -f "$part" ]; then
+      local have_bytes
+      have_bytes="$(wc -c < "$part" | tr -d ' ')"
+      if [ "$have_bytes" -gt 0 ]; then
+        had_part=1
+      fi
+      echo "[引导依赖] 下载 ${label}（第 ${attempt}/${fetch_max_attempts} 次，从 ${have_bytes} 字节处断点续传）..."
+    else
+      echo "[引导依赖] 下载 ${label}（第 ${attempt}/${fetch_max_attempts} 次）..."
+    fi
+
+    curl_args=(
+      -fL -C -
+      --proto '=https' --proto-redir '=https'
+      --connect-timeout 20
+      --speed-limit 10240 --speed-time 30
+    )
+    if [ "$use_http11" = 1 ]; then
+      curl_args+=(--http1.1)
+    fi
+
+    rc=0
+    "$curl_bin" "${curl_args[@]}" "$effective_url" -o "$part" || rc=$?
+
+    if [ "$rc" -eq 0 ]; then
+      if verified "$part" "$sha"; then
+        mv -f -- "$part" "$dest"
+        echo "[引导依赖] ${label} 下载并校验完成。"
+        return 0
+      fi
+      rm -f -- "$part"
+      if [ "$had_part" -eq 1 ] && [ "$attempt" -lt "$fetch_max_attempts" ]; then
+        echo "[引导依赖] ${label} 续传结果 SHA-256 不匹配，已删除旧分片并从头重下..." >&2
+      else
+        echo "SHA-256 校验失败：[引导依赖] ${label}（${url##*/}），已删除损坏文件。" >&2
+        exit 1
+      fi
+    else
+      case "$rc" in
+        18|56|92)
+          if [ "$use_http11" = 0 ]; then
+            echo "[引导依赖] ${label} 遇到连接/HTTP2 异常（curl 退出码 ${rc}），切换 --http1.1 并保留已下载分片继续续传..." >&2
+            use_http11=1
+          else
+            echo "[引导依赖] ${label} 下载中断（curl 退出码 ${rc}），保留已下载分片继续续传..." >&2
+          fi
+          ;;
+        33)
+          echo "[引导依赖] ${label} 服务器拒绝断点续传（curl 33），清理分片重新下载..." >&2
+          rm -f -- "$part"
+          ;;
+        *)
+          echo "[引导依赖] ${label} 下载失败（curl 退出码 ${rc}），已下载分片保留在 ${part}..." >&2
+          ;;
+      esac
+    fi
+
+    if [ "$attempt" -lt "$fetch_max_attempts" ]; then
+      echo "[引导依赖] ${wait_secs}s 后重试..." >&2
+      sleep "$wait_secs"
+      wait_secs=$((wait_secs * 2))
+      if [ "$wait_secs" -gt 32 ]; then
+        wait_secs=32
+      fi
+    fi
+    attempt=$((attempt + 1))
+  done
+
+  echo "" >&2
+  echo "✗ [引导依赖] ${label} 下载失败（已重试 ${fetch_max_attempts} 次）。" >&2
+  echo "  已下载的分片已保留在：${part}" >&2
+  echo "  下一步建议：" >&2
+  echo "  1. 直接重新运行同一条首页命令，会自动从断点继续下载；" >&2
+  echo "  2. 如当前开了代理导致 GitHub CDN 不稳，可尝试切换节点或临时取消 HTTPS_PROXY / ALL_PROXY 后重跑；" >&2
+  echo "  3. 也可设置 CCHOUSE_BOOTSTRAP_MIRROR=<镜像目录URL> 后重跑（仍会严格校验 SHA-256）。" >&2
+  exit 1
 }
 
 install_tar() {
@@ -106,14 +214,14 @@ install_tar() {
 }
 
 source_zip="$root/downloads/cchouse-$version-$source_sha.zip"
-fetch "https://github.com/nana-fox/cchouse/releases/download/$version/cchouse-$version.zip" "$source_sha" "$source_zip"
+fetch "cchouse 源码包" "https://github.com/nana-fox/cchouse/releases/download/$version/cchouse-$version.zip" "$source_sha" "$source_zip"
 python_tar="$root/downloads/python-$python_sha.tar.gz"
-fetch "$python_url" "$python_sha" "$python_tar"
+fetch "私有 Python" "$python_url" "$python_sha" "$python_tar"
 install_tar "$python_tar" "$python_home" python
 
 if [ "$needs_tart" = 1 ]; then
   tart_tar="$root/downloads/tart-$tart_sha.tar.gz"
-  fetch "$tart_url" "$tart_sha" "$tart_tar"
+  fetch "私有 Tart" "$tart_url" "$tart_sha" "$tart_tar"
   install_tar "$tart_tar" "$tart_home" tart.app
   export PATH="$tart_home/Contents/MacOS:$PATH"
   tart --version >/dev/null
@@ -134,5 +242,17 @@ if [ "$("$python_home/bin/python3" -I scripts/cchouse.py --version)" != "cchouse
   echo '源码包版本与引导脚本不一致。请使用对应版本的 Release 引导脚本。' >&2
   exit 1
 fi
+
+# 安装 ~/.local/bin/cchouse 命令入口
+"$python_home/bin/python3" -I -c "import sys; sys.path.insert(0, 'scripts'); import launcher; launcher.install_cli_entry()" || true
+
+up_args=(up --tag "$tag")
+if [ -n "$image_mirror" ]; then
+  up_args+=(--image-mirror "$image_mirror")
+fi
+if [ -n "$npm_mirror" ]; then
+  up_args+=(--npm-mirror "$npm_mirror")
+fi
+
 echo "正在启动 cchouse up。重跑同一条首页命令可续跑。工作目录：$code"
-"$python_home/bin/python3" -I scripts/cchouse.py up --tag "$tag"
+"$python_home/bin/python3" -I scripts/cchouse.py "${up_args[@]}"

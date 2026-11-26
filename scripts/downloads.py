@@ -27,6 +27,11 @@ IMAGE_MIRROR_ENV = "CCHOUSE_IMAGE_MIRROR"
 NPM_MIRROR_ENV = "CCHOUSE_NPM_MIRROR"
 SLOW_CHECK_SECONDS = 10
 SLOW_THRESHOLD_MB_S = 1.0
+STALL_SPEED_BYTES = 16 * 1024  # 16 KB/s
+STALL_SECONDS = 30.0
+MAX_TOTAL_RETRIES = 30
+MAX_NO_PROGRESS_RETRIES = 5
+MAX_BACKOFF_SECONDS = 30.0
 
 CLAUDE_PLATFORMS = {
     "linux-x64": "@anthropic-ai/claude-code-linux-x64",
@@ -196,9 +201,15 @@ def _open(url, start, timeout):
     return urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=timeout)
 
 
-def download_resumable(url, part_path, expected_size=None, progress=None, timeout=60, opener=None, log=None):
-    """下载到 part_path，已有部分则用 Range 续传；返回最终字节数。连接提前结束（< 期望大小）抛 DownloadError 且保留 .part。"""
+def download_resumable(url, part_path, expected_size=None, progress=None, timeout=60, opener=None, log=None,
+                       stall_speed_bytes=STALL_SPEED_BYTES, stall_seconds=STALL_SECONDS, clock=None):
+    """下载到 part_path，已有部分则用 Range 续传；返回最终字节数。
+
+    - 连接提前结束（< 期望大小）抛 DownloadError 且保留 .part。
+    - 低速僵死熔断：连续 stall_seconds 秒速率低于 stall_speed_bytes 主动断开，保留 .part 交给调用方续传。
+    """
     opener = opener or _open
+    now_fn = clock or time.monotonic
     part_path = Path(part_path)
     start = part_path.stat().st_size if part_path.is_file() else 0
     if expected_size and start > expected_size:
@@ -206,8 +217,9 @@ def download_resumable(url, part_path, expected_size=None, progress=None, timeou
         start = 0
     if expected_size and start == expected_size:
         return start
+    effective_timeout = min(timeout, stall_seconds) if stall_seconds and stall_seconds > 0 else timeout
     try:
-        resp = opener(url, start, timeout)
+        resp = opener(url, start, effective_timeout)
     except urllib.error.HTTPError as exc:
         if exc.code == 416 and start:
             # Range 不可满足：多半是 .part 已完整或损坏，交给校验决定；校验失败会删除重下
@@ -227,6 +239,8 @@ def download_resumable(url, part_path, expected_size=None, progress=None, timeou
         done = start
         if progress:
             progress.update(state="downloading", done=done, start=start, total=total)
+        win_start = now_fn()
+        win_bytes = 0
         with open(part_path, mode) as f:
             while True:
                 try:
@@ -237,8 +251,21 @@ def download_resumable(url, part_path, expected_size=None, progress=None, timeou
                     break
                 f.write(chunk)
                 done += len(chunk)
+                win_bytes += len(chunk)
                 if progress:
                     progress.update(done=done)
+                if stall_seconds and stall_seconds > 0 and stall_speed_bytes and stall_speed_bytes > 0:
+                    now = now_fn()
+                    elapsed = now - win_start
+                    if elapsed >= stall_seconds:
+                        rate = win_bytes / elapsed
+                        if rate < stall_speed_bytes:
+                            raise DownloadError(
+                                f"下载速率过低（持续 {elapsed:.0f}s 仅 {rate / 1024:.1f} KB/s，"
+                                f"低于 {stall_speed_bytes // 1024} KB/s 阈值），已主动断开并从断点续传"
+                            )
+                        win_start = now
+                        win_bytes = 0
     if total and done < total:
         # 代理/服务器提前正常关闭连接（EOF 无异常）：保留 .part，交给调用方续传，不能当作下载完成去校验
         raise DownloadError(f"连接提前结束（{done}/{total} 字节），已下载部分保留，可从断点续传")
@@ -246,11 +273,13 @@ def download_resumable(url, part_path, expected_size=None, progress=None, timeou
 
 
 def fetch_verified(urls, dest, sha256=None, integrity=None, size=None, progress=None, opener=None,
-                   retries=5, backoff=2.0, log=None):
+                   retries=MAX_NO_PROGRESS_RETRIES, backoff=2.0, log=None,
+                   max_total_retries=MAX_TOTAL_RETRIES,
+                   stall_speed_bytes=STALL_SPEED_BYTES, stall_seconds=STALL_SECONDS, clock=None):
     """按 URL 列表依次尝试，断点续传 + 校验后原子落盘；已校验通过则直接跳过。返回 'skipped' 或 'downloaded'。
 
-    - 断线或连接提前结束（已下载 < size）：视为中断，不校验、不删 .part，同轮用 Range 自动续传，
-      最多 retries 次、指数退避（backoff, 2*backoff, ...），每次打印第几次续传；仍失败再换下一个 URL。
+    - 进度感知重试：只要本次中断前写入了新字节，就重置连续无进展失败计数（连续无进展上限 retries=5，总上限 max_total_retries=30）。
+    - 低速僵死熔断：连续 30s < 16 KB/s 自动断开并以 Range 续传。
     - 只有大小完整但摘要不符才删除 .part。
     """
     dest = Path(dest)
@@ -266,19 +295,39 @@ def fetch_verified(urls, dest, sha256=None, integrity=None, size=None, progress=
     last_err = None
     for url in urls:
         completed = False
-        for attempt in range(retries + 1):
-            if attempt:
-                wait = backoff * (2 ** (attempt - 1))
-                have = part.stat().st_size if part.is_file() else 0
-                if log:
-                    log(f"{label} 第 {attempt}/{retries} 次续传（{wait:.0f}s 后，从 {have / 1048576:.0f} MB 处继续）：{last_err}")
-                time.sleep(wait)
+        total_failures = 0
+        no_progress_failures = 0
+        while True:
+            before = part.stat().st_size if part.is_file() else 0
             try:
-                download_resumable(url, part, expected_size=size, progress=progress, opener=opener, log=log)
+                download_resumable(
+                    url, part, expected_size=size, progress=progress, opener=opener, log=log,
+                    stall_speed_bytes=stall_speed_bytes, stall_seconds=stall_seconds, clock=clock,
+                )
                 completed = True
                 break
             except DownloadError as exc:
                 last_err = exc
+                if retries <= 0 or max_total_retries <= 0:
+                    break
+                after = part.stat().st_size if part.is_file() else 0
+                total_failures += 1
+                if after > before:
+                    no_progress_failures = 0
+                else:
+                    no_progress_failures += 1
+                if no_progress_failures > retries or total_failures > max_total_retries:
+                    break
+                exp = max(0, no_progress_failures - 1)
+                wait = min(MAX_BACKOFF_SECONDS, backoff * (2 ** exp))
+                if log:
+                    prog_note = "有新进展，重置无进展计数" if after > before else f"连续无进展 {no_progress_failures}/{retries}"
+                    log(
+                        f"{label} 第 {total_failures}/{max_total_retries} 次续传"
+                        f"（{prog_note}，{wait:.0f}s 后从 {after / 1048576:.1f} MB 处继续）：{last_err}"
+                    )
+                if wait > 0:
+                    time.sleep(wait)
         if not completed:
             continue
         if progress:
@@ -292,16 +341,28 @@ def fetch_verified(urls, dest, sha256=None, integrity=None, size=None, progress=
                 progress.update(state="ok")
             return "downloaded"
         part.unlink()
-        last_err = DownloadError("下载大小完整但校验不通过，已删除损坏文件；再次运行会重新下载")
+        last_err = DownloadError(f"{label} 下载大小完整但校验不通过，已删除损坏文件；再次运行会重新下载")
     if progress:
         progress.update(state="failed", error=str(last_err))
-    raise last_err or DownloadError("没有可用的下载地址")
+    raise last_err or DownloadError(f"{label} 没有可用的下载地址")
 
 
-def fetch_json(url, timeout=30):
+def fetch_json(url, timeout=30, retries=3, backoff=1.0):
     req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": USER_AGENT})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    last_exc = None
+    for attempt in range(max(1, int(retries))):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            last_exc = exc
+            if exc.code < 500 and exc.code != 429:
+                raise
+        except (urllib.error.URLError, OSError, TimeoutError, ValueError) as exc:
+            last_exc = exc
+        if attempt + 1 < max(1, int(retries)):
+            time.sleep(backoff * (2 ** attempt))
+    raise last_exc
 
 
 def claude_meta(platform_key, version="latest", fetch=fetch_json):
@@ -320,9 +381,21 @@ def network_label():
     return "宿主代理" if (proxies.get("https") or proxies.get("all")) else "直连"
 
 
+def _stage_label(label):
+    if label.startswith(("引导依赖", "镜像", "Claude Code")):
+        return label
+    low = label.lower()
+    if "claude" in low:
+        return f"Claude Code（{label}）"
+    if "image" in low or ".tvm" in low or ".ova" in low:
+        return f"镜像（{label}）"
+    return label
+
+
 def slow_download_tip(label, mb_s):
+    stage = _stage_label(label)
     return (
-        f"提示：{label} 前 {SLOW_CHECK_SECONDS} 秒平均仅 {mb_s:.2f} MB/s（当前网络：{network_label()}）。"
+        f"提示：[{stage}] 前 {SLOW_CHECK_SECONDS} 秒平均仅 {mb_s:.2f} MB/s（当前网络：{network_label()}）。"
         f"可 Ctrl-C 后换直连（临时取消 HTTPS_PROXY/ALL_PROXY）或指定镜像源"
         f"（--image-mirror / {IMAGE_MIRROR_ENV}，--npm-mirror / {NPM_MIRROR_ENV}）再运行，已下载部分会续传，校验值不变。"
     )

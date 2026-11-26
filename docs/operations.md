@@ -50,6 +50,18 @@ rm -rf "$D/rendered"
 
 ## 从快照重建
 
+v2 Linux 客机直接用 `cchouse restore` 恢复干净快照（会先安全关机、保留 `instance.env` 与 SSH 密钥，并同步更新 `state.json` 归属标记）：
+
+```bash
+cchouse restore --tag cc01
+cchouse open --tag cc01
+```
+
+如 `~/.local/bin` 未在 `PATH` 中，可将 `cchouse` 替换为 `~/.local/bin/cchouse`。
+
+<details>
+<summary>v1 macOS 客机手工重建命令（旧版参考）</summary>
+
 ```bash
 host/stop-vm.sh "$D/instance.env"; "$TART_BIN" delete "$VM_NAME"
 "$TART_BIN" clone "$CLEAN_SNAPSHOT" "$VM_NAME"
@@ -59,6 +71,7 @@ scripts/verify.sh "$D/instance.env" --fail-closed
 ```
 
 随机网卡地址变了，路由器里的固定 IP 要按新地址重新绑定。
+</details>
 
 ## 丢了什么怎么恢复
 
