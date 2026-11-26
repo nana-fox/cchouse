@@ -325,7 +325,8 @@ def resolve_server_ipv4(server):
 
 def probe_egress_via_proxy(fields, timeout=15):
     """用系统 curl 通过该节点探测实际出口，代理凭据只经 stdin 传入。"""
-    curl = shutil.which("curl.exe" if platform.system() == "Windows" else "curl")
+    windows = platform.system() == "Windows"
+    curl = shutil.which("curl.exe" if windows else "curl")
     if curl is None:
         return None
     host = fields["SINGLE_SERVER_IP"]
@@ -341,15 +342,31 @@ def probe_egress_via_proxy(fields, timeout=15):
     password = urllib.parse.quote(fields["SINGLE_PASS"], safe="")
     auth = f"{user}:{password}@" if user or password else ""
     config.append(f'proxy = "{scheme}://{auth}{host}:{port}"')
-    try:
-        proc = subprocess.run(
-            [curl, "-q", "--silent", "--fail", "--noproxy", "", "--max-time", str(timeout),
-             "--config", "-", "https://ipinfo.io/json"],
-            input="\n".join(config) + "\n", capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=timeout + 2,
-        )
-        if proc.returncode != 0:
+    command = [
+        curl, "-q", "--silent", "--fail", "--noproxy", "", "--max-time", str(timeout),
+        "--config", "-", "https://ipinfo.io/json",
+    ]
+    config_input = "\n".join(config) + "\n"
+    # Each attempt gets a separate response buffer, including partial transfers.
+    for delay in ((0, 1, 2) if windows else (0,)):
+        if delay:
+            time.sleep(delay)
+        try:
+            proc = subprocess.run(
+                command, input=config_input, capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=timeout + 2,
+            )
+        except subprocess.TimeoutExpired:
+            continue
+        except OSError:
             return None
+        if proc.returncode != 28:
+            break
+    else:
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
         info = json.loads(proc.stdout)
         asn = (info.get("org") or "").split(maxsplit=1)
         return {
@@ -358,7 +375,7 @@ def probe_egress_via_proxy(fields, timeout=15):
             "country": info.get("country") or "",
             "asn": asn[0] if asn else "",
         }
-    except (OSError, ValueError, AttributeError, subprocess.TimeoutExpired):
+    except (ValueError, AttributeError):
         return None
 
 
@@ -546,6 +563,11 @@ CLEAN_SNAPSHOT = "cchouse-clean"
 
 class StepError(RuntimeError):
     """某一步失败（文案不含链接或凭据）。"""
+
+    def __init__(self, message, exit_code=1):
+        super().__init__(message)
+        # subprocess uses negative values for POSIX signals.
+        self.exit_code = 128 - exit_code if exit_code < 0 else exit_code
 
 
 def _now_iso():
@@ -887,7 +909,7 @@ class UpContext:
             name = next((Path(str(c)).name for c in cmd if str(c).endswith((".sh", ".ps1", ".py"))), Path(str(cmd[0])).name)
             op = cmd[cmd.index("-CcOp") + 1] if "-CcOp" in cmd else (cmd[2] if name == "vm-tart.sh" else "")
             what = f"{name} {op}".strip()
-            raise StepError(f"{what} 退出码 {exc.returncode}") from None
+            raise StepError(f"{what} 退出码 {exc.returncode}", exc.returncode) from None
         except FileNotFoundError:
             raise StepError(f"找不到命令：{cmd[0]}") from None
 
@@ -1189,7 +1211,8 @@ def _ensure_virtualbox_installed(ctx):
         print(f"  将安装 Oracle VirtualBox {man['version']} 基础包。若弹出 Windows UAC，请确认一次。", flush=True)
         ctx.virtualbox("install", Installer=ctx.vbox_installer, Sha256=man["sha256"])
     except (StepError, downloads.DownloadError, OSError) as exc:
-        raise StepError(f"VirtualBox 自动安装失败：{exc}\n  Oracle 官方安装包：{man['url']}") from None
+        code = exc.exit_code if isinstance(exc, StepError) else 1
+        raise StepError(f"VirtualBox 自动安装失败：{exc}\n  Oracle 官方安装包：{man['url']}", code) from None
 
 
 def step_import(ctx):
@@ -1299,7 +1322,10 @@ def step_verify(ctx):
     try:
         ctx.run([*verifier, ctx.env_path, "--fail-closed"])
     except StepError as exc:
-        raise StepError(f"自动验收未通过（{exc}）；断网保护不会放宽，请按上方 FAIL 项排查代理") from None
+        raise StepError(
+            f"自动验收未通过（{exc}）；断网保护不会放宽，请按上方 FAIL 项排查代理",
+            exc.exit_code,
+        ) from None
     return False
 
 
@@ -1402,7 +1428,8 @@ def run_pipeline(ctx):
                 "started_at": started, "ended_at": _now_iso(),
                 "seconds": round(time.monotonic() - t0, 1), "result": "failed",
             }
-            return on_failure(ctx, steps, i, name, title, reason)
+            on_failure(ctx, steps, i, name, title, reason)
+            return exc.exit_code if isinstance(exc, StepError) else 1
         except BaseException as exc:
             # 非预期异常：同样先删明文、写 FAILED，再原样抛出便于排查（原因只记类型，不记可能含敏感值的消息）
             ctx.state["timings"][name] = {
@@ -1452,7 +1479,6 @@ def on_failure(ctx, steps, i, name, title, reason):
     print(f"    {ctx.rerun_cmd()}")
     print("  需要求助时导出脱敏诊断包：")
     print(f"    {ctx.py()} scripts/doctor.py{env_arg}{vm_arg}")
-    return 1
 
 
 def finish_manual(ctx, steps):

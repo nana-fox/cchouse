@@ -100,8 +100,9 @@ if [ "$TARGET" = "gtr" ] || [ "$TARGET" = "both" ]; then
   if bash "$SCRIPT_DIR/run-gtr.sh" "$GTR_RUN_DIR"; then
     echo "PASS GTR E2E: $GTR_RUN_DIR/report.html"
   else
+    GTR_RC=$?
     echo "FAIL GTR E2E: $GTR_RUN_DIR/report.html" >&2
-    OVERALL_RC=1
+    if [ "$OVERALL_RC" = 0 ]; then OVERALL_RC=$GTR_RC; fi
   fi
   GTR_REPORT="$GTR_RUN_DIR/report.html"
 fi
