@@ -238,6 +238,10 @@ Add-Type -OutputType ConsoleApplication -OutputAssembly $env:TEST_EXE -TypeDefin
 using System;
 public class BootstrapFixture {
   public static int Main(string[] args) {
+    if (Array.IndexOf(args, "--version") >= 0) {
+      Console.WriteLine("cchouse " + Environment.GetEnvironmentVariable("TEST_VERSION"));
+      return 0;
+    }
     Console.WriteLine("UP " + String.Join(" ", args));
     return 7;
   }
@@ -268,7 +272,8 @@ exit $LASTEXITCODE
         with tempfile.TemporaryDirectory(prefix="cchouse 中文 ") as td:
             root = Path(td)
             exe, script = root / "python.exe", root / "bootstrap.ps1"
-            env = dict(os.environ, TEST_ROOT=td, LOCALAPPDATA=td, TEST_BOOTSTRAP=str(script), TEST_EXE=str(exe))
+            env = dict(os.environ, TEST_ROOT=td, LOCALAPPDATA=td, TEST_BOOTSTRAP=str(script), TEST_EXE=str(exe),
+                       TEST_VERSION=VERSION)
             compile_result = run_ps(compile_exe, env)
             self.assertEqual(compile_result.returncode, 0, compile_result.stderr)
             python = root / "python.zip"
