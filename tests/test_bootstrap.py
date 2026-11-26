@@ -1,12 +1,17 @@
 import base64
 import hashlib
 import importlib.util
+import io
 import os
+import re
 import subprocess
 from pathlib import Path
+import sys
+import tarfile
 import tempfile
 import unittest
 from unittest import mock
+import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -20,6 +25,19 @@ def load_script(name, path):
 
 release = load_script("build_bootstrap_release", "tools/build-bootstrap-release.py")
 verify = load_script("verify_linux_native", "scripts/verify-linux-native.py")
+VERSION = "v2.0.0-preview.3"
+
+
+def bootstrap_text(platform, source_hash):
+    name = "bootstrap-macos.sh" if platform == "mac" else "bootstrap-windows.ps1"
+    return ((ROOT / "scripts" / name).read_text(encoding="utf-8")
+            .replace("@CCHOUSE_VERSION@", VERSION).replace("@CCHOUSE_SHA256@", source_hash))
+
+
+def source_zip(path):
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("cchouse/scripts/cchouse.py", "# CLI fixture\n")
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 class BootstrapReleaseTests(unittest.TestCase):
@@ -100,8 +118,7 @@ class MacBootstrapTests(unittest.TestCase):
                 command.write_text(f"#!/bin/sh\n{body}\n")
                 command.chmod(0o700)
             script = root / "bootstrap.sh"
-            script.write_text((ROOT / "scripts/bootstrap-macos.sh").read_text(encoding="utf-8")
-                              .replace("@CCHOUSE_VERSION@", "v2.0.0-preview.3").replace("@CCHOUSE_SHA256@", "a" * 64))
+            script.write_text(bootstrap_text("mac", "a" * 64), encoding="utf-8")
             run = subprocess.run(
                 ["/bin/bash", script], env=dict(os.environ, HOME=td, PATH=f"{binary}:/usr/bin:/bin:/usr/sbin:/sbin"),
                 capture_output=True, text=True, encoding="utf-8", timeout=20,
@@ -112,14 +129,58 @@ class MacBootstrapTests(unittest.TestCase):
             self.assertFalse(any((bootstrap / "tools").iterdir()))
             self.assertFalse((bootstrap / ".prepare").exists())
 
+    @unittest.skipUnless(sys.platform == "darwin", "requires macOS ditto")
+    def test_private_paths_with_chinese_and_spaces_are_reused_on_rerun(self):
+        with tempfile.TemporaryDirectory(prefix="cchouse 中文 ") as td:
+            root = Path(td)
+            binary = root / "bin"
+            binary.mkdir()
+            source = root / "source.zip"
+            text = bootstrap_text("mac", source_zip(source))
+            for variable, name, member, code in (
+                ("python_sha", "python", "python/bin/python3", 'printf "UP %s\\n" "$*"'),
+                ("tart_sha", "tart", "tart.app/Contents/MacOS/tart", "exit 0"),
+            ):
+                path = root / f"{name}.tar.gz"
+                with tarfile.open(path, "w:gz") as archive:
+                    data = ("#!/bin/sh\n" + code + "\n").encode()
+                    info = tarfile.TarInfo(member)
+                    info.mode = 0o755
+                    info.size = len(data)
+                    archive.addfile(info, io.BytesIO(data))
+                text = re.sub(rf"(?m)^{variable}='[^']+'", f"{variable}='{hashlib.sha256(path.read_bytes()).hexdigest()}'", text)
+            tools = {
+                "uname": "echo Darwin",
+                "sysctl": "echo 1",
+                "curl": """for arg in "$@"; do
+  case "$arg" in *.zip) kind=source.zip ;; *install_only*.tar.gz) kind=python.tar.gz ;; */tart.tar.gz) kind=tart.tar.gz ;; esac
+  dest="$arg"
+done
+printf '%s\n' "$kind" >> "$HOME/downloads.log"
+cp "$HOME/$kind" "$dest"
+""",
+            }
+            for name, contents in tools.items():
+                tool = binary / name
+                tool.write_text(f"#!/bin/sh\n{contents}\n")
+                tool.chmod(0o700)
+            script = root / "launch.sh"
+            script.write_text(text, encoding="utf-8")
+            env = dict(os.environ, HOME=td, PATH=f"{binary}:/usr/bin:/bin:/usr/sbin:/sbin")
+            for _ in range(2):
+                run = subprocess.run(
+                    ["/bin/bash", script], env=env, capture_output=True, text=True, encoding="utf-8", timeout=30,
+                )
+                self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+                self.assertIn("UP -I scripts/cchouse.py up --tag cc01", run.stdout)
+            self.assertEqual((root / "downloads.log").read_text().splitlines(), ["source.zip", "python.tar.gz", "tart.tar.gz"])
+
 
 @unittest.skipUnless(os.name == "nt", "requires Windows PowerShell")
 class WindowsBootstrapTests(unittest.TestCase):
     def test_missing_openssh_or_wrong_source_hash_cannot_launch_up(self):
         driver = """
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
-Import-Module Microsoft.PowerShell.Utility
-$env:WINDIR = $env:TEST_ROOT
 function Invoke-WebRequest {
   param([switch]$UseBasicParsing, [string]$Uri, [string]$OutFile)
   [IO.File]::WriteAllText($OutFile, 'tampered')
@@ -131,8 +192,7 @@ exit $LASTEXITCODE
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             script = root / "bootstrap.ps1"
-            script.write_text((ROOT / "scripts/bootstrap-windows.ps1").read_text(encoding="utf-8")
-                              .replace("@CCHOUSE_VERSION@", "v2.0.0-preview.3").replace("@CCHOUSE_SHA256@", "a" * 64),
+            script.write_text(bootstrap_text("windows", "a" * 64).replace("$env:WINDIR", "$env:TEST_ROOT"),
                               encoding="utf-8-sig")
             system32 = root / "System32" / "OpenSSH"
             system32.mkdir(parents=True)
@@ -153,3 +213,57 @@ exit $LASTEXITCODE
                 else:
                     self.assertIn("SHA-256 校验失败", run.stdout)
                     self.assertFalse(any((bootstrap / "tools").iterdir()))
+
+    def test_chinese_spaced_path_reruns_without_download_and_propagates_exit(self):
+        compile_exe = """
+Add-Type -OutputType ConsoleApplication -OutputAssembly $env:TEST_EXE -TypeDefinition @'
+using System;
+public class BootstrapFixture {
+  public static int Main(string[] args) {
+    Console.WriteLine("UP " + String.Join(" ", args));
+    return 7;
+  }
+}
+'@
+"""
+        driver = """
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+function Invoke-WebRequest {
+  param([switch]$UseBasicParsing, [string]$Uri, [string]$OutFile)
+  $name = if ($Uri -like '*embed-amd64.zip') { 'python.zip' } else { 'source.zip' }
+  Add-Content -LiteralPath (Join-Path $env:TEST_ROOT 'downloads.log') $name
+  Copy-Item -LiteralPath (Join-Path $env:TEST_ROOT $name) -Destination $OutFile
+}
+& $env:TEST_BOOTSTRAP
+exit $LASTEXITCODE
+"""
+
+        def run_ps(text, env):
+            encoded = base64.b64encode(text.encode("utf-16-le")).decode("ascii")
+            return subprocess.run(
+                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded],
+                env=env, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+            )
+
+        with tempfile.TemporaryDirectory(prefix="cchouse 中文 ") as td:
+            root = Path(td)
+            exe, script = root / "python.exe", root / "bootstrap.ps1"
+            env = dict(os.environ, TEST_ROOT=td, LOCALAPPDATA=td, TEST_BOOTSTRAP=str(script), TEST_EXE=str(exe))
+            compile_result = run_ps(compile_exe, env)
+            self.assertEqual(compile_result.returncode, 0, compile_result.stderr)
+            python = root / "python.zip"
+            with zipfile.ZipFile(python, "w") as archive:
+                archive.write(exe, "python.exe")
+            script_text = bootstrap_text("windows", source_zip(root / "source.zip")).replace("$env:WINDIR", "$env:TEST_ROOT")
+            python_hash = hashlib.sha256(python.read_bytes()).hexdigest()
+            script_text = re.sub(r"(?m)^\$pythonHash = '[^']+'", f"$pythonHash = '{python_hash}'", script_text)
+            script.write_text(script_text, encoding="utf-8-sig")
+            ssh = root / "System32/OpenSSH"
+            ssh.mkdir(parents=True)
+            for name in ("ssh.exe", "ssh-keygen.exe", "ssh-keyscan.exe"):
+                (ssh / name).touch()
+            for _ in range(2):
+                run = run_ps(driver, env)
+                self.assertEqual(run.returncode, 7, run.stdout + run.stderr)
+                self.assertIn("UP -I scripts/cchouse.py up --tag cc01 --vm-backend virtualbox", run.stdout)
+            self.assertEqual((root / "downloads.log").read_text(encoding="ascii").splitlines(), ["source.zip", "python.zip"])
