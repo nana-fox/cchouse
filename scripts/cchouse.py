@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""cchouse 一条命令安装向导（当前子命令：up）。
+"""cchouse 安装与卸载向导。
 
 用法：
   python3 -I scripts/cchouse.py up [--tag cc01] [--route auto|tart-linux|vmware-linux] [--dry-run] [--config-only]
+  python3 -I scripts/cchouse.py remove --tag cc01 [--yes] [--purge-cache]
 
 流程（耗时的先下载，配置并行准备，下完一键装好）：
   0. 启动即在后台下载黄金镜像（guest-linux/image-manifest.json 的 URL + SHA-256）与 Claude Code 官方 npm 包（SRI），
@@ -27,6 +28,7 @@ import re
 import shutil
 import socket
 import ssl
+import stat
 import struct
 import subprocess
 import sys
@@ -732,6 +734,9 @@ class UpContext:
             return
         self.state["updated_at"] = _now_iso()
         self.state["route"] = self.route
+        self.state.setdefault("tag", self.tag)
+        self.state.setdefault("private_dir", str(self.private_dir.resolve()))
+        self.state["cache_dir"] = str(self.cache_dir.resolve())
         self.state["downloads"].update(self.downloader.records())
         self.private_dir.mkdir(parents=True, exist_ok=True)
         tmp = self.state_path.with_name("state.json.tmp")
@@ -1004,11 +1009,11 @@ def step_import(ctx):
             print(f"  本机已有黄金镜像 {ctx.golden_name}，直接克隆（热缓存）")
         else:
             ctx.tart("import", ctx.golden_name, ctx.image_path)
-        ctx.state["vm_created_by_up"] = True
+        ctx.state.update(vm_created_by_up=True, vm_name=ctx.vm_name, vm_backend=ctx.backend, golden_name=ctx.golden_name)
         ctx.save_state()
         ctx.tart("clone", ctx.golden_name, ctx.vm_name)
         return existed
-    ctx.state["vm_created_by_up"] = True
+    ctx.state.update(vm_created_by_up=True, vm_name=ctx.vm_name, vm_backend=ctx.backend)
     ctx.save_state()
     ctx.vmware("import", Vmx=ctx.vmx, Ova=ctx.image_path, VmName=ctx.vm_name, VmDir=ctx.private_dir / "vm")
     if not ctx.dry_run:
@@ -1062,6 +1067,8 @@ def step_snapshot(ctx):
     if ctx.backend == "tart":
         snap = f"{ctx.vm_name}-clean"
         ctx.tart("snapshot", ctx.vm_name, snap)
+        ctx.state["clean_snapshot"] = snap
+        ctx.save_state()
         ctx.tart("gui", ctx.vm_name, ctx.logs / "tart-gui.log")
     else:
         snap = CLEAN_SNAPSHOT
@@ -1229,6 +1236,214 @@ def cmd_up(args):
     return run_pipeline(ctx)
 
 
+def _tart_inventory():
+    proc = subprocess.run(
+        ["tart", "list", "--source", "local", "--format", "json"],
+        check=True, capture_output=True, encoding="utf-8",
+    )
+    try:
+        return {vm["Name"]: vm for vm in json.loads(proc.stdout)}
+    except (ValueError, TypeError, KeyError) as exc:
+        raise StepError("无法读取 Tart 的本地虚拟机列表") from exc
+
+
+def _tart_remove_plan(vm_name, snapshot, private_dir, inventory):
+    return [
+        (f"{label} {name}", ["bash", str(ROOT / "scripts" / "vm-tart.sh"), "delete", name])
+        for label, name in (("干净快照", snapshot), ("虚拟机", vm_name))
+        if name in inventory
+    ]
+
+
+def _vmware_remove_plan(vm_name, snapshot, private_dir, inventory):
+    vmx = private_dir / "vm" / vm_name / f"{vm_name}.vmx"
+    if vmx.resolve() != vmx:
+        raise StepError("VMware VMX 或其上级目录为链接，需手动核对")
+    if not vmx.is_file():
+        return []
+    label = f"虚拟机 {vm_name}（含所有 VMware 内置快照"
+    if snapshot:
+        label += f"：干净快照 {snapshot}"
+    return [(f"{label}） {vmx}", [
+        "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+        str(ROOT / "scripts" / "vm-vmware.ps1"), "-CcOp", "delete", "-CcVmx", str(vmx),
+    ])]
+
+
+# 新后端在这里注册。未注册的后端保留原实例，以便在对应软件中手动处理。
+REMOVE_BACKENDS = {"tart": _tart_remove_plan, "vmware": _vmware_remove_plan}
+
+
+def _remove_state(private_dir, root, tag):
+    if private_dir.resolve() != private_dir:
+        raise StepError("私有目录为链接")
+    if not private_dir.exists():
+        return {}
+    state_path = private_dir / "state.json"
+    if not state_path.is_file() or state_path.is_symlink():
+        raise StepError("缺少可验证的 state.json")
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except ValueError:
+        raise StepError("state.json 无法解析") from None
+    if not isinstance(state, dict):
+        raise StepError("state.json 格式不正确")
+    if state.get("tag", tag) != tag or state.get("private_dir", str(private_dir)) != str(private_dir):
+        raise StepError("state.json 记录的 tag 或私有目录不匹配")
+    if not {"tag", "private_dir"} <= state.keys():
+        if private_dir != root / tag:
+            raise StepError("旧版 state.json 缺少自定义私有目录归属")
+        if not isinstance(state.get("step"), str) or not state["step"].startswith("up:"):
+            raise StepError("state.json 缺少安装记录")
+    return state
+
+
+def _download_cache_items(cache_dir, manifest):
+    files = [cache_dir / "images" / Path(item["filename"]).name for item in manifest["artifacts"]]
+    files += [cache_dir / f"claude-code-{arch}.tgz" for arch in ("linux-arm64", "linux-x64")]
+    items = []
+    for dest in files:
+        if dest.parent.resolve() != dest.parent:
+            continue
+        for suffix in ("", ".part", ".verified", ".json"):
+            path = dest.with_name(dest.name + suffix)
+            try:
+                info = path.lstat()
+            except FileNotFoundError:
+                continue
+            if stat.S_ISREG(info.st_mode):
+                items.append((path, info.st_size))
+    return items
+
+
+def cmd_remove(args):
+    tag = args.tag.strip().lower()
+    if not SAFE_TAG_RE.fullmatch(tag):
+        print("错误：--tag 仅支持小写字母开头的 2-16 位字母/数字/下划线/短横线（如 cc01）", file=sys.stderr)
+        return 2
+
+    root = default_private_root().resolve()
+    requested = Path(args.private_dir).expanduser() if args.private_dir else root / tag
+    private_dir = requested.parent.resolve() / requested.name
+    vm_name = f"claude-{tag}"
+    cache_dir = root / "cache"
+    golden_name = None
+    try:
+        if private_dir in (root, cache_dir) or _is_inside_repo(private_dir) or private_dir in ROOT.parents:
+            raise StepError("私有目录是共享目录或仓库路径")
+        state = _remove_state(private_dir, root, tag)
+        if not state:
+            print(f"没有找到 {tag} 的安装记录。")
+            _print_remove_remainder(cache_dir, golden_name, False)
+            return 0
+
+        backend = state.get("vm_backend")
+        snapshot = state.get("clean_snapshot")
+        owned = state.get("vm_created_by_up") is True
+        recorded_vm = state.get("vm_name")
+        if owned and recorded_vm is None and backend is None:
+            # 旧版 Tart 的 clean 克隆名含完整 VM 名，配合 up 的归属标记恢复身份。
+            if state.get("route") == "tart-linux" and snapshot == f"{vm_name}-clean":
+                backend, recorded_vm = "tart", vm_name
+        if owned and (recorded_vm != vm_name or backend not in REMOVE_BACKENDS):
+            raise StepError("state.json 缺少可验证的虚拟机名称或受支持的后端")
+        if owned and snapshot is not None and snapshot != (f"{vm_name}-clean" if backend == "tart" else CLEAN_SNAPSHOT):
+            raise StepError("state.json 的干净快照名不匹配")
+
+        vm_dir = private_dir / "vm"
+        allowed_vm_dirs = {vm_name} if owned and backend == "vmware" else set()
+        if vm_dir.resolve() != vm_dir or (vm_dir.exists() and {p.name for p in vm_dir.iterdir()} - allowed_vm_dirs):
+            raise StepError("私有目录的 vm/ 下有无法确认归属的项目")
+
+        if state.get("cache_dir"):
+            cache_dir = Path(state["cache_dir"])
+        if not cache_dir.is_absolute() or cache_dir.resolve() != cache_dir:
+            raise StepError("记录的缓存目录不是可验证的绝对路径")
+        if cache_dir == private_dir or private_dir in cache_dir.parents:
+            raise StepError("缓存位于实例私有目录中，请先手动移出缓存")
+
+        manifest = json.loads((ROOT / "guest-linux" / "image-manifest.json").read_text(encoding="utf-8"))
+        if backend == "tart":
+            golden_name = state.get("golden_name", f"cchouse-debian13-arm64-{manifest['image_version']}")
+            if not isinstance(golden_name, str) or not re.fullmatch(r"cchouse-debian13-arm64-[a-zA-Z0-9._-]+", golden_name):
+                raise StepError("state.json 的 Tart 黄金镜像名无效")
+            inventory = _tart_inventory()
+        else:
+            inventory = {}
+
+        vm_actions = REMOVE_BACKENDS[backend](vm_name, snapshot, private_dir, inventory) if owned else []
+        golden = inventory.get(golden_name)
+        if args.purge_cache and golden:
+            if golden.get("Running"):
+                raise StepError("Tart 黄金镜像正在运行，请先在 Tart 中关闭它")
+        cache_items = _download_cache_items(cache_dir, manifest) if args.purge_cache else []
+
+        print("将删除：")
+        for label, _cmd in vm_actions:
+            print(f"  - {label}")
+        if private_dir.exists():
+            for name in ("seed.iso", "rendered"):
+                residual = private_dir / name
+                if residual.exists() or residual.is_symlink():
+                    print(f"  - 临时明文 {residual}")
+            print(f"  - 私有目录 {private_dir}（含配置、密钥和日志）")
+        if args.purge_cache:
+            if golden:
+                print(f"  - Tart 黄金镜像 {golden_name}（Tart 报告 {golden.get('Size', '?')} GB）")
+            for path, size in cache_items:
+                print(f"  - 下载缓存 {path}（{size:,} 字节）")
+        if not owned:
+            print("该记录没有安装器创建虚拟机的标记。手动创建的虚拟机需在虚拟机软件里核对并删除。")
+        if not args.purge_cache:
+            print("Tart 黄金镜像和共享下载缓存默认保留。")
+        else:
+            print("共享缓存可能供其他实例使用。")
+        if not args.yes:
+            try:
+                confirmed = input("确认卸载？ [y/N] ").strip().lower() in ("y", "yes")
+            except EOFError:
+                confirmed = False
+            if not confirmed:
+                print("已取消卸载。")
+                return 0
+        if _remove_state(private_dir, root, tag) != state:
+            raise StepError("确认期间实例状态改变，请重新预览")
+        if owned and REMOVE_BACKENDS[backend](vm_name, snapshot, private_dir, inventory) != vm_actions:
+            raise StepError("确认期间虚拟机路径改变，请重新预览")
+
+        for _label, cmd in vm_actions:
+            subprocess.run(cmd, check=True)
+        if args.purge_cache:
+            if golden:
+                subprocess.run(["tart", "delete", golden_name], check=True)
+            for path, _size in cache_items:
+                if path.parent.resolve() != path.parent:
+                    raise StepError("缓存目录在卸载期间改变")
+                path.unlink(missing_ok=True)
+        if private_dir.exists():
+            shutil.rmtree(private_dir)
+    except (OSError, subprocess.CalledProcessError, RuntimeError, ValueError, TypeError, KeyboardInterrupt) as exc:
+        why = "用户中断" if isinstance(exc, KeyboardInterrupt) else str(exc)
+        print(f"卸载未完成：{why}", file=sys.stderr)
+        print(f"请在虚拟机软件中核对客机 {vm_name} 和它的快照，再手动清理确认归属的私有目录 {private_dir}。")
+        print(f"可在文件管理器核对共享下载缓存 {cache_dir}，仅删除不再需要的安装包。")
+        return 1
+    print(f"已完成 {tag} 的卸载。")
+    _print_remove_remainder(cache_dir, golden_name, args.purge_cache)
+    return 0
+
+
+def _print_remove_remainder(cache_dir, golden_name, purged):
+    if purged:
+        print("已处理清单中的共享缓存项，未识别的缓存文件可在文件管理器中核对。")
+    else:
+        print("保留共享黄金镜像和下载缓存。确认其他实例无需使用后，可按下面的路径手动清理。")
+    print(f"手动清理下载缓存：在文件管理器打开 {cache_dir}，核对后删除不需要的安装包。")
+    if golden_name and not purged:
+        print(f'手动清理 Tart 黄金镜像：确认无需使用后运行 tart delete "{golden_name}"。')
+    print("安装器仓库和宿主虚拟机软件仍保留，可分别在文件管理器和系统软件管理界面删除。")
+
+
 def main():
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -1256,9 +1471,17 @@ def main():
     p_up.add_argument("--config-only", action="store_true", help="只生成 instance.env 并跑 preflight（第一轮行为），不下载不建虚拟机")
     p_up.add_argument("--dry-run", action="store_true", help="只演练：生成配置并跑 preflight，其余步骤只打印命令，不下载、不动虚拟机、不写 state.json")
 
+    p_remove = sub.add_parser("remove", help="预览并卸载指定实例")
+    p_remove.add_argument("--tag", required=True, help="安装时的实例短名")
+    p_remove.add_argument("--private-dir", help="安装时使用的自定义私有目录")
+    p_remove.add_argument("--yes", action="store_true", help="跳过确认提示")
+    p_remove.add_argument("--purge-cache", action="store_true", help="同时清理共享下载缓存和对应的 Tart 黄金镜像")
+
     args = parser.parse_args()
     if args.command == "up":
         sys.exit(cmd_up(args))
+    if args.command == "remove":
+        sys.exit(cmd_remove(args))
 
 
 if __name__ == "__main__":

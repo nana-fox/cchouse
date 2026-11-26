@@ -403,6 +403,10 @@ class TestUpPipeline(unittest.TestCase):
             cchouse_mod.write_env_secure(ctx.env_path, "TAG=cc05\n")
             cchouse_mod.step_import(ctx)
             self.assertTrue(any("-CcOp" in c and "import" in c for c in ran))
+            state = json.loads(ctx.state_path.read_text(encoding="utf-8"))
+            self.assertEqual(state["vm_name"], "claude-cc05")
+            self.assertEqual(state["vm_backend"], "vmware")
+            self.assertEqual(state["private_dir"], str(ctx.private_dir.resolve()))
 
     def test_update_env_value_keeps_600_and_other_keys(self):
         with tempfile.TemporaryDirectory() as td:

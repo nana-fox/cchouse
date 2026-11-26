@@ -168,6 +168,20 @@ VMware is free for personal use now, but the vendor requires a Broadcom account 
 
 ---
 
+## Uninstall
+
+Once the install command has finished, run this from the cloned cchouse folder. Replace `cc01` with the `--tag` you used to install.
+
+```bash
+python3 -I scripts/cchouse.py remove --tag cc01
+```
+
+In Windows PowerShell, use `py -3 -I scripts/cchouse.py remove --tag cc01`. If you installed with `--private-dir`, pass the same path when uninstalling.
+
+The installer lists the VM, clean snapshot, private folder, and temporary plaintext it can verify before asking for confirmation. Enter cancels by default. Use `--yes` to skip confirmation. Deleting a VMware VM also deletes all its built-in snapshots. If an older installation lacks a record that verifies ownership, check the VM in your virtualization app and follow the manual cleanup instructions.
+
+The golden image and downloads stay in place by default so other instances can reuse them. If you no longer need them, add `--purge-cache` to list the associated Tart golden image and recognized downloads with their sizes for removal. The installer reports what remains and how to clean it up manually.
+
 ## Security design
 
 For people who want the details:
