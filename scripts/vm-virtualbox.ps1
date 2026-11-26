@@ -8,6 +8,7 @@ param(
   [string]$CcOva = "",
   [string]$CcVmName = "",
   [string]$CcVmDir = "",
+  [ValidateSet("yes", "no")] [string]$CcReplaceExisting = "no",
   [string]$CcSeedIso = "",
   [string]$CcKey = "",
   [string]$CcKnownHosts = "",
@@ -77,14 +78,14 @@ function Install-CchouseVirtualBox {
     Write-Host "VBOX_ALREADY_INSTALLED=$existing"
     return
   }
-  if (-not $Installer -or -not (Test-Path -LiteralPath $Installer)) {
+  if (-not $Installer -or -not (Test-Path -LiteralPath $Installer -PathType Leaf)) {
     throw "VirtualBox installer not found"
   }
   $hash = (Get-FileHash -LiteralPath $Installer -Algorithm SHA256).Hash.ToLower()
   if ($hash -ne $ExpectedSha.ToLower()) { throw "VirtualBox installer SHA-256 mismatch" }
   # NAT-only feature set. A full install is not a fallback: it would add bridge filters.
   $argList = @(Get-CchouseVirtualBoxInstallArgs)
-  $proc = Start-Process -FilePath $Installer -ArgumentList $argList -Wait -PassThru
+  $proc = Start-Process -FilePath $Installer -ArgumentList $argList -Verb RunAs -Wait -PassThru -ErrorAction Stop
   # 3010 is ERROR_SUCCESS_REBOOT_REQUIRED. --ignore-reboot still installed the NAT-only product.
   if ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) {
     throw "VirtualBox NAT-only install failed (exit $($proc.ExitCode))"
@@ -248,13 +249,14 @@ function Enable-CchouseVBoxSerialLog {
 }
 
 function Import-CchouseVBoxOva {
-  param([string]$OvaPath, [string]$Name, [string]$DestDir, [int]$SshPort, [string]$HostKeyLog)
+  param([string]$OvaPath, [string]$Name, [string]$DestDir, [int]$SshPort, [string]$HostKeyLog, [string]$ReplaceExisting)
   if (-not (Test-Path -LiteralPath $OvaPath)) { throw "OVA not found" }
   Assert-CchouseSshPort -Port $SshPort
   New-Item -ItemType Directory -Force -Path $DestDir | Out-Null
-  if (Test-CchouseVmRegistered $Name) {
-    Invoke-CchouseVBoxOptional -CcArgumentList @("controlvm", $Name, "poweroff") | Out-Null
-    Invoke-CchouseVBox -CcArgumentList @("unregistervm", $Name, "--delete") -FailureMessage "unregistervm failed"
+  $vmUuid = Get-CchouseRegisteredVBoxUuid -Name $Name
+  if ($vmUuid) {
+    if ($ReplaceExisting -ne "yes") { throw "Existing VirtualBox VM is not owned by this install: $Name" }
+    Remove-CchouseVBoxVM -Name $Name -VmDir $DestDir
   }
   Invoke-CchouseVBox -CcArgumentList @("import", $OvaPath, "--vsys", "0", "--vmname", $Name, "--basefolder", $DestDir)
   $rule = "ssh,tcp,127.0.0.1,$SshPort,,22"
@@ -382,29 +384,69 @@ function Invoke-CchouseVBoxBoot {
   Write-Host "GUEST_IP=127.0.0.1"
 }
 
-function Remove-CchouseVBoxVM {
+function Get-CchouseRegisteredVBoxUuid {
   param([string]$Name)
-  if ($Name -notmatch '^claude-[a-z][a-z0-9_-]{1,15}$') { throw "VM name is not an exact instance name" }
-  if (-not (Get-CchouseVBoxManage)) { throw "VBoxManage.exe not found" }
-  if (-not (Test-CchouseVmRegistered $Name)) { return }
-  $info = @(Get-CchouseShowvminfoLines -Name $Name)
+  $pattern = '^"{0}"\s+\{{([0-9a-f]{{8}}(?:-[0-9a-f]{{4}}){{3}}-[0-9a-f]{{12}})\}}$' -f [regex]::Escape($Name)
+  $vmUuid = $null
+  foreach ($line in @(Invoke-CchouseVBox -CcArgumentList @("list", "vms") -FailureMessage "VirtualBox inventory failed")) {
+    if ($line -match $pattern) {
+      if ($vmUuid) { throw "Multiple registered VirtualBox VMs match $Name" }
+      $vmUuid = $Matches[1]
+    }
+  }
+  return $vmUuid
+}
+
+function ConvertTo-CchouseVBoxFullPath {
+  param([string]$Path)
+  if ([System.IO.Path]::DirectorySeparatorChar -eq '\') {
+    $Path = $Path.Replace('/', '\')
+    if ($Path.StartsWith('\\?\UNC\', [System.StringComparison]::OrdinalIgnoreCase)) {
+      $Path = '\\' + $Path.Substring(8)
+    } elseif ($Path -match '^\\\\\?\\[a-z]:\\') {
+      $Path = $Path.Substring(4)
+    }
+  }
+  return [System.IO.Path]::GetFullPath($Path)
+}
+
+function Remove-CchouseVBoxVM {
+  param([string]$Name, [string]$VmDir)
+  if ($Name -cnotmatch '^claude-[a-z][a-z0-9_-]{1,15}$') { throw "VM name is not an exact instance name" }
+  if (-not $VmDir) { throw "VM directory is required" }
+  $vmUuid = Get-CchouseRegisteredVBoxUuid -Name $Name
+  if (-not $vmUuid) { return }
+
+  $encoding = [Console]::OutputEncoding
+  try {
+    [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+    $info = @(Get-CchouseShowvminfoLines -Name $vmUuid)
+  } finally {
+    [Console]::OutputEncoding = $encoding
+  }
   $reported = Get-CchouseVmNameFromLines -Lines $info
   if ([string]::IsNullOrEmpty($reported) -or ($reported -cne $Name)) {
     throw "registered VM name does not match $Name"
   }
-  $vmState = ""
+  $cfg = $null
   foreach ($line in $info) {
-    if ($line -match '^VMState="([^"]*)"') {
-      $vmState = $Matches[1]
+    if ($line -cmatch '^CfgFile="([^"]+)"$') {
+      $cfg = $Matches[1].Replace('\\', '\')
       break
     }
   }
-  if ($vmState -ne "poweroff" -and $vmState -ne "aborted") {
-    Invoke-CchouseVBox -CcArgumentList @("controlvm", $Name, "poweroff") -FailureMessage "poweroff failed for $Name"
-    if (-not (Wait-CchousePowerOff $Name 40)) { throw "poweroff timed out for $Name" }
+  $expected = [System.IO.Path]::Combine((ConvertTo-CchouseVBoxFullPath $VmDir), $Name, "$Name.vbox")
+  if (-not $cfg -or (ConvertTo-CchouseVBoxFullPath $cfg) -ine $expected) {
+    throw "registered VM config is outside the recorded instance: $Name"
   }
-  Invoke-CchouseVBox -CcArgumentList @("unregistervm", $Name, "--delete") -FailureMessage "unregistervm failed for $Name"
-  if (Test-CchouseVmRegistered $Name) { throw "VM $Name is still registered" }
+
+  $stopped = @('VMState="poweroff"', 'VMState="aborted"', 'VMState="saved"', 'VMState="aborted-saved"')
+  if (-not ($info | Where-Object { $_ -in $stopped })) {
+    Invoke-CchouseVBox -CcArgumentList @("controlvm", $vmUuid, "poweroff") -FailureMessage "poweroff failed for $Name"
+    if (-not (Wait-CchousePowerOff $vmUuid 40)) { throw "poweroff timed out for $Name" }
+  }
+  Invoke-CchouseVBox -CcArgumentList @("unregistervm", $vmUuid, "--delete") -FailureMessage "unregistervm failed for $Name"
+  if (Get-CchouseRegisteredVBoxUuid -Name $Name) { throw "VM $Name is still registered" }
 }
 
 function New-CchouseVBoxSnapshot {
@@ -423,11 +465,11 @@ if ($CcOp) {
       exit 1
     }
     "install" { Install-CchouseVirtualBox $CcInstaller $CcSha256 }
-    "import" { Import-CchouseVBoxOva $CcOva $CcVmName $CcVmDir $CcSshPort $CcHostKeyLog }
+    "import" { Import-CchouseVBoxOva $CcOva $CcVmName $CcVmDir $CcSshPort $CcHostKeyLog $CcReplaceExisting }
     "firstboot" { Invoke-CchouseVBoxFirstboot $CcVmName $CcSeedIso $CcFirstbootSeconds $CcHostKeyLog }
     "boot" { Invoke-CchouseVBoxBoot $CcVmName $CcSeedIso $CcKey $CcKnownHosts $CcIpFile $CcSshPort $CcHostKeyLog }
     "snapshot" { New-CchouseVBoxSnapshot $CcVmName $CcSnapshot }
-    "delete" { Remove-CchouseVBoxVM $CcVmName }
+    "delete" { Remove-CchouseVBoxVM -Name $CcVmName -VmDir $CcVmDir }
   }
   exit 0
 }

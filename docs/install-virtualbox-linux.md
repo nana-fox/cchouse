@@ -16,7 +16,7 @@ py -3 -I scripts/cchouse.py up --tag cc01
 
 Windows 安装器使用 VirtualBox。单独自检可运行 `py -3 -I scripts/preflight.py --route virtualbox-linux`。粘贴节点链接后，安装器会自动采用并显示出口时区和预期出口 IP，然后继续安装。
 
-VirtualBox 基础包装从 Oracle 官网下载，版本和 SHA-256 写在 `guest-linux/virtualbox-manifest.json`。下载后校验，再静默安装（`ADDLOCAL=VBoxApplication`，不要桌面快捷方式、不要注册文件关联、不要装完自启）。`--msiparams` 放在参数最后，后面每一项单独是一个 `NAME=VALUE`（Oracle 手册 *Installing VirtualBox*：`VirtualBox.exe -msiparams NAME=VALUE [...]`）。静默安装仍会弹出 Windows 的 UAC 提权确认；进程已经具备提升权限时可能不再点击。不要为了免确认而关闭 UAC。仓库**不分发**这个安装包，也**不安装** Oracle 的附加包（无 USB 2/3、无主机共享目录）。已有 `VBoxManage.exe` 时跳过下载。清单里的 SHA-256 为空或格式不对时拒绝安装。NAT-only 安装失败不会改走完整安装。
+缺少 `VBoxManage.exe` 时，`up` 从 Oracle 官网下载 VirtualBox 7.2.22 基础包，按清单中的官方 SHA-256 校验。安装前会显示说明，随后以 NAT 所需的最小组件静默安装。普通权限下只需确认一次 Windows UAC。下载、校验或安装失败时，`up` 会停止并显示 Oracle 官方安装包链接。已有 VirtualBox 时直接复用。
 
 安装器随后执行：导入 OVA → 挂 `seed.iso` 离线首启 → 卸盘并删除明文 → 接通网卡重启 → `verify-linux.sh --fail-closed` → 快照 `cchouse-clean`。
 
@@ -48,6 +48,6 @@ Windows 上 SSH 使用 `C:\Windows\System32\OpenSSH\ssh.exe`。`C:\Program Files
 
 自动验收必须是 `verify-linux.sh --fail-closed` 退出码 0。然后由人在客机桌面核对 `check.html` 全绿，并自行登录。Claude Code 的 OAuth 链接只能在客机浏览器里打开。
 
-`cchouse.py remove --tag` 读取 `state.json` 里的虚拟机名。名字与 `claude-<tag>` 精确一致时，先关机，再执行 `VBoxManage unregistervm --delete`。名字对不上，或 `vm/` 里有别的目录，就停下来，不删虚拟机。
+`cchouse.py remove --tag <tag>` 根据 `state.json` 预览要卸载的实例。确认后核对 VirtualBox 中注册的虚拟机名和实例内的 `.vbox` 路径，再关闭该虚拟机并按它的 UUID 执行 `VBoxManage unregistervm --delete`。核对或关机失败会保留实例记录。
 
 断网是保护生效。不要放宽客机 `nftables`，不要加 `DIRECT`，也不要改走宿主代理。
