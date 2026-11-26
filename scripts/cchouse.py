@@ -325,7 +325,8 @@ def resolve_server_ipv4(server):
 
 def probe_egress_via_proxy(fields, timeout=15):
     """用系统 curl 通过该节点探测实际出口，代理凭据只经 stdin 传入。"""
-    curl = shutil.which("curl.exe" if platform.system() == "Windows" else "curl")
+    windows = platform.system() == "Windows"
+    curl = shutil.which("curl.exe" if windows else "curl")
     if curl is None:
         return None
     host = fields["SINGLE_SERVER_IP"]
@@ -341,15 +342,31 @@ def probe_egress_via_proxy(fields, timeout=15):
     password = urllib.parse.quote(fields["SINGLE_PASS"], safe="")
     auth = f"{user}:{password}@" if user or password else ""
     config.append(f'proxy = "{scheme}://{auth}{host}:{port}"')
-    try:
-        proc = subprocess.run(
-            [curl, "-q", "--silent", "--fail", "--noproxy", "", "--max-time", str(timeout),
-             "--config", "-", "https://ipinfo.io/json"],
-            input="\n".join(config) + "\n", capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=timeout + 2,
-        )
-        if proc.returncode != 0:
+    command = [
+        curl, "-q", "--silent", "--fail", "--noproxy", "", "--max-time", str(timeout),
+        "--config", "-", "https://ipinfo.io/json",
+    ]
+    config_input = "\n".join(config) + "\n"
+    # Each attempt gets a separate response buffer, including partial transfers.
+    for delay in ((0, 1, 2) if windows else (0,)):
+        if delay:
+            time.sleep(delay)
+        try:
+            proc = subprocess.run(
+                command, input=config_input, capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=timeout + 2,
+            )
+        except subprocess.TimeoutExpired:
+            continue
+        except OSError:
             return None
+        if proc.returncode != 28:
+            break
+    else:
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
         info = json.loads(proc.stdout)
         asn = (info.get("org") or "").split(maxsplit=1)
         return {
@@ -358,7 +375,7 @@ def probe_egress_via_proxy(fields, timeout=15):
             "country": info.get("country") or "",
             "asn": asn[0] if asn else "",
         }
-    except (OSError, ValueError, AttributeError, subprocess.TimeoutExpired):
+    except (ValueError, AttributeError):
         return None
 
 

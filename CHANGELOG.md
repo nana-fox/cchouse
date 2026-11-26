@@ -7,6 +7,7 @@
 - `VERSION` 统一 CLI、引导和打包版本。诊断包记录安装器版本、已导入镜像身份和可读取的客机构建信息。
 - amd64 和 arm64 继续使用 preview.2 的公开镜像。 Windows 仍在离线首启收到完成信号并确认客机关机后才卸盘联网。
 - Windows 自动验收失败时，`cchouse up` 保留验收退出码。GTR 验收使用不分配 PTY 的 SSH 连接，避免 Windows OpenSSH 将失败报告为退出码 0。
+- Windows 宿主出口探测超时时，通过原节点限次重试。安装继续前仍需取得四项出口信息。
 
 ## [v2.0.0-preview.3](https://github.com/nana-fox/cchouse/releases/tag/v2.0.0-preview.3) · 2026-11-26
 

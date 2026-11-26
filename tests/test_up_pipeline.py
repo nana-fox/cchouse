@@ -264,6 +264,26 @@ class TestUpPipeline(unittest.TestCase):
             self.assertNotIn("203.0.113.9", out.getvalue())
             self.assertNotIn("test-password", out.getvalue())
 
+    def test_windows_curl_retries_timeout_with_the_same_private_proxy(self):
+        fields = cchouse_mod.parse_node_link("socks5://fixture:proxy-secret@203.0.113.8:1080")
+        reply = {"ip": "203.0.113.9", "timezone": "America/New_York", "country": "US", "org": "AS64500 test"}
+        with mock.patch.object(cchouse_mod.platform, "system", return_value="Windows"), \
+                mock.patch.object(cchouse_mod.shutil, "which", return_value="curl.exe") as which, \
+                mock.patch.object(cchouse_mod.time, "sleep") as sleep, \
+                mock.patch.object(cchouse_mod.subprocess, "run", side_effect=[
+                    subprocess.CompletedProcess([], 28, stdout='{"ip":'),
+                    subprocess.CompletedProcess([], 0, stdout=json.dumps(reply)),
+                ]) as curl:
+            result = cchouse_mod.probe_egress_via_proxy(fields)
+        self.assertEqual(result, {"ip": reply["ip"], "timezone": reply["timezone"], "country": "US", "asn": "AS64500"})
+        which.assert_called_once_with("curl.exe")
+        sleep.assert_called_once_with(1)
+        self.assertEqual(curl.call_count, 2)
+        first_attempt, second_attempt = curl.call_args_list
+        self.assertEqual(first_attempt, second_attempt)
+        self.assertIn("socks5h://fixture:proxy-secret@", second_attempt.kwargs["input"])
+        self.assertNotIn("proxy-secret", " ".join(second_attempt.args[0]))
+
     def test_background_download_logs_pause_only_during_hidden_prompt(self):
         with tempfile.TemporaryDirectory() as td:
             ctx = _ctx(td, link_stdin=False)
