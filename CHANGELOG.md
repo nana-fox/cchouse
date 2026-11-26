@@ -1,6 +1,6 @@
 # 变更记录
 
-## 未发布（preview.4）
+## [v2.0.0-preview.4](https://github.com/nana-fox/cchouse/releases/tag/v2.0.0-preview.4) · 2026-11-26
 
 - 中英首页增加 Apple Silicon Mac 的 SHA-256 锁定引导入口。Mac 引导支持 `--tag`，续跑核对实例归属，遇到同名的外部虚拟机或快照时停止并提示换名。
 - 快速安装接受 SOCKS5 和 HTTP(S)，通过节点读取实际出口 IPv4、国家或地区、ASN 与时区。VLESS、Trojan、Shadowsocks 指向进阶配置。节点输入期间暂停后台下载日志。
