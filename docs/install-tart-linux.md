@@ -6,7 +6,7 @@
 
 ---
 
-## 最快路径：一条命令 `cchouse up`（预览）
+## 最快路径：一条命令 `cchouse up`
 
 ```bash
 python3 -I scripts/cchouse.py up --tag cc01
