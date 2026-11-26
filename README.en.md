@@ -74,16 +74,23 @@ For AI-assisted installation, see [AGENTS.md](AGENTS.md). For manual configurati
 
 | Your computer | VM software | Status |
 |---|---|---|
-| Apple Silicon Mac (M series) | Tart | ✅ Public `v2.0.0-preview.2` cold install finished on a Mac mini |
-| Windows (x64) | VirtualBox | ✅ `v2.0.0-preview.3` passed two public blind installs on a real Windows 11 PC |
+| Apple Silicon Mac (M series) | Tart | ✅ `v2.0.0-preview.4` passed public-command blind install and real-machine cold-download verification (26 PASS / 0 FAIL / 1 Stripe WARN) |
+| Windows (x64) | VirtualBox | ✅ `v2.0.0-preview.4` passed an empty-cache public-command blind install on a real Windows 11 PC (26 PASS / 0 FAIL / 1 Stripe WARN) |
 | Intel Mac | — | Not supported for now |
 
 The guest is always Debian 13 + Chromium + Claude Code. A Linux computer is not supported as the host.
 
-**First install with an empty cache** (includes the image and Claude Code downloads)
+**First install with an empty cache** (total time mainly depends on download speed)
 
-- **Apple Silicon Mac**: a public `v2.0.0-preview.2` empty-cache install on a Mac mini took **2 minutes 15 seconds**, covering the download, automated verification, and saving a clean snapshot. The download went through the host proxy. The image averaged 20.67 MiB/s, and Claude Code averaged 16.31 MiB/s.
-- **Windows 11 (x64)**: two public `v2.0.0-preview.3` blind installs on a real PC, each starting with an empty cache and no VirtualBox, took **10 minutes 21 seconds** and **9 minutes 13 seconds** inside the installer, covering the automatic VirtualBox install, downloads, import, automated verification, and saving a clean snapshot.
+In addition to the guest image and official Claude Code package, the bootstrap stage downloads the source zip and a private Python (plus a private Tart on Mac if Tart is not installed, and VirtualBox on Windows if missing). You can estimate download time from the file sizes:
+
+- **Guest image**: Apple Silicon Mac (`.tvm`) is about **874 MiB** (`915,980,115` bytes); Windows x64 (`.ova`) is about **1511 MiB** (`1,584,588,800` bytes, about 1.5 GB).
+- **Official Claude Code package**: about **175 MiB** (`183,973,219` bytes).
+
+`v2.0.0-preview.4` real-machine measurements (keep waiting as long as progress keeps updating):
+
+- **Windows 11 (x64)**: empty-cache public-command blind install passed (26 PASS / 0 FAIL / 1 Stripe WARN) in **48 minutes 09 seconds** inside the installer; the guest image download took **45 minutes 38 seconds** (averaging 0.37 MB/s, limited by network speed at the time; Claude Code took 16 minutes 49 seconds and VirtualBox took 16 minutes 10 seconds, overlapping with install steps).
+- **Apple Silicon Mac**: public-command blind install passed (26 PASS / 0 FAIL / 1 Stripe WARN); with pre-warmed image and Claude Code caches, the bootstrap downloads (source zip, private Python, and private Tart) took about **7 minutes 33 seconds**, `cchouse up` took **1 minute 57 seconds**, and total runtime was **9 minutes 30 seconds**. In a separate `v2.0.0-preview.4` real-machine cold-download check (through the host proxy), the TVM image took **51.8 seconds** (16.85 MiB/s), Claude Code took **15.3 seconds** (11.47 MiB/s), and core install + verification excluding node input wait took **88.5 seconds** (also 26 PASS / 0 FAIL / 1 Stripe WARN).
 
 ---
 
@@ -128,7 +135,19 @@ An unreachable Stripe only affects paying on the claude.ai website. An existing 
 <details>
 <summary><b>Downloads are very slow from inside China. What then?</b></summary>
 
-Installer downloads follow the proxy settings of the host network. When a download is slow, pass `--image-mirror <mirror directory URL>` to use a mirror. The file is still checked against the SHA-256 in the manifest. You can also download the image on the host first and import it offline. See [manual install](docs/manual-install.md).
+Downloads happen in two stages, and both follow the host network's proxy settings (such as the system proxy or terminal proxy environment variables):
+
+1. **Bootstrap downloads** (source zip, private Python, and private Tart on Mac if Tart is not installed, fetched from GitHub / python.org): this stage currently has no progress bar and may wait silently for several minutes on slow connections; `--image-mirror` does **not** apply to these bootstrap downloads.
+2. **Image and component downloads** (guest image, official Claude Code package, and VirtualBox on Windows if missing, inside `cchouse up`): every downloaded file is verified against its SHA-256 in the manifest.
+
+**About `--image-mirror`**: the one-line bootstrap scripts on this page **do not currently support** forwarding `--image-mirror` to the installer (`bootstrap-macos.sh` only accepts `--tag` and `--cleanup-bootstrap`; `bootstrap-windows.ps1` only accepts `-CleanupBootstrap`). To use a mirror for the guest image with the one-line command, set the `CCHOUSE_IMAGE_MIRROR` environment variable first (the file is still checked against the SHA-256 in the manifest):
+
+- **Apple Silicon Mac**: run `export CCHOUSE_IMAGE_MIRROR='<mirror directory URL>'` first, then run the Mac one-line command from Quick start as-is.
+- **Windows (x64)**: run `$env:CCHOUSE_IMAGE_MIRROR = '<mirror directory URL>'` in the same PowerShell window first, then run the Windows one-line command from Quick start as-is.
+
+When invoking `scripts/cchouse.py up` directly (see [manual install](docs/manual-install.md)), you can pass `--image-mirror <mirror directory URL>` directly. You can also download the image on the host first and import it offline.
+
+**Resuming an interrupted download**: if a download drops or fails during either the bootstrap stage or image download, simply **rerun the exact same one-line command from Quick start**. Verified downloads and completed steps are reused automatically.
 
 </details>
 
