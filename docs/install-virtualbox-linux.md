@@ -19,7 +19,7 @@ Windows 上选择规则：
 - 已安装 VMware（能找到 `vmrun`）→ VMware 后端。
 - 否则 → 本手册的 VirtualBox 后端。显式指定仍可用 `--vm-backend vmware` 或 `--vm-backend virtualbox`。
 
-VirtualBox 基础包装从 Oracle 官网下载，版本和 SHA-256 写在 `guest-linux/virtualbox-manifest.json`。下载后校验，再静默安装（`ADDLOCAL=VBoxApplication`，不要桌面快捷方式、不要注册文件关联、不要装完自启）。仓库**不分发**这个安装包，也**不安装** Oracle 的附加包（无 USB 2/3、无主机共享目录）。已有 `VBoxManage.exe` 时跳过下载。NAT-only 安装失败不会改走完整安装。
+VirtualBox 基础包装从 Oracle 官网下载，版本和 SHA-256 写在 `guest-linux/virtualbox-manifest.json`。下载后校验，再静默安装（`ADDLOCAL=VBoxApplication`，不要桌面快捷方式、不要注册文件关联、不要装完自启）。`--msiparams` 放在参数最后，后面每一项单独是一个 `NAME=VALUE`（Oracle 手册 *Installing VirtualBox*：`VirtualBox.exe -msiparams NAME=VALUE [...]`）。静默安装仍会弹出 Windows 的 UAC 提权确认；进程已经具备提升权限时可能不再点击。不要为了免确认而关闭 UAC。仓库**不分发**这个安装包，也**不安装** Oracle 的附加包（无 USB 2/3、无主机共享目录）。已有 `VBoxManage.exe` 时跳过下载。清单里的 SHA-256 为空或格式不对时拒绝安装。NAT-only 安装失败不会改走完整安装。
 
 随后的步骤与 VMware 后端对齐，仍是 9 步：导入 OVA → 挂 `seed.iso` 离线首启 → 卸盘并删除明文 → 接通网卡重启 → `verify-linux.sh --fail-closed` → 快照 `cchouse-clean`。
 
@@ -29,7 +29,7 @@ VirtualBox 基础包装从 Oracle 官网下载，版本和 SHA-256 写在 `guest
 |---|---|---|
 | `VMNET_CIDR` | `10.0.2.0/24` | VirtualBox NAT 网段，写进客机 SSH 白名单 / mihomo 排除 |
 | `GUEST_IP` | `127.0.0.1` | 宿主只通过回环端口转发连接，不是客机内网地址 `10.0.2.15` |
-| `SSH_PORT` | `2222` | 宿主 `127.0.0.1:2222` → 客机 `22` |
+| `SSH_PORT` | `2222`–`2421` 中按 tag 选一个空闲端口 | 宿主只绑定 `127.0.0.1:<SSH_PORT>` → 客机 `22`。同一 tag 若 `instance.env` 里已有仍空闲的端口则沿用。探测 SSH 前会核对这台虚拟机的转发规则和监听进程，对不上就不写入 `known_hosts` |
 | `GUEST_IF` | `enp0s3` | VirtualBox NAT 网卡在客机里的名字 |
 | `ROUTER_IP` | 不改 | 仍是家里的路由器。验收把它当作必须拦截的地址 |
 

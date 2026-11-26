@@ -22,6 +22,7 @@ import argparse
 import base64
 import datetime
 import getpass
+import hashlib
 import ipaddress
 import json
 import os
@@ -440,7 +441,7 @@ def _env_quote_single(val):
     return f"'{val}'"
 
 
-def format_instance_env(tag, route, private_dir, ssh_key, ssh_pubkey, single_fields, net_cfg, egress_cfg, backend=None):
+def format_instance_env(tag, route, private_dir, ssh_key, ssh_pubkey, single_fields, net_cfg, egress_cfg, backend=None, ssh_port=None):
     if backend == "virtualbox":
         guest_if = VBOX_GUEST_IF
     else:
@@ -451,7 +452,17 @@ def format_instance_env(tag, route, private_dir, ssh_key, ssh_pubkey, single_fie
         f"GUEST_IP={net_cfg['guest_ip']}",
     ]
     if backend == "virtualbox":
-        net_lines.append(f"SSH_PORT={VBOX_SSH_PORT}")
+        if ssh_port is None or str(ssh_port).strip() == "":
+            raise RuntimeError("VirtualBox 需要 SSH_PORT")
+        try:
+            port = int(str(ssh_port).strip())
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("VirtualBox 需要 SSH_PORT") from exc
+        if not _vbox_port_in_span(port):
+            raise RuntimeError(
+                f"VirtualBox SSH 端口 {port} 不在 {VBOX_SSH_PORT_BASE}–{VBOX_SSH_PORT_BASE + VBOX_SSH_PORT_SPAN - 1}"
+            )
+        net_lines.append(f"SSH_PORT={port}")
     net_lines += [
         f"ROUTER_IP={net_cfg['router_ip']}",
         f"HOME_LAN_CIDR={net_cfg['home_lan_cidr']}",
@@ -601,7 +612,8 @@ def _now_iso():
 VBOX_NAT_CIDR = "10.0.2.0/24"
 VBOX_GUEST_IP = "127.0.0.1"
 VBOX_GUEST_IF = "enp0s3"
-VBOX_SSH_PORT = "2222"
+VBOX_SSH_PORT_BASE = 2222
+VBOX_SSH_PORT_SPAN = 200  # 2222..2421 inclusive
 _VMRUN_CANDIDATES = (
     r"C:\Program Files\VMware\VMware Workstation\vmrun.exe",
     r"C:\Program Files (x86)\VMware\VMware Workstation\vmrun.exe",
@@ -646,17 +658,114 @@ def detect_vm_backend(route, system=None, vmware_installed=None):
     return "vmware" if vmware_installed else "virtualbox"
 
 
+def _vbox_port_in_span(port, base=None, span=None):
+    base = VBOX_SSH_PORT_BASE if base is None else base
+    span = VBOX_SSH_PORT_SPAN if span is None else span
+    try:
+        value = int(port)
+    except (TypeError, ValueError):
+        return False
+    return base <= value < base + span
+
+
+def vbox_preferred_ssh_port(tag, base=VBOX_SSH_PORT_BASE, span=VBOX_SSH_PORT_SPAN):
+    """同一 tag 稳定落在 2222–2421。空闲检查从这里开始，被占用再往后找。"""
+    digest = hashlib.sha256(str(tag).encode("utf-8")).digest()
+    offset = int.from_bytes(digest[:2], "big") % span
+    return base + offset
+
+
+def loopback_port_free(port):
+    """127.0.0.1 上能否绑定。不设 SO_REUSEADDR，否则 Windows 上端口已被占用时仍可能绑定成功。"""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind(("127.0.0.1", int(port)))
+        return True
+    except OSError:
+        return False
+    finally:
+        sock.close()
+
+
+def _vbox_taken_ports(occupied):
+    taken = set()
+    for item in occupied or ():
+        try:
+            taken.add(int(item))
+        except (TypeError, ValueError):
+            continue
+    return taken
+
+
+def choose_vbox_ssh_port(tag, occupied=(), is_free=None, preferred=None):
+    """从 preferred（缺省为 tag 哈希）起在 2222–2421 里找空闲端口，到尾后绕回。"""
+    base = VBOX_SSH_PORT_BASE
+    span = VBOX_SSH_PORT_SPAN
+    last = base + span - 1
+    if preferred is None:
+        start = vbox_preferred_ssh_port(tag, base=base, span=span)
+    else:
+        try:
+            start = int(preferred)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(f"VirtualBox SSH 端口 {preferred} 不在 {base}–{last}") from exc
+        if not _vbox_port_in_span(start, base, span):
+            raise RuntimeError(f"VirtualBox SSH 端口 {start} 不在 {base}–{last}")
+    taken = _vbox_taken_ports(occupied)
+    probe = loopback_port_free if is_free is None else is_free
+    for step in range(span):
+        port = base + ((start - base + step) % span)
+        if port in taken or not probe(port):
+            continue
+        return port
+    raise RuntimeError(f"VirtualBox 在 {base}–{last} 内没有空闲的 SSH 转发端口")
+
+
+def _env_raw_value(env_path, key):
+    """读取 instance.env 里一个非敏感键。不打印文件内容。"""
+    text = Path(env_path).read_text(encoding="utf-8")
+    match = re.search(rf"^{re.escape(key)}=(.*)$", text, re.M)
+    if not match:
+        return None
+    raw = match.group(1).strip()
+    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "\"'":
+        raw = raw[1:-1]
+    return raw
+
+
+def resolve_vbox_ssh_port(tag, current=None, occupied=(), is_free=None):
+    """已写入且仍空闲的端口保持不变，避免续跑改口后和虚拟机里的转发规则对不上。"""
+    probe = loopback_port_free if is_free is None else is_free
+    taken = _vbox_taken_ports(occupied)
+    if current is not None and str(current).strip() != "":
+        try:
+            value = int(str(current).strip())
+        except (TypeError, ValueError):
+            value = None
+        if value is not None and _vbox_port_in_span(value) and value not in taken and probe(value):
+            return value
+    return choose_vbox_ssh_port(tag, occupied=occupied, is_free=probe)
+
+
 def apply_virtualbox_guest_net(ctx):
-    """把 VirtualBox NAT 网段写进 instance.env，供 seed 渲染。不改 ROUTER_IP。"""
+    """把 VirtualBox NAT 网段和本 tag 的 SSH_PORT 写进 instance.env。不改 ROUTER_IP。"""
     if getattr(ctx, "backend", None) != "virtualbox":
         return
+    tag = getattr(ctx, "tag", None) or "cc01"
+    current = None
     env_path = getattr(ctx, "env_path", None)
+    if env_path and Path(env_path).is_file():
+        current = _env_raw_value(env_path, "SSH_PORT")
+    occupied = getattr(ctx, "vbox_occupied_ports", ()) or ()
+    is_free = getattr(ctx, "vbox_port_is_free", None)
+    port = resolve_vbox_ssh_port(tag, current=current, occupied=occupied, is_free=is_free)
+    ctx.vbox_ssh_port = port
     if not env_path or not Path(env_path).is_file():
         return
     update_env_value(env_path, "VMNET_CIDR", VBOX_NAT_CIDR)
     update_env_value(env_path, "GUEST_IP", VBOX_GUEST_IP)
     update_env_value(env_path, "GUEST_IF", VBOX_GUEST_IF)
-    update_env_value(env_path, "SSH_PORT", VBOX_SSH_PORT)
+    update_env_value(env_path, "SSH_PORT", str(port))
 
 
 def find_bash():
@@ -1031,6 +1140,10 @@ def do_config(ctx):
         "home_lan_cidr": "192.168.100.0/24",
     }
     egress_cfg = {"timezone": tz, "ip": expected_ip, "loc": default_loc, "asn": default_asn}
+    ssh_port = None
+    if ctx.backend == "virtualbox":
+        apply_virtualbox_guest_net(ctx)
+        ssh_port = ctx.vbox_ssh_port
     env_text = format_instance_env(
         tag=tag,
         route=route,
@@ -1041,6 +1154,7 @@ def do_config(ctx):
         net_cfg=net_cfg,
         egress_cfg=egress_cfg,
         backend=ctx.backend,
+        ssh_port=ssh_port,
     )
     write_env_secure(ctx.env_path, env_text)
     print(f"[cchouse up] 已生成私有配置（权限 600）：{ctx.env_path}")
@@ -1154,6 +1268,7 @@ def step_import(ctx):
         ctx.save_state()
         return existed
     if ctx.backend == "virtualbox":
+        apply_virtualbox_guest_net(ctx)
         ctx.state.update(vm_created_by_up=True, vm_name=ctx.vm_name, vm_backend=ctx.backend)
         ctx.save_state()
         _ensure_virtualbox_installed(ctx)
@@ -1162,7 +1277,7 @@ def step_import(ctx):
             Ova=ctx.image_path,
             VmName=ctx.vm_name,
             VmDir=ctx.private_dir / "vm",
-            SshPort=VBOX_SSH_PORT,
+            SshPort=str(ctx.vbox_ssh_port),
         )
         return False
     ctx.vmware("import", Vmx=ctx.vmx, Ova=ctx.image_path, VmName=ctx.vm_name, VmDir=ctx.private_dir / "vm",
@@ -1195,6 +1310,7 @@ def step_boot(ctx):
         ctx.delete_plaintext()
         ctx.tart("boot", ctx.vm_name, ctx.ssh_key, ctx.known_hosts, ctx.ip_file, ctx.logs / "tart-run.log")
     elif ctx.backend == "virtualbox":
+        apply_virtualbox_guest_net(ctx)
         ctx.virtualbox(
             "boot",
             VmName=ctx.vm_name,
@@ -1202,7 +1318,7 @@ def step_boot(ctx):
             Key=ctx.ssh_key,
             KnownHosts=ctx.known_hosts,
             IpFile=ctx.ip_file,
-            SshPort=VBOX_SSH_PORT,
+            SshPort=str(ctx.vbox_ssh_port),
         )
         ctx.delete_plaintext()
     else:
@@ -1215,7 +1331,7 @@ def step_boot(ctx):
         raise StepError("未拿到客机 IPv4 地址")
     update_env_value(ctx.env_path, "GUEST_IP", ip)
     if ctx.backend == "virtualbox":
-        update_env_value(ctx.env_path, "SSH_PORT", VBOX_SSH_PORT)
+        update_env_value(ctx.env_path, "SSH_PORT", str(ctx.vbox_ssh_port))
     print(f"  客机已联网：claude@{ip}（明文 seed.iso / rendered 已删除）")
     return False
 

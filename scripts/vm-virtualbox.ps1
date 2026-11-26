@@ -13,7 +13,7 @@ param(
   [string]$CcIpFile = "",
   [string]$CcSnapshot = "cchouse-clean",
   [int]$CcFirstbootSeconds = 56,
-  [int]$CcSshPort = 2222,
+  [int]$CcSshPort = 0,
   [string]$CcInstaller = "",
   [string]$CcSha256 = ""
 )
@@ -41,8 +41,28 @@ function Invoke-CchouseVBox {
   if ($LASTEXITCODE -ne 0) { throw "VBoxManage failed (rc=$LASTEXITCODE)" }
 }
 
+function Get-CchouseVirtualBoxInstallArgs {
+  # Oracle VirtualBox manual, "Installing on Windows hosts" (public properties):
+  #   VirtualBox.exe -msiparams NAME=VALUE [...]
+  # One --msiparams switch, then each MSI property as its own argument.
+  # The manual spells the switch -msiparams; the same switch with two dashes is what the NAT-only install used.
+  # Windows PowerShell 5.1 Start-Process -ArgumentList can take this array because no value contains a space.
+  # ADDLOCAL stays VBoxApplication only. A silent install still shows the Windows UAC prompt unless already elevated.
+  "--silent"
+  "--ignore-reboot"
+  "--msiparams"
+  "ADDLOCAL=VBoxApplication"
+  "VBOX_INSTALLDESKTOPSHORTCUT=0"
+  "VBOX_INSTALLQUICKLAUNCHSHORTCUT=0"
+  "VBOX_REGISTERFILEEXTENSIONS=0"
+  "VBOX_START=0"
+}
+
 function Install-CchouseVirtualBox {
   param([string]$Installer, [string]$ExpectedSha)
+  if ($ExpectedSha -notmatch '^[0-9a-fA-F]{64}$') {
+    throw "CcSha256 is required"
+  }
   $existing = Get-CchouseVBoxManage
   if ($existing) {
     Write-Host "VBOX_ALREADY_INSTALLED=$existing"
@@ -51,21 +71,10 @@ function Install-CchouseVirtualBox {
   if (-not $Installer -or -not (Test-Path -LiteralPath $Installer)) {
     throw "VirtualBox installer not found"
   }
-  if ($ExpectedSha) {
-    $hash = (Get-FileHash -LiteralPath $Installer -Algorithm SHA256).Hash.ToLower()
-    if ($hash -ne $ExpectedSha.ToLower()) { throw "VirtualBox installer SHA-256 mismatch" }
-  }
+  $hash = (Get-FileHash -LiteralPath $Installer -Algorithm SHA256).Hash.ToLower()
+  if ($hash -ne $ExpectedSha.ToLower()) { throw "VirtualBox installer SHA-256 mismatch" }
   # NAT-only feature set. A full install is not a fallback: it would add bridge filters.
-  $argList = @(
-    "--silent",
-    "--ignore-reboot",
-    "--msiparams",
-    "ADDLOCAL=VBoxApplication",
-    "VBOX_INSTALLDESKTOPSHORTCUT=0",
-    "VBOX_INSTALLQUICKLAUNCHSHORTCUT=0",
-    "VBOX_REGISTERFILEEXTENSIONS=0",
-    "VBOX_START=0"
-  )
+  $argList = @(Get-CchouseVirtualBoxInstallArgs)
   $proc = Start-Process -FilePath $Installer -ArgumentList $argList -Wait -PassThru
   # 3010 is ERROR_SUCCESS_REBOOT_REQUIRED. --ignore-reboot still installed the NAT-only product.
   if ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) {
@@ -83,16 +92,127 @@ function Test-CchouseVmRegistered {
   return ($LASTEXITCODE -eq 0)
 }
 
-function Get-CchouseIdeController {
-  param([string]$Name)
-  $vbm = Get-CchouseVBoxManage
-  $info = @(& $vbm showvminfo $Name --machinereadable)
-  foreach ($line in $info) {
-    if ($line -match '^storagecontrollername\d+="([^"]+)"' -and $Matches[1] -match 'IDE') {
+function Get-CchouseIdeControllerName {
+  param([string[]]$Lines)
+  foreach ($line in @($Lines)) {
+    if ($line -match '^storagecontrollername\d+="([^"]*IDE[^"]*)"') {
       return $Matches[1]
     }
   }
-  throw "No IDE storage controller on $Name"
+  return $null
+}
+
+function Get-CchouseIdeController {
+  param([string]$Name)
+  $vbm = Get-CchouseVBoxManage
+  if (-not $vbm) { throw "VBoxManage.exe not found" }
+  $info = @(& $vbm showvminfo $Name --machinereadable)
+  $controller = Get-CchouseIdeControllerName -Lines $info
+  if ([string]::IsNullOrEmpty($controller)) {
+    throw "No IDE storage controller on $Name"
+  }
+  return $controller
+}
+
+function Get-CchouseVmUuidFromLines {
+  param([string[]]$Lines)
+  foreach ($line in @($Lines)) {
+    if ($line -match '^UUID="([^"]+)"') { return $Matches[1] }
+  }
+  return $null
+}
+
+function Get-CchouseVmNameFromLines {
+  param([string[]]$Lines)
+  foreach ($line in @($Lines)) {
+    if ($line -match '^name="([^"]*)"') { return $Matches[1] }
+  }
+  return $null
+}
+
+function Test-CchouseForwardRule {
+  param([string[]]$Lines, [int]$Port)
+  $want = "ssh,tcp,127.0.0.1,$Port,,22"
+  foreach ($line in @($Lines)) {
+    if ($line -match '^Forwarding\(\d+\)="([^"]*)"') {
+      if ($Matches[1] -eq $want) { return $true }
+    }
+  }
+  return $false
+}
+
+function Test-CchouseListenerCommand {
+  param([string]$CommandLine, [string]$VmUuid, [string]$VmName)
+  if ([string]::IsNullOrWhiteSpace($CommandLine)) { return $false }
+  if ($CommandLine -notmatch '(?i)(^|[\\/"\s])(VBoxHeadless|VBoxNetNAT)\.exe(\s|"|$)') {
+    return $false
+  }
+  $uuid = ""
+  if ($VmUuid) { $uuid = ($VmUuid -replace '[{}]', '').ToLower() }
+  if ($uuid -and $CommandLine.ToLower().Contains($uuid)) { return $true }
+  if ($VmName) {
+    $escaped = [regex]::Escape($VmName)
+    if ($CommandLine -match "(?i)(--comment|--startvm)\s+`"$escaped`"") { return $true }
+    if ($CommandLine -match "(?i)(--comment|--startvm)\s+$escaped(\s|$)") { return $true }
+  }
+  return $false
+}
+
+function Test-CchouseOwnForward {
+  param([string[]]$Lines, [int]$Port, [string]$ListenerCommand)
+  if (-not (Test-CchouseForwardRule -Lines $Lines -Port $Port)) { return $false }
+  $uuid = Get-CchouseVmUuidFromLines -Lines $Lines
+  $name = Get-CchouseVmNameFromLines -Lines $Lines
+  return [bool](Test-CchouseListenerCommand -CommandLine $ListenerCommand -VmUuid $uuid -VmName $name)
+}
+
+function Resolve-CchouseProbeDecision {
+  param(
+    [string[]]$Lines,
+    [int]$Port,
+    [string]$ListenerCommand,
+    [bool]$ListenerPresent
+  )
+  # [string] turns $null into "". ListenerPresent is the "nothing is bound yet" signal.
+  if (-not (Test-CchouseForwardRule -Lines $Lines -Port $Port)) { return "reject" }
+  if (-not $ListenerPresent) { return "wait" }
+  if (Test-CchouseOwnForward -Lines $Lines -Port $Port -ListenerCommand $ListenerCommand) { return "probe" }
+  return "reject"
+}
+
+function Assert-CchouseSshPort {
+  param([int]$Port)
+  if ($Port -lt 1 -or $Port -gt 65535) { throw "CcSshPort is required" }
+}
+
+function Get-CchouseShowvminfoLines {
+  param([string]$Name)
+  $vbm = Get-CchouseVBoxManage
+  if (-not $vbm) { throw "VBoxManage.exe not found" }
+  return @(& $vbm showvminfo $Name --machinereadable)
+}
+
+function Get-CchouseLoopbackListenerCommand {
+  param([int]$Port)
+  $conns = @()
+  try {
+    $conns = @(Get-NetTCPConnection -LocalAddress "127.0.0.1" -LocalPort $Port -State Listen -ErrorAction Stop |
+      Where-Object { $null -ne $_ })
+  } catch {
+    $msg = [string]$_.Exception.Message
+    if ($msg -match 'No matching') { return $null }
+    throw
+  }
+  if ($conns.Count -eq 0) { return $null }
+  foreach ($conn in $conns) {
+    $procId = [int]$conn.OwningProcess
+    if ($procId -le 0) { continue }
+    $proc = Get-CimInstance -ClassName Win32_Process -Filter ("ProcessId=" + $procId)
+    if ($null -eq $proc) { continue }
+    if ($null -eq $proc.CommandLine) { return "" }
+    return [string]$proc.CommandLine
+  }
+  return ""
 }
 
 function Start-CchouseVmDetached {
@@ -118,10 +238,17 @@ function Wait-CchousePowerOff {
   return $false
 }
 
+function Resolve-CchouseFirstbootStop {
+  param([bool]$AfterAcpi, [bool]$AfterHard)
+  if ($AfterAcpi) { return "acpi" }
+  if ($AfterHard) { return "hard" }
+  throw "firstboot shutdown timed out"
+}
+
 function Import-CchouseVBoxOva {
   param([string]$OvaPath, [string]$Name, [string]$DestDir, [int]$SshPort)
   if (-not (Test-Path -LiteralPath $OvaPath)) { throw "OVA not found" }
-  if ($SshPort -lt 1 -or $SshPort -gt 65535) { throw "SSH port out of range" }
+  Assert-CchouseSshPort -Port $SshPort
   $vbm = Get-CchouseVBoxManage
   if (-not $vbm) { throw "VBoxManage.exe not found (install VirtualBox or set CCHOUSE_VBOXMANAGE)" }
   New-Item -ItemType Directory -Force -Path $DestDir | Out-Null
@@ -168,9 +295,14 @@ function Invoke-CchouseVBoxFirstboot {
   Start-CchouseVmDetached $Name
   Start-Sleep -Seconds $Seconds
   & $vbm controlvm $Name acpipowerbutton 2>$null | Out-Null
-  if (-not (Wait-CchousePowerOff $Name 40)) {
+  $afterAcpi = Wait-CchousePowerOff $Name 40
+  $afterHard = $false
+  if (-not $afterAcpi) {
     & $vbm controlvm $Name poweroff 2>$null | Out-Null
-    Wait-CchousePowerOff $Name 20 | Out-Null
+    $afterHard = Wait-CchousePowerOff $Name 20
+  }
+  $how = Resolve-CchouseFirstbootStop -AfterAcpi:$afterAcpi -AfterHard:$afterHard
+  if ($how -eq "hard") {
     Write-Host "HARD_POWEROFF=1"
   }
   Write-Host "FIRSTBOOT_STOPPED=OK"
@@ -185,7 +317,7 @@ function Invoke-CchouseVBoxBoot {
     [string]$IpFile,
     [int]$SshPort
   )
-  if ($SshPort -lt 1 -or $SshPort -gt 65535) { throw "SSH port out of range" }
+  Assert-CchouseSshPort -Port $SshPort
   $vbm = Get-CchouseVBoxManage
   if (-not $vbm) { throw "VBoxManage.exe not found" }
   $ide = Get-CchouseIdeController $Name
@@ -214,11 +346,24 @@ function Invoke-CchouseVBoxBoot {
   $ok = $false
   for ($i = 0; $i -lt 60; $i++) {
     Start-Sleep -Seconds 3
+    $info = @(Get-CchouseShowvminfoLines -Name $Name)
+    $listener = Get-CchouseLoopbackListenerCommand -Port $SshPort
+    $present = $null -ne $listener
+    $decision = Resolve-CchouseProbeDecision -Lines $info -Port $SshPort -ListenerCommand ([string]$listener) -ListenerPresent:$present
+    if ($decision -eq "reject") {
+      throw "SSH forward 127.0.0.1:${SshPort} is not owned by $Name"
+    }
+    if ($decision -ne "probe") { continue }
     & $script:CchouseSystem32Ssh @sshOpts "claude@127.0.0.1" "true" 2>$null | Out-Null
     if ($LASTEXITCODE -eq 0) { $ok = $true; break }
   }
   if (-not $ok) { throw "Timed out waiting for SSH on 127.0.0.1:$SshPort" }
 
+  $info = @(Get-CchouseShowvminfoLines -Name $Name)
+  $listener = Get-CchouseLoopbackListenerCommand -Port $SshPort
+  if (-not (Test-CchouseOwnForward -Lines $info -Port $SshPort -ListenerCommand $listener)) {
+    throw "SSH forward 127.0.0.1:${SshPort} is not owned by $Name; refusing to record a host key"
+  }
   $scan = @(& $script:CchouseSystem32Keyscan -p $SshPort -t ed25519 127.0.0.1 2>$null)
   $scanText = (@($scan) -join "`n").Trim()
   if (-not $scanText) { throw "ssh-keyscan returned no host key" }

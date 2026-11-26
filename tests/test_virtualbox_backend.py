@@ -91,6 +91,7 @@ class TestVirtualBoxSelection(unittest.TestCase):
                 vm_backend="virtualbox",
             )
             ctx = cchouse_mod.UpContext(args, "cc05", "vmware-linux", private)
+            ctx.vbox_port_is_free = lambda _port: True
             calls = []
             ctx.virtualbox = lambda op, **kw: calls.append(("virtualbox", op, kw))
             ctx.vmware = lambda op, **kw: calls.append(("vmware", op, kw))
@@ -103,7 +104,11 @@ class TestVirtualBoxSelection(unittest.TestCase):
             self.assertEqual(ops, ["install", "import", "firstboot", "boot", "snapshot"])
             self.assertFalse(any(item[0] == "vmware" for item in calls))
             imported = next(item for item in calls if item[1] == "import")
-            self.assertEqual(imported[2]["SshPort"], "2222")
+            booted = next(item for item in calls if item[1] == "boot")
+            expected = str(cchouse_mod.vbox_preferred_ssh_port("cc05"))
+            self.assertEqual(imported[2]["SshPort"], str(ctx.vbox_ssh_port))
+            self.assertEqual(imported[2]["SshPort"], expected)
+            self.assertEqual(booted[2]["SshPort"], expected)
 
     def test_apply_net_keeps_router_ip(self):
         with tempfile.TemporaryDirectory() as td:
@@ -112,23 +117,81 @@ class TestVirtualBoxSelection(unittest.TestCase):
                 "VMNET_CIDR=192.168.180.0/24\nGUEST_IP=192.168.180.128\nGUEST_IF=ens33\nROUTER_IP=192.168.100.1\n",
                 encoding="utf-8",
             )
-            ctx = types.SimpleNamespace(backend="virtualbox", env_path=env)
+            ctx = types.SimpleNamespace(
+                backend="virtualbox", env_path=env, tag="cc01", vbox_port_is_free=lambda _port: True,
+            )
             cchouse_mod.apply_virtualbox_guest_net(ctx)
             text = env.read_text(encoding="utf-8")
+            preferred = cchouse_mod.vbox_preferred_ssh_port("cc01")
             self.assertIn("VMNET_CIDR=10.0.2.0/24\n", text)
             self.assertIn("GUEST_IP=127.0.0.1\n", text)
             self.assertIn("GUEST_IF=enp0s3\n", text)
-            self.assertIn("SSH_PORT=2222\n", text)
+            self.assertIn(f"SSH_PORT={preferred}\n", text)
+            self.assertEqual(ctx.vbox_ssh_port, preferred)
             self.assertIn("ROUTER_IP=192.168.100.1\n", text)
             self.assertNotIn("192.168.180", text)
+
+    def test_apply_skips_occupied_preferred_port(self):
+        with tempfile.TemporaryDirectory() as td:
+            env = Path(td) / "instance.env"
+            env.write_text("ROUTER_IP=192.168.100.1\nVMNET_CIDR=10.0.2.0/24\n", encoding="utf-8")
+            preferred = cchouse_mod.vbox_preferred_ssh_port("cc06")
+            ctx = types.SimpleNamespace(
+                backend="virtualbox", env_path=env, tag="cc06",
+                vbox_port_is_free=lambda port: port != preferred,
+            )
+            cchouse_mod.apply_virtualbox_guest_net(ctx)
+            nxt = preferred + 1 if preferred < cchouse_mod.VBOX_SSH_PORT_BASE + cchouse_mod.VBOX_SSH_PORT_SPAN - 1 else cchouse_mod.VBOX_SSH_PORT_BASE
+            text = env.read_text(encoding="utf-8")
+            self.assertEqual(ctx.vbox_ssh_port, nxt)
+            self.assertIn(f"SSH_PORT={nxt}\n", text)
+            self.assertIn("ROUTER_IP=192.168.100.1\n", text)
+
+    def test_resolve_keeps_existing_free_port_and_wraps(self):
+        preferred = cchouse_mod.vbox_preferred_ssh_port("cc01")
+        saved = 2300 if preferred != 2300 else 2301
+        kept = cchouse_mod.resolve_vbox_ssh_port("cc01", current=saved, is_free=lambda _port: True)
+        self.assertEqual(kept, saved)
+        self.assertNotEqual(saved, preferred)
+        busy = cchouse_mod.resolve_vbox_ssh_port("cc01", current=saved, is_free=lambda port: port != saved)
+        self.assertNotEqual(busy, saved)
+        self.assertEqual(busy, preferred if preferred != saved else (preferred + 1 if preferred < 2421 else 2222))
+        wrapped = cchouse_mod.choose_vbox_ssh_port("cc01", occupied=(2421,), is_free=lambda _port: True, preferred=2421)
+        self.assertEqual(wrapped, 2222)
+        skipped = cchouse_mod.choose_vbox_ssh_port("cc01", occupied=(2222,), is_free=lambda _port: True, preferred=2222)
+        self.assertEqual(skipped, 2223)
+        with self.assertRaises(RuntimeError):
+            cchouse_mod.choose_vbox_ssh_port("cc01", preferred=22, is_free=lambda _port: True)
+        with self.assertRaises(RuntimeError):
+            cchouse_mod.choose_vbox_ssh_port(
+                "cc01", occupied=range(2222, 2422), is_free=lambda _port: True, preferred=2222,
+            )
+
+    def test_preferred_ports_are_stable_and_spread(self):
+        tags = [f"cc{i:02d}" for i in range(1, 17)]
+        ports = [cchouse_mod.vbox_preferred_ssh_port(tag) for tag in tags]
+        self.assertGreater(len(set(ports)), 1)
+        for tag, port in zip(tags, ports):
+            self.assertEqual(cchouse_mod.vbox_preferred_ssh_port(tag), port)
+            self.assertGreaterEqual(port, cchouse_mod.VBOX_SSH_PORT_BASE)
+            self.assertLess(port, cchouse_mod.VBOX_SSH_PORT_BASE + cchouse_mod.VBOX_SSH_PORT_SPAN)
 
     def test_format_adds_ssh_port_only_for_virtualbox(self):
         net = {"vmnet_cidr": "10.0.2.0/24", "guest_ip": "127.0.0.1", "router_ip": "192.168.100.1", "home_lan_cidr": "192.168.100.0/24"}
         egress = {"timezone": "America/Los_Angeles", "ip": "203.0.113.9", "loc": "US", "asn": "AS1"}
         fields = _single_fields()
-        vbox = cchouse_mod.format_instance_env("cc01", "vmware-linux", "/tmp/cc", "/tmp/k", "ssh-ed25519 AAAA x", fields, net, egress, backend="virtualbox")
-        vmware = cchouse_mod.format_instance_env("cc01", "vmware-linux", "/tmp/cc", "/tmp/k", "ssh-ed25519 AAAA x", fields, net, egress, backend="vmware")
-        self.assertIn("SSH_PORT=2222\n", vbox)
+        with self.assertRaises(RuntimeError):
+            cchouse_mod.format_instance_env(
+                "cc01", "vmware-linux", "/tmp/cc", "/tmp/k", "ssh-ed25519 AAAA x", fields, net, egress, backend="virtualbox",
+            )
+        vbox = cchouse_mod.format_instance_env(
+            "cc01", "vmware-linux", "/tmp/cc", "/tmp/k", "ssh-ed25519 AAAA x", fields, net, egress,
+            backend="virtualbox", ssh_port=2301,
+        )
+        vmware = cchouse_mod.format_instance_env(
+            "cc01", "vmware-linux", "/tmp/cc", "/tmp/k", "ssh-ed25519 AAAA x", fields, net, egress, backend="vmware",
+        )
+        self.assertIn("SSH_PORT=2301\n", vbox)
         self.assertIn("GUEST_IF=enp0s3\n", vbox)
         self.assertNotIn("SSH_PORT=", vmware)
         self.assertIn("GUEST_IF=ens33\n", vmware)
@@ -216,6 +279,15 @@ class TestVirtualBoxScript(unittest.TestCase):
         self.assertNotIn(r"Program Files\OpenSSH", src)
         self.assertNotIn("& ssh.exe", src)
         self.assertNotIn("flush ruleset", src.lower())
+        self.assertIn('^storagecontrollername\\d+="([^"]*IDE[^"]*)"', src)
+        self.assertNotIn("$Matches[1] -match", src)
+        self.assertNotIn("$CcSshPort = 2222", src)
+        self.assertIn("CcSha256 is required", src)
+        self.assertIn("firstboot shutdown timed out", src)
+        self.assertLess(src.rfind("Test-CchouseOwnForward"), src.rfind("CchouseSystem32Keyscan"))
+        self.assertLess(src.rfind("Resolve-CchouseFirstbootStop"), src.find("HARD_POWEROFF=1"))
+        self.assertLess(src.find("HARD_POWEROFF=1"), src.find("FIRSTBOOT_STOPPED=OK"))
+        self.assertNotIn("Wait-CchousePowerOff $Name 20 | Out-Null", src)
 
     def test_preflight_virtualbox_skips_missing_vmware(self):
         self.assertEqual(preflight_mod.vmware_linux_host_errors(None, "virtualbox"), [])

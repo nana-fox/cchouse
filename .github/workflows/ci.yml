@@ -39,6 +39,10 @@ jobs:
       - name: Run unit tests (Windows)
         if: runner.os == 'Windows'
         run: python -I -m unittest discover -s tests -v
+      - name: VirtualBox PowerShell function tests
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: pwsh -NoProfile -File tests/vm-virtualbox.Tests.ps1
 
   lint:
     name: shell & powershell lint (ubuntu-latest)
@@ -89,3 +93,7 @@ jobs:
             exit 1
           }
           Write-Host "OK PSScriptAnalyzer ($($files.Count) files)"
+
+      - name: VirtualBox PowerShell function tests
+        shell: pwsh
+        run: pwsh -NoProfile -File tests/vm-virtualbox.Tests.ps1

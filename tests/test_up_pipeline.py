@@ -3,6 +3,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -487,7 +488,13 @@ class TestUpPipeline(unittest.TestCase):
                     self.assertIn("VMNET_CIDR=10.0.2.0/24", env_text)
                     self.assertIn("GUEST_IP=127.0.0.1\n", env_text)
                     self.assertIn("GUEST_IF=enp0s3", env_text)
-                    self.assertIn("SSH_PORT=2222", env_text)
+                    port_match = re.search(r"(?m)^SSH_PORT=(\d+)\s*$", env_text)
+                    self.assertIsNotNone(port_match)
+                    written = int(port_match.group(1))
+                    self.assertEqual(written, cchouse_mod.resolve_vbox_ssh_port("cc06", current=written))
+                    self.assertGreaterEqual(written, cchouse_mod.VBOX_SSH_PORT_BASE)
+                    self.assertLess(written, cchouse_mod.VBOX_SSH_PORT_BASE + cchouse_mod.VBOX_SSH_PORT_SPAN)
+                    self.assertIn(f"-CcSshPort {written}", out)
                     self.assertIn("ROUTER_IP=192.168.100.1", env_text)
                 else:
                     self.assertNotIn("SSH_PORT=", env_text)
