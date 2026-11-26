@@ -28,3 +28,4 @@
 - 修复 Tart 联网重启后的 mihomo 预热探针未引用 `known_hosts` 路径的问题。macOS 默认私有目录含空格，旧写法导致 SSH 主机密钥校验失败。
 - Tart 黄金镜像构建的 USTC apt 镜像仅在构建期间生效。关机前恢复 Debian 官方普通源和安全源，并在空状态断言中拒绝交付 `/etc/apt` 仍含 USTC 的镜像。
 - Linux 桌面网络检查页在客机代理启动或查询服务暂不可用时进行限时重试，等待期间显示黄色状态。出口元数据优先查询 IPQuery，备用 IPinfo，仍用 ipify 独立核对 IP。全部尝试结束后仍无法完成核对时提示刷新或运行自动验收。
+- 修复 `scripts/verify-linux.sh` 在 VirtualBox NAT 端口转发下仍连 22 端口的问题：`instance.env` 可选 `SSH_PORT`（默认 22），ssh 使用 `-p`、scp 使用 `-P`。Windows 上按绝对路径调用 `C:\Windows\System32\OpenSSH\ssh.exe` 与同目录 `scp.exe`，避免 Git Bash 把 `/usr/bin/ssh` 放在 PATH 最前盖住 `cchouse.py` 预置的 System32 OpenSSH，也避开会忽略 `ConnectTimeout` 的 `C:\Program Files\OpenSSH\ssh.exe`。System32 ssh 认 `-i` 的 `/c/...`，但不认 `UserKnownHostsFile="/c/..."`；选中该客户端时用 `cygpath -m` 把密钥和 `known_hosts` 转成 `C:/...`，没有 `cygpath` 时保持原路径。
