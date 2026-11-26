@@ -94,6 +94,7 @@ The guest is always Debian 13 + Chromium + Claude Code. Linux hosts are not supp
 - **Why a VM instead of a fingerprint browser or a plain proxy?** A plain proxy often falls back to direct traffic and CLI tools may ignore it. A fingerprint browser (a browser that manages separate browser profiles and settings) only covers the browser, not Claude Code. A VM locks the network for the whole system, so web and CLI share one exit.
 - **Stripe is blocked.** Only paying on claude.ai is affected, and the check only tests connectivity. Add a payment-only proxy if you need it.
 - **Downloads are slow.** The installer uses the host's proxy settings. Pass `--image-mirror <mirror directory URL>` to use an image mirror while keeping SHA-256 verification. You can also download the image on the host and import it offline. [Manual install (Chinese)](docs/manual-install.md)
+- **The first egress check fails with Clash TUN enabled on the host.** Wait 1–2 minutes and rerun `verify-linux.sh --fail-closed` using the same instance configuration. If it keeps failing, add a direct rule for your proxy node’s IPv4 address in the host’s Clash rules, for example `IP-CIDR,<node IPv4>/32,DIRECT,no-resolve`, before the catch-all rule. Run verification again. Apply the rule on the host.
 - **Something failed.** Export a redacted diagnostic zip using the generated `instance.env`. Add `--vm-ssh` to collect guest diagnostics if the VM has started. These examples use the default directory and tag `cc01`.
 
   ```bash

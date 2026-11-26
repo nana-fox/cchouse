@@ -140,6 +140,8 @@ Stripe 不通只影响在 claude.ai 网页上付款。已经订阅的、或在�
 <details>
 <summary><b>装的时候出错了怎么办？</b></summary>
 
+宿主启用了 **Clash TUN** 时，如果首次验收的客机出口连测失败，等 1–2 分钟，再用同一实例的配置重跑 `verify-linux.sh --fail-closed`。仍失败时，可在宿主 Clash 规则中为代理节点本身的 IPv4 地址添加一条直连规则，例如 `IP-CIDR,<节点IPv4>/32,DIRECT,no-resolve`，放在兜底规则前，再重跑验收。直连规则只配置在宿主 Clash。
+
 用安装时生成的 `instance.env` 导出脱敏诊断包。已启动的客机可加 `--vm-ssh`，让工具尝试采集客机诊断信息。以下命令使用默认目录和标签 `cc01`。
 
 ```bash
