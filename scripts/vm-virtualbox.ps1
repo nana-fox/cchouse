@@ -211,11 +211,31 @@ function Get-CchouseLoopbackListenerId {
 
 function Start-CchouseVmDetached {
   param([string]$Name)
-  $vbm = Get-CchouseVBoxManage
-  $cmd = "`"$vbm`" startvm `"$Name`" --type headless"
-  $res = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $cmd }
-  if ($res.ReturnValue -ne 0) {
-    throw "Win32_Process.Create failed for startvm (rc=$($res.ReturnValue))"
+  if ([string]::IsNullOrWhiteSpace($Name)) { throw "CcVmName is required" }
+  # VBoxManage startvm --type headless delegates VM creation to VBoxSVC and exits
+  # once LaunchVMProcess finishes (~3-4s). Running it synchronously avoids racing
+  # with the next showvminfo poll (VBOX_E_INVALID_OBJECT_STATE) and surfaces
+  # launch errors immediately instead of waiting for the full firstboot timeout.
+  $maxAttempts = 5
+  for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+    $res = Invoke-CchouseVBoxOptional -CcArgumentList @("startvm", $Name, "--type", "headless")
+    if ($res.ExitCode -eq 0) {
+      return
+    }
+    $parts = @()
+    if (-not [string]::IsNullOrWhiteSpace($res.Stderr)) { $parts += $res.Stderr.Trim() }
+    $outText = ($res.Output -join "`n").Trim()
+    if (-not [string]::IsNullOrWhiteSpace($outText)) { $parts += $outText }
+    $detail = $parts -join "`n"
+    $isTransientLock = ($detail -match 'VBOX_E_INVALID_OBJECT_STATE|already locked by a session')
+    if ($isTransientLock -and $attempt -lt $maxAttempts) {
+      Start-Sleep -Seconds 1
+      continue
+    }
+    if ($detail) {
+      throw "VBoxManage startvm --type headless failed for $Name (rc=$($res.ExitCode)): $detail"
+    }
+    throw "VBoxManage startvm --type headless failed for $Name (rc=$($res.ExitCode))"
   }
 }
 
