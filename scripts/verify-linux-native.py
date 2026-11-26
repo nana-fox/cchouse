@@ -23,7 +23,7 @@ GUEST_KEYS = (
 )
 
 
-def verify(env, flags):
+def verify(env, flags, hostkey_trust=""):
     guest_ip = str(ipaddress.IPv4Address(env["GUEST_IP"]))
     ipaddress.IPv4Address(env["ROUTER_IP"])
     if not re.fullmatch(r"[a-z][a-z0-9_-]{1,15}", env["TAG"]):
@@ -46,6 +46,8 @@ def verify(env, flags):
     if env.get("EXIT_MODE") == "single" and env.get("STRIPE_NODE_SERVER") and not env.get("STRIPE_EXIT_MODE"):
         guest_env["STRIPE_EXIT_MODE"] = "node"
     config = "".join(f"export {key}={shlex.quote(guest_env.get(key, ''))}\n" for key in GUEST_KEYS)
+    if hostkey_trust == "accept-new":
+        config += "export CCHOUSE_HOSTKEY_TRUST=accept-new\n"
     shell_script = (SCRIPTS / "verify-linux.sh").read_text(encoding="utf-8")
     command = "bash -s -- --guest-local " + " ".join(flags)
     return subprocess.run(ssh_args + [command], input=(config + shell_script).encode("utf-8")).returncode
@@ -59,7 +61,9 @@ def main():
     args = parser.parse_args()
     flags = [flag for flag, enabled in (("--fail-closed", args.fail_closed), ("--json", args.json)) if enabled]
     try:
-        return verify(render.load_env(args.env), flags)
+        trust_file = args.env.parent / "logs" / "hostkey.trust"
+        trust = trust_file.read_text(encoding="utf-8-sig").strip() if trust_file.is_file() else ""
+        return verify(render.load_env(args.env), flags, trust)
     except (KeyError, OSError, ValueError) as error:
         print(f"无法启动客机验收：{error}", file=sys.stderr)
         return 1

@@ -84,13 +84,14 @@ class WindowsNativeVerifyTests(unittest.TestCase):
                 "SINGLE_PASS": "test-proxy-secret", "SINGLE_UUID": "test-uuid-secret",
             }
             with mock.patch.object(verify.subprocess, "run", return_value=subprocess.CompletedProcess([], 1)) as run:
-                self.assertEqual(verify.verify(env, ["--fail-closed"]), 1)
+                self.assertEqual(verify.verify(env, ["--fail-closed"], "accept-new"), 1)
             args, payload = run.call_args.args[0], run.call_args.kwargs["input"].decode()
             self.assertIn(str(identity.resolve()), args)
             self.assertIn(f'UserKnownHostsFile="{known_hosts.resolve().as_posix()}"', args)
             self.assertIn("StrictHostKeyChecking=yes", args)
             self.assertEqual(args[-4:], ["-p", "49732", "claude@127.0.0.1", "bash -s -- --guest-local --fail-closed"])
             self.assertIn("export EXPECTED_EGRESS_IP=203.0.113.9\n", payload)
+            self.assertIn("export CCHOUSE_HOSTKEY_TRUST=accept-new\n", payload)
             self.assertIn("restore_mihomo", payload)
             for value in ("test-proxy-secret", "test-uuid-secret", str(identity), str(known_hosts)):
                 self.assertNotIn(value, payload)

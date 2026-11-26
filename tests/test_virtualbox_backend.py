@@ -399,11 +399,11 @@ class TestVirtualBoxScript(unittest.TestCase):
                     return "/" + text[0].lower() + text[2:].replace("\\", "/")
                 return text
 
-            def run():
+            def run(**extra_env):
                 proc = subprocess.run(
                     [bash, str(script)],
                     capture_output=True, text=True, encoding="utf-8", errors="replace",
-                    env={**os.environ, "ENV_FILE": for_bash(env_file), "LC_ALL": "en_US.UTF-8"},
+                    env={**os.environ, "ENV_FILE": for_bash(env_file), "LC_ALL": "en_US.UTF-8", **extra_env},
                 )
                 self.assertEqual(proc.returncode, 0, proc.stderr)
                 return proc.stdout
@@ -414,6 +414,8 @@ class TestVirtualBoxScript(unittest.TestCase):
             self.assertEqual(run(), "")
             trust.unlink()
             self.assertEqual(run(), "")
+            self.assertEqual(run(GUEST_LOCAL="1", CCHOUSE_HOSTKEY_TRUST="accept-new"), "WARN 未经串口核对主机密钥\n")
+            self.assertEqual(run(GUEST_LOCAL="1", CCHOUSE_HOSTKEY_TRUST="serial"), "")
 
 
 if __name__ == "__main__":
