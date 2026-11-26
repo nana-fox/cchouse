@@ -226,8 +226,10 @@ public class BootstrapFixture {
 }
 '@
 """
-        driver = """
+        driver = r"""
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$env:PATH = "$PSHOME;$env:WINDIR\System32"
+if (Get-Command git -ErrorAction SilentlyContinue) { throw 'Git should be absent from PATH' }
 function Invoke-WebRequest {
   param([switch]$UseBasicParsing, [string]$Uri, [string]$OutFile)
   $name = if ($Uri -like '*embed-amd64.zip') { 'python.zip' } else { 'source.zip' }
