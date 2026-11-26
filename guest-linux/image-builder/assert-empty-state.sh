@@ -19,6 +19,22 @@ apt_without_ustc() {
   [ "$status" -eq 1 ]
 }
 
+guest_additions_build_deps_gone() {
+  if dpkg -s dkms >/dev/null 2>&1; then
+    return 1
+  fi
+  if dpkg -s build-essential >/dev/null 2>&1; then
+    return 1
+  fi
+  if dpkg-query -W -f '${Package}\n' 'linux-headers-*' 2>/dev/null | grep -q .; then
+    return 1
+  fi
+  if ls /tmp/VBoxGuestAdditions*.iso >/dev/null 2>&1; then
+    return 1
+  fi
+  return 0
+}
+
 check "/etc/machine-id 为空文件（0 字节）" test ! -s /etc/machine-id
 check "/etc/hostname 为空文件（0 字节）" test ! -s /etc/hostname
 check "无 /var/lib/dbus/machine-id" test ! -e /var/lib/dbus/machine-id
@@ -42,5 +58,20 @@ check "出厂默认全断 nftables 规则存在" test -f /etc/cchouse/nftables-d
 check "cchouse-default-drop.service 已启用" bash -c 'systemctl is-enabled cchouse-default-drop.service >/dev/null 2>&1'
 check "cchouse-firstboot.service 已启用" bash -c 'systemctl is-enabled cchouse-firstboot.service >/dev/null 2>&1'
 check "firstboot.done 尚未生成" test ! -e /var/lib/cchouse/firstboot.done
+check "未安装 unattended-upgrades" bash -c '! dpkg -s unattended-upgrades >/dev/null 2>&1'
+check "apt 每日自动升级已关闭" bash -c '! systemctl is-enabled apt-daily.timer >/dev/null 2>&1 && ! systemctl is-enabled apt-daily-upgrade.timer >/dev/null 2>&1'
+
+cchouse_image_arch=""
+if [ -f /etc/cchouse-image-release ]; then
+  cchouse_image_arch=$(sed -n 's/^ARCH=//p' /etc/cchouse-image-release | head -n 1)
+fi
+if [ "$cchouse_image_arch" = "amd64" ]; then
+  check "vboxadd.service 存在且只在 VirtualBox 启动" bash -c 'test -f /etc/systemd/system/vboxadd.service.d/cchouse.conf && grep -qx "ConditionVirtualization=oracle" /etc/systemd/system/vboxadd.service.d/cchouse.conf && { test -f /lib/systemd/system/vboxadd.service || test -f /usr/lib/systemd/system/vboxadd.service; }'
+  check "vboxadd-service.service 存在且只在 VirtualBox 启动" bash -c 'test -f /etc/systemd/system/vboxadd-service.service.d/cchouse.conf && grep -qx "ConditionVirtualization=oracle" /etc/systemd/system/vboxadd-service.service.d/cchouse.conf && { test -f /lib/systemd/system/vboxadd-service.service || test -f /usr/lib/systemd/system/vboxadd-service.service; }'
+  check "open-vm-tools 仅在 VMware 启动" bash -c 'dpkg -s open-vm-tools open-vm-tools-desktop >/dev/null 2>&1 && grep -qx "ConditionVirtualization=vmware" /etc/systemd/system/open-vm-tools.service.d/cchouse.conf'
+  check "vboxguest 对得上当前内核" bash -c 'vermagic=$(modinfo -k "$(uname -r)" -F vermagic vboxguest 2>/dev/null) && case "$vermagic" in "$(uname -r)"*) test -n "$vermagic" ;; *) exit 1 ;; esac'
+  check "已删除 Guest Additions 编译依赖与 ISO" guest_additions_build_deps_gone
+  check "没有 vboxsf 挂载" bash -c '! grep -q " vboxsf " /proc/mounts'
+fi
 
 [ "$fail" = 0 ] || { echo "空状态断言失败：$fail 项未通过" >&2; exit 1; }

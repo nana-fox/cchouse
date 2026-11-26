@@ -196,7 +196,26 @@ EOF
 cat >/home/claude/.config/openbox/autostart <<'EOF'
 xset s off -dpms s noblank &
 xsetroot -solid "#2b2f3a" &
-command -v vmware-user-suid-wrapper >/dev/null 2>&1 && vmware-user-suid-wrapper &
+cchouse_vendor=""
+cchouse_product=""
+if [ -r /sys/class/dmi/id/sys_vendor ]; then
+  cchouse_vendor=$(cat /sys/class/dmi/id/sys_vendor)
+fi
+if [ -r /sys/class/dmi/id/product_name ]; then
+  cchouse_product=$(cat /sys/class/dmi/id/product_name)
+fi
+case "$cchouse_vendor" in
+  "VMware, Inc.")
+    command -v vmware-user-suid-wrapper >/dev/null 2>&1 && vmware-user-suid-wrapper &
+    ;;
+esac
+case "$cchouse_vendor|$cchouse_product" in
+  "innotek GmbH|VirtualBox")
+    command -v VBoxClient >/dev/null 2>&1 && VBoxClient --clipboard &
+    command -v VBoxClient >/dev/null 2>&1 && VBoxClient --vmsvga &
+    ;;
+esac
+unset cchouse_vendor cchouse_product
 command -v spice-vdagent >/dev/null 2>&1 && spice-vdagent &
 tint2 &
 fcitx5 -d &
@@ -274,6 +293,107 @@ cat >/etc/NetworkManager/conf.d/99-cchouse-no-connectivity-check.conf <<'EOF'
 enabled=false
 EOF
 systemctl disable apt-daily.timer apt-daily-upgrade.timer 2>/dev/null || true
+
+cchouse_vboxguest_matches() {
+  vermagic=$(modinfo -k "$(uname -r)" -F vermagic vboxguest 2>/dev/null || true)
+  case "$vermagic" in
+    "$(uname -r)"*)
+      [ -n "$vermagic" ]
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+cchouse_unit_dropin() {
+  unit="$1"
+  condition="$2"
+  unit_path=""
+  for candidate in "/lib/systemd/system/${unit}" "/usr/lib/systemd/system/${unit}"; do
+    if [ -f "$candidate" ]; then
+      unit_path="$candidate"
+      break
+    fi
+  done
+  [ -n "$unit_path" ] || return 0
+  mkdir -p "/etc/systemd/system/${unit}.d"
+  printf '[Unit]\nConditionVirtualization=%s\n' "$condition" >"/etc/systemd/system/${unit}.d/cchouse.conf"
+}
+
+# amd64 OVA 同时带 open-vm-tools 与 Guest Additions。服务按 DMI 启动，编译器不留在镜像里。
+# 镜像已 purge unattended-upgrades 并关掉 apt-daily，内核不会自己升级，所以编完就删 dkms。
+install_vbox_guest_additions() {
+  iso="${VBOX_GUEST_ADDITIONS_ISO:-}"
+  ga_sha="${VBOX_GUEST_ADDITIONS_SHA256:-}"
+  [ -n "$iso" ] && [ -f "$iso" ] || { echo "错误：amd64 镜像必须提供 VBOX_GUEST_ADDITIONS_ISO" >&2; exit 1; }
+  printf '%s' "$ga_sha" | grep -Eq '^[0-9a-f]{64}$' || { echo "错误：VBOX_GUEST_ADDITIONS_SHA256 无效" >&2; exit 1; }
+  echo "${ga_sha}  ${iso}" | sha256sum -c -
+  apt-get update
+  apt-get install -y --no-install-recommends "linux-headers-$(uname -r)" build-essential dkms bzip2 tar
+  mnt=$(mktemp -d)
+  mount -o loop,ro "$iso" "$mnt"
+  set +e
+  sh "$mnt/VBoxLinuxAdditions.run" --nox11
+  set -e
+  umount "$mnt"
+  rmdir "$mnt" || true
+  if ! cchouse_vboxguest_matches; then
+    setup=""
+    for candidate in /opt/VBoxGuestAdditions-*/init/vboxadd /sbin/rcvboxadd /usr/sbin/rcvboxadd; do
+      if [ -x "$candidate" ]; then
+        setup=$candidate
+        break
+      fi
+    done
+    [ -n "$setup" ] || { echo "错误：Guest Additions 没有留下 vboxadd setup" >&2; exit 1; }
+    "$setup" setup
+  fi
+  cchouse_vboxguest_matches || { echo "错误：vboxguest 没有对上 $(uname -r)" >&2; exit 1; }
+  apt-get purge -y build-essential dkms
+  header_list=$(mktemp)
+  dpkg-query -W -f '${Package}\n' 'linux-headers-*' >"$header_list" 2>/dev/null || true
+  if [ -s "$header_list" ]; then
+    xargs -r apt-get purge -y <"$header_list"
+  fi
+  rm -f "$header_list"
+  apt-get autoremove -y
+  apt-get clean
+  cchouse_vboxguest_matches || { echo "错误：清掉编译依赖后 vboxguest 不在了" >&2; exit 1; }
+  rm -f "$iso"
+  cchouse_unit_dropin vboxadd.service oracle
+  cchouse_unit_dropin vboxadd-service.service oracle
+  cchouse_unit_dropin open-vm-tools.service vmware
+  cchouse_unit_dropin vgauth.service vmware
+  cat >/usr/local/bin/cchouse-vmware-user <<'EOF'
+#!/bin/sh
+vendor=""
+if [ -r /sys/class/dmi/id/sys_vendor ]; then
+  vendor=$(cat /sys/class/dmi/id/sys_vendor)
+fi
+case "$vendor" in
+  "VMware, Inc.")
+    exec vmware-user-suid-wrapper
+    ;;
+esac
+exit 0
+EOF
+  chmod 755 /usr/local/bin/cchouse-vmware-user
+  if [ -f /etc/xdg/autostart/vmware-user.desktop ]; then
+    sed -i 's|^Exec=.*|Exec=/usr/local/bin/cchouse-vmware-user|' /etc/xdg/autostart/vmware-user.desktop
+  fi
+  for desktop in /etc/xdg/autostart/vboxclient.desktop /usr/share/autostart/vboxclient.desktop; do
+    if [ -f "$desktop" ]; then
+      sed -i 's|^Exec=.*|Exec=/bin/true|' "$desktop"
+    fi
+  done
+  systemctl daemon-reload
+}
+
+if [ "$MIHOMO_ARCH" = "amd64" ]; then
+  echo "== 安装 VirtualBox Guest Additions（仅 amd64；Tart 不走这里）"
+  install_vbox_guest_additions
+fi
 
 echo "== [6/6] 写入镜像版本元数据、清空机器身份并执行空状态断言"
 cat >/etc/cchouse-image-release <<EOF

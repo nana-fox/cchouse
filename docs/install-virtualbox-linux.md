@@ -38,7 +38,13 @@ Windows 上 SSH 使用 `C:\Windows\System32\OpenSSH\ssh.exe`。`C:\Program Files
 
 ## 虚拟机形态
 
-导入后 `VBoxManage modifyvm` 固定为：BIOS、2 CPU、2048 MB、VMSVGA 128 MB、网卡 1 为 NAT、型号 `82540EM`、剪贴板双向、关闭拖放、关闭声音、关闭 USB。首启时网线断开，验收重启前再接通。不安装 Guest Additions。
+导入后 `VBoxManage modifyvm` 固定为：BIOS、2 CPU、2048 MB、VMSVGA 128 MB、网卡 1 为 NAT、型号 `82540EM`、剪贴板双向、关闭拖放、关闭声音、关闭 USB。首启时网线断开，验收重启前再接通。不挂共享目录。
+
+同一份 amd64 黄金镜像里有 VirtualBox Guest Additions 7.2.22，和 `open-vm-tools` 放在一起。ISO 是 `VBoxGuestAdditions_7.2.22.iso`，SHA-256 取自 `https://download.virtualbox.org/virtualbox/7.2.22/SHA256SUMS`，写在 `guest-linux/virtualbox-manifest.json` 的 `guest_additions`。只用这个 GPL 安装器，不下载、不安装 Extension Pack。构建时把模块编进当时的内核，随后删除 ISO，并 purge `dkms`、`linux-headers` 与 `build-essential`。
+
+镜像在构建时已经 purge `unattended-upgrades`，并禁用 `apt-daily.timer` 与 `apt-daily-upgrade.timer`（`firstboot.sh` 会再关一次）。没有自动升级内核的路径，所以不把编译器留在客机里，也不锁定内核包。以后如果有人手动升级内核，要重做镜像，`vboxguest` 才会重新对上。
+
+服务按 DMI 分开：`open-vm-tools` 只在 VMware 启动（`ConditionVirtualization=vmware`），`vboxadd` 与 `vboxadd-service` 只在 VirtualBox 启动（systemd 的 `oracle`，即 `innotek GmbH` / `VirtualBox`）。Openbox 只在 VirtualBox 下启动 `VBoxClient --clipboard` 和 `VBoxClient --vmsvga`。不启动拖放，不启动无缝模式。宿主侧剪贴板仍是 `--clipboard-mode bidirectional`，拖放仍是 `--drag-and-drop disabled`。Tart / arm64 不装 Guest Additions，仍然只有 `spice-vdagent`。Additions 走虚拟机后门，不改客机 `nftables`。
 
 首启把 `seed.iso` 挂到 IDE 的 port 1 / device 0。注入结束后卸盘、`closemedium`，并删除 `seed.iso`。删不掉就停止，不带着明文光盘继续。
 
