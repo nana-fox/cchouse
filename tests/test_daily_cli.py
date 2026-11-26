@@ -270,11 +270,24 @@ class TestLauncherAndPrivateTart(unittest.TestCase):
             self.assertFalse(Path(paths[1]).is_symlink())
             self.assertEqual(state["launchers"], [])
 
-    def test_windows_launcher_stub_raises_not_implemented(self):
-        with self.assertRaises(NotImplementedError):
-            launcher.create("cc01", {}, platform_name="Windows")
-        with self.assertRaises(NotImplementedError):
-            launcher.remove("cc01", {}, platform_name="Windows")
+    def test_windows_launcher_create_and_remove_dispatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            state = {}
+
+            def fake_create(specs):
+                for item in specs:
+                    p = Path(item["path"])
+                    p.parent.mkdir(parents=True, exist_ok=True)
+                    p.write_bytes(b"lnk")
+
+            with mock.patch.object(launcher, "_create_windows_lnk_files", side_effect=fake_create):
+                paths = launcher.create("cc01", state, platform_name="Windows", home=home)
+            self.assertEqual(len(paths), 2)
+            self.assertEqual(len(launcher.preview("cc01", state)), 2)
+            removed = launcher.remove("cc01", state, platform_name="Windows")
+            self.assertEqual(len(removed), 2)
+            self.assertEqual(state["launchers"], [])
 
     def test_install_cli_entry_mac(self):
         with tempfile.TemporaryDirectory() as tmp:
