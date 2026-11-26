@@ -36,7 +36,7 @@ cchouse uses only the one node you configure, sets the VM's time zone, language,
 
 ## Quick start
 
-This page matches image `v2.0.0-preview.2`. The installer downloads the file from the in-repo image manifest and checks it. [Image size and SHA-256](guest-linux/image-manifest.json)
+The quick start runs the current installer from `main` and uses the `v2.0.0-preview.2` image. The installer downloads the file from the in-repo image manifest and checks it. [Image size and SHA-256](guest-linux/image-manifest.json)
 
 **Step 1: Install the base tools and the VM software** (one time)
 
@@ -59,7 +59,7 @@ If installation fails, it stops on the step that failed. Fix the cause it prints
 
 **Step 3: Open the VM desktop, and sign in only after every network check passes**
 
-After the automated checks pass, open the network check page on the VM desktop (the picture above). After every network check passes, sign in to Claude in **the browser inside the VM**. That page checks the network only. It does not say anything about the account.
+On a Mac, after verification passes, the installer opens the guest window. In the guest's Chromium, look at the Network Check page (the picture above). On Windows, the installer does not open a window. Open this virtual machine in VMware, and look at the same page in the guest's Chromium. After every network check passes, sign in to Claude in **the browser inside the VM**. That page checks the network only. It does not say anything about the account.
 
 > The authorization link shown when you sign in to Claude Code must also be opened in the browser inside the VM. Do not copy it into the browser on your own computer.
 
@@ -87,7 +87,7 @@ The guest is always Debian 13 + Chromium + Claude Code. A Linux computer is not 
 ## What you need
 
 - **One node** (cchouse does not provide one). SOCKS5, HTTP(S), VLESS, Trojan, and Shadowsocks are supported. UDP protocols such as Hysteria2, TUIC, and WireGuard are not. A node with a fixed IP and a stable region is best.
-- **The computer**: 16 GB of memory or more is recommended. Disk space: on Apple Silicon at least 9 GB, 12 GB recommended; on Windows at least 5 GB, 8 GB recommended (an estimate from the 1.58 GB OVA plus the imported VMDK).
+- **The computer**: 16 GB of memory or more is recommended. Disk space is for one complete install. On Apple Silicon, at least 9 GB, 12 GB recommended. That covers the image cache, the golden image, the guest, and the clean snapshot (measured on a Mac). On Windows, at least 5 GB, 8 GB recommended. That covers the OVA in the image cache and the imported guest disk (an estimate). Windows does not keep a separate golden image. The clean snapshot is a delta and is not counted as another full disk.
 
 > **About Stripe**: some nodes block the payment service Stripe. That only affects paying on the claude.ai website. It does not affect signing in or day-to-day use. The installer warns you and does not stop the install. The check only tests whether Stripe can be reached. It does not mean a payment will succeed. You can add a node used only for payment. See [docs/proxy-modes.md](docs/proxy-modes.md).
 
