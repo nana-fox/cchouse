@@ -291,6 +291,10 @@ try {
       $commands.Add("wait $Name")
       return $vm.PowerOff
     }
+    function Invoke-CchouseVBoxOptional {
+      param($CcArgumentList)
+      return [pscustomobject]@{ ExitCode = 0; Output = @('VMState="poweroff"', 'SessionState="Unlocked"') }
+    }
 
     Assert-Throws "fresh import cannot overwrite a registered VM" {
       Import-CchouseVBoxOva -OvaPath $ova -Name $fixtureName -DestDir $vmDir -SshPort 2301 -ReplaceExisting "no"
@@ -433,6 +437,218 @@ try {
 
 Assert-True "single IDE regex" $src.Contains('^storagecontrollername\d+="([^"]*IDE[^"]*)"')
 Assert-False "second match does not clobber the capture" $src.Contains('$Matches[1] -match')
+
+# --- preview.5: status / gui / stop / restore / close-action extradata ---
+Assert-Equal "state running GUI" (Get-CchouseVBoxState -Lines @('VMState="running"', 'SessionName="GUI/Qt"')) "running"
+Assert-Equal "state running headless" (Get-CchouseVBoxState -Lines @('VMState="running"', 'SessionName="headless"')) "running-headless"
+Assert-Equal "state poweroff" (Get-CchouseVBoxState -Lines @('VMState="poweroff"')) "stopped"
+Assert-Equal "state missing" (Get-CchouseVBoxState -Lines @()) "missing"
+
+& {
+  $calls = [System.Collections.Generic.List[string]]::new()
+  $vmState = "stopped"
+  $vmSession = ""
+  $vmRegistered = $true
+  $snapPresent = $true
+  $interactive = $true
+
+  function Invoke-CchouseVBox {
+    param([string[]]$CcArgumentList, [string]$FailureMessage)
+    $calls.Add($CcArgumentList -join " ")
+    if ($CcArgumentList[0] -eq "controlvm" -and $CcArgumentList[2] -in @("acpipowerbutton", "poweroff")) {
+      $script:testVmStateRef.Value = "poweroff"
+    }
+  }
+  $script:testVmStateRef = [ref]$vmState
+  function Invoke-CchouseVBoxOptional {
+    param([string[]]$CcArgumentList)
+    if ($CcArgumentList[0] -eq "showvminfo") {
+      if (-not $vmRegistered) { return [pscustomobject]@{ ExitCode = 1; Output = @() } }
+      $lines = @('VMState="{0}"' -f $script:testVmStateRef.Value)
+      if ($vmSession) { $lines += ('SessionName="{0}"' -f $vmSession) }
+      return [pscustomobject]@{ ExitCode = 0; Output = $lines }
+    }
+    if ($CcArgumentList[0] -eq "snapshot" -and $CcArgumentList[2] -eq "list") {
+      if ($snapPresent) { return [pscustomobject]@{ ExitCode = 0; Output = @('SnapshotName="cchouse-clean"') } }
+      return [pscustomobject]@{ ExitCode = 0; Output = @('This machine does not have any snapshots') }
+    }
+    return [pscustomobject]@{ ExitCode = 0; Output = @() }
+  }
+  function Wait-CchousePowerOff { param($Name, $Seconds) return $true }
+  function Test-CchouseInteractiveSession { return $interactive }
+  function Show-CchouseVBoxWindow { param($Name) return $true }
+
+  # status
+  $script:testVmStateRef.Value = "running"
+  $vmSession = "headless"
+  $stOut = @(Get-CchouseVBoxStatus -Name "claude-cc01" -SnapName "cchouse-clean")
+  Assert-Equal "status headless VM_STATE" $stOut[0] "VM_STATE=running-headless"
+  Assert-Equal "status snapshot present" $stOut[1] "SNAPSHOT_STATE=present"
+  $snapPresent = $false
+  $stOut2 = @(Get-CchouseVBoxStatus -Name "claude-cc01" -SnapName "cchouse-clean")
+  Assert-Equal "status snapshot missing" $stOut2[1] "SNAPSHOT_STATE=missing"
+  $vmRegistered = $false
+  $stOut3 = @(Get-CchouseVBoxStatus -Name "claude-cc01" -SnapName "cchouse-clean")
+  Assert-Equal "status missing VM" $stOut3[0] "VM_STATE=missing"
+  $vmRegistered = $true
+  $snapPresent = $true
+
+  # close actions extradata
+  $calls.Clear()
+  Set-CchouseVBoxCloseActions -Name "claude-cc01"
+  Assert-True "sets GUI/DefaultCloseAction=Shutdown" ($calls -contains "setextradata claude-cc01 GUI/DefaultCloseAction Shutdown")
+  Assert-True "sets GUI/RestrictedCloseActions" ($calls -contains "setextradata claude-cc01 GUI/RestrictedCloseActions SaveState,PowerOff,PowerOffRestoringSnapshot,Detach")
+
+  # stop: acpipowerbutton vs --force poweroff
+  $calls.Clear()
+  $script:testVmStateRef.Value = "running"
+  $vmSession = "GUI/Qt"
+  Stop-CchouseVBoxVM -Name "claude-cc01" -Force "no" -Timeout 30
+  Assert-Equal "graceful stop uses acpipowerbutton" ($calls -join "|") "controlvm claude-cc01 acpipowerbutton"
+  $calls.Clear()
+  $script:testVmStateRef.Value = "running"
+  Stop-CchouseVBoxVM -Name "claude-cc01" -Force "yes" -Timeout 30
+  Assert-Equal "force stop uses poweroff" ($calls -join "|") "controlvm claude-cc01 poweroff"
+
+  # gui: stopped -> startvm --type gui
+  $calls.Clear()
+  $script:testVmStateRef.Value = "poweroff"
+  $vmSession = ""
+  Invoke-CchouseVBoxGui -Name "claude-cc01"
+  Assert-True "gui starts stopped VM with --type gui" ($calls -contains "startvm claude-cc01 --type gui")
+
+  # gui: already GUI running -> no startvm
+  $calls.Clear()
+  $script:testVmStateRef.Value = "running"
+  $vmSession = "GUI/Qt"
+  Invoke-CchouseVBoxGui -Name "claude-cc01"
+  Assert-False "gui does not duplicate already running GUI VM" ($calls -contains "startvm claude-cc01 --type gui")
+
+  # gui: headless -> safe stop then startvm --type gui
+  $calls.Clear()
+  $script:testVmStateRef.Value = "running"
+  $vmSession = "headless"
+  Invoke-CchouseVBoxGui -Name "claude-cc01"
+  $acpiIdx = $calls.IndexOf("controlvm claude-cc01 acpipowerbutton")
+  $guiIdx = $calls.IndexOf("startvm claude-cc01 --type gui")
+  Assert-True "gui stops headless before starting GUI" (($acpiIdx -ge 0) -and ($guiIdx -gt $acpiIdx))
+
+  # gui: non-interactive SSH session -> sets extradata but does not launch GUI
+  $calls.Clear()
+  $interactive = $false
+  $script:testVmStateRef.Value = "poweroff"
+  Invoke-CchouseVBoxGui -Name "claude-cc01"
+  Assert-False "noninteractive session skips startvm --type gui" ($calls -contains "startvm claude-cc01 --type gui")
+  $interactive = $true
+
+  # restore: stops if running, restores snapshot, reapplies close actions
+  $calls.Clear()
+  $script:testVmStateRef.Value = "running"
+  $vmSession = "GUI/Qt"
+  Restore-CchouseVBoxSnapshot -Name "claude-cc01" -SnapName "cchouse-clean" -Timeout 30
+  $stopIdx = $calls.IndexOf("controlvm claude-cc01 acpipowerbutton")
+  $resIdx = $calls.IndexOf("snapshot claude-cc01 restore cchouse-clean")
+  Assert-True "restore stops VM then restores snapshot" (($stopIdx -ge 0) -and ($resIdx -gt $stopIdx))
+  $snapPresent = $false
+  Assert-Throws "restore fails if snapshot missing" {
+    Restore-CchouseVBoxSnapshot -Name "claude-cc01" -SnapName "cchouse-clean"
+  } "Snapshot not found"
+}
+
+# --- preview.5: bootstrap-windows.ps1 args, curl --http1.1 fallback, IWR fallback, cchouse.cmd ---
+$bootstrapPath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\scripts\bootstrap-windows.ps1"))
+$bsTmp = Join-Path ([System.IO.Path]::GetTempPath()) ("cchouse-bs-test-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Force -Path $bsTmp | Out-Null
+try {
+  # Release assets are emitted with UTF-8 BOM by tools/build-bootstrap-release.py; mirror that for PS 5.1 dot-sourcing.
+  $bootstrapBom = Join-Path $bsTmp "bootstrap-windows-bom.ps1"
+  [System.IO.File]::WriteAllText(
+    $bootstrapBom,
+    [System.IO.File]::ReadAllText($bootstrapPath, [System.Text.UTF8Encoding]::new($false)),
+    [System.Text.UTF8Encoding]::new($true)
+  )
+  . $bootstrapBom -CchouseLoadFunctionsOnly
+
+  $defaultUp = @(Get-CchouseBootstrapUpArgs)
+  Assert-Equal "bootstrap default up args" ($defaultUp -join " ") "up --tag cc01 --vm-backend virtualbox"
+  $customUp = @(Get-CchouseBootstrapUpArgs -Tag "cc02" -ImageMirror "https://mirror.example/img" -NpmMirror "https://mirror.example/npm")
+  Assert-Equal "bootstrap custom up args" ($customUp -join " ") "up --tag cc02 --vm-backend virtualbox --image-mirror https://mirror.example/img --npm-mirror https://mirror.example/npm"
+  $fakePy = Join-Path $bsTmp "python.exe"
+  $fakeCode = Join-Path $bsTmp "code"
+  $cmdPath = Write-CchouseCmdEntry -LocalAppData $bsTmp -PythonExe $fakePy -CodeDir $fakeCode
+  Assert-True "cchouse.cmd created" (Test-Path -LiteralPath $cmdPath -PathType Leaf)
+  $cmdText = [System.IO.File]::ReadAllText($cmdPath)
+  $expectedCchousePy = Join-Path $fakeCode (Join-Path "scripts" "cchouse.py")
+  Assert-True "cchouse.cmd invokes python -I scripts/cchouse.py" ($cmdText.Contains("`"$fakePy`" -I `"$expectedCchousePy`" %*"))
+
+  # Test curl.exe retry + 92 -> --http1.1 + persistent .part
+  & {
+    $payload = "verified archive bytes"
+    $tmpFile = Join-Path $bsTmp "ref.zip"
+    [System.IO.File]::WriteAllText($tmpFile, $payload)
+    $expectedHash = (Get-FileHash -LiteralPath $tmpFile -Algorithm SHA256).Hash
+    $dest = Join-Path $bsTmp "downloads\pkg.zip"
+    $curlCalls = [System.Collections.Generic.List[string]]::new()
+    function Get-CchouseCurlPath { return "C:\Windows\System32\curl.exe" }
+    function Invoke-CchouseRetrySleep { param([int]$Seconds) }
+    function Invoke-CchouseCurlDownload {
+      param([string]$CurlPath, [string[]]$ArgumentList)
+      $curlCalls.Add($ArgumentList -join " ")
+      if ($curlCalls.Count -eq 1) {
+        [System.IO.File]::WriteAllText("$dest.part", "partial")
+        return 92
+      }
+      [System.IO.File]::WriteAllText("$dest.part", $payload)
+      return 0
+    }
+    Get-VerifiedArchive "https://example.invalid/pkg.zip" $expectedHash $dest
+    Assert-Equal "curl retried once after exit 92" $curlCalls.Count 2
+    Assert-True "first curl uses resume and speed-limit" ($curlCalls[0].Contains("-C -") -and $curlCalls[0].Contains("--speed-limit"))
+    Assert-False "first curl does not force http1.1" ($curlCalls[0].Contains("--http1.1"))
+    Assert-True "second curl switches to --http1.1" ($curlCalls[1].Contains("--http1.1"))
+    Assert-True "dest atomically moved into place" (Test-Path -LiteralPath $dest -PathType Leaf)
+  }
+
+  # Test Invoke-WebRequest fallback with retry when curl.exe absent
+  & {
+    $payload = "iwr fallback bytes"
+    $tmpFile = Join-Path $bsTmp "ref2.zip"
+    [System.IO.File]::WriteAllText($tmpFile, $payload)
+    $expectedHash = (Get-FileHash -LiteralPath $tmpFile -Algorithm SHA256).Hash
+    $dest = Join-Path $bsTmp "downloads\pkg2.zip"
+    $iwrCount = 0
+    function Get-CchouseCurlPath { return $null }
+    function Invoke-CchouseRetrySleep { param([int]$Seconds) }
+    function Invoke-WebRequest {
+      param([switch]$UseBasicParsing, [string]$Uri, [string]$OutFile)
+      $script:iwrCountRef.Value++
+      if ($script:iwrCountRef.Value -eq 1) { throw "transient error" }
+      [System.IO.File]::WriteAllText($OutFile, $payload)
+    }
+    $script:iwrCountRef = [ref]$iwrCount
+    Get-VerifiedArchive "https://example.invalid/pkg2.zip" $expectedHash $dest
+    Assert-Equal "IWR fallback retried on transient error" $script:iwrCountRef.Value 2
+    Assert-True "IWR fallback wrote verified dest" (Test-Path -LiteralPath $dest -PathType Leaf)
+  }
+
+  # Test Windows .lnk creation & removal via WScript.Shell on Windows_NT
+  if ($env:OS -eq "Windows_NT") {
+    $lnkPath = Join-Path $bsTmp "cchouse (cc99).lnk"
+    $ws = New-Object -ComObject WScript.Shell
+    $sc = $ws.CreateShortcut($lnkPath)
+    $sc.TargetPath = "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe"
+    $sc.Arguments = '-NoProfile -WindowStyle Hidden -Command "& ''C:\bin\cchouse.cmd'' open --tag ''cc99''"'
+    $sc.WindowStyle = 7
+    $sc.Save()
+    Assert-True ".lnk created on Windows" (Test-Path -LiteralPath $lnkPath -PathType Leaf)
+    $readSc = $ws.CreateShortcut($lnkPath)
+    Assert-True ".lnk uses hidden powershell open --tag" ($readSc.Arguments.Contains("-WindowStyle Hidden") -and $readSc.Arguments.Contains("open --tag"))
+    Remove-Item -LiteralPath $lnkPath -Force
+    Assert-False ".lnk deleted cleanly" (Test-Path -LiteralPath $lnkPath)
+  }
+} finally {
+  if (Test-Path -LiteralPath $bsTmp) { Remove-Item -LiteralPath $bsTmp -Recurse -Force }
+}
 
 if ($script:Failures.Count -gt 0) {
   foreach ($item in $script:Failures) { Write-Host "FAIL $item" }

@@ -1343,7 +1343,31 @@ def step_snapshot(ctx):
         ctx.tart("gui", ctx.vm_name, ctx.logs / "tart-gui.log")
     elif ctx.backend == "virtualbox":
         snap = CLEAN_SNAPSHOT
-        ctx.virtualbox("snapshot", VmName=ctx.vm_name, Snapshot=snap)
+        if ctx.dry_run:
+            ctx.virtualbox("stop", VmName=ctx.vm_name, Force="no", Timeout="60")
+            ctx.virtualbox("snapshot", VmName=ctx.vm_name, Snapshot=snap)
+            ctx.virtualbox("gui", VmName=ctx.vm_name)
+        else:
+            info = {
+                "tag": ctx.tag,
+                "backend": ctx.backend,
+                "vm_name": ctx.vm_name,
+                "snapshot": snap,
+                "ssh_key": ctx.ssh_key,
+                "known_hosts": ctx.known_hosts,
+                "env_path": ctx.env_path,
+            }
+            stopped = _ssh_graceful_poweroff(info) and _wait_stopped(info, 60)
+            if not stopped:
+                ctx.virtualbox("stop", VmName=ctx.vm_name, Force="no", Timeout="60")
+            ctx.virtualbox("snapshot", VmName=ctx.vm_name, Snapshot=snap)
+            ctx.state["clean_snapshot"] = snap
+            try:
+                launcher_mod.create(ctx.tag, ctx.state)
+            except (OSError, subprocess.SubprocessError) as exc:
+                print(f"WARN  创建桌面启动图标失败（不影响客机使用）：{exc}", file=sys.stderr)
+            ctx.save_state()
+            ctx.virtualbox("gui", VmName=ctx.vm_name)
     else:
         raise StepError("当前后端不支持自动保存快照")
     ctx.state["clean_snapshot"] = snap
@@ -1935,9 +1959,15 @@ def _ssh_graceful_poweroff(info):
         return False
     port = _env_raw_value(env_path, "SSH_PORT") if info["backend"] == "virtualbox" else None
     kh = info["known_hosts"]
-    cmd = ["ssh", "-F", "none", "-i", str(ssh_key), "-o", "BatchMode=yes", "-o", "ConnectTimeout=5"]
+    ssh_bin = "ssh"
+    if os.name == "nt":
+        sys32_ssh = Path(os.environ.get("WINDIR") or r"C:\Windows") / "System32" / "OpenSSH" / "ssh.exe"
+        if sys32_ssh.is_file():
+            ssh_bin = str(sys32_ssh)
+    cmd = [ssh_bin, "-F", "none", "-i", str(ssh_key), "-o", "BatchMode=yes", "-o", "ConnectTimeout=5"]
     if kh.is_file():
-        cmd += ["-o", "StrictHostKeyChecking=yes", "-o", f'UserKnownHostsFile="{kh}"']
+        kh_opt = f'UserKnownHostsFile="{kh.resolve().as_posix()}"' if os.name == "nt" else f'UserKnownHostsFile="{kh}"'
+        cmd += ["-o", "StrictHostKeyChecking=yes", "-o", kh_opt]
     else:
         cmd += ["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"]
     if port:

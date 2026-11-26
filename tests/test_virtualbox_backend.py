@@ -137,7 +137,7 @@ class TestVirtualBoxSelection(unittest.TestCase):
             cchouse_mod.step_boot(ctx)
             cchouse_mod.step_snapshot(ctx)
             ops = [item[1] for item in calls if item[0] == "virtualbox"]
-            self.assertEqual(ops, ["install", "import", "firstboot", "boot", "snapshot"])
+            self.assertEqual(ops, ["install", "import", "firstboot", "boot", "stop", "snapshot", "gui"])
             imported = next(item for item in calls if item[1] == "import")
             booted = next(item for item in calls if item[1] == "boot")
             expected = str(cchouse_mod.vbox_preferred_ssh_port("cc05"))
