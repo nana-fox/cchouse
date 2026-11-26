@@ -243,6 +243,39 @@ class TestUpPipeline(unittest.TestCase):
             return fn
         return {name: make(name) for name, _t in cchouse_mod.UP_STEPS}
 
+    def test_prompt_eof_uses_default_and_explains_it(self):
+        out = io.StringIO()
+        with mock.patch("sys.stdin", io.StringIO()), mock.patch("sys.stdout", out):
+            value = cchouse_mod._prompt_with_default("出口时区", "America/Los_Angeles")
+        self.assertEqual(value, "America/Los_Angeles")
+        self.assertIn("输入已结束，使用默认值 [America/Los_Angeles]", out.getvalue())
+
+    def test_required_input_eof_fails_and_cleans_plaintext(self):
+        for link_stdin, stdin, hint in (
+            (True, "socks5://u:p@203.0.113.9:1080\n", "--non-interactive"),
+            (True, "", "--link-stdin"),
+            (False, "", "--link-stdin"),
+        ):
+            with self.subTest(link_stdin=link_stdin, hint=hint), tempfile.TemporaryDirectory() as td:
+                ctx = _ctx(td, link_stdin=link_stdin, non_interactive=False)
+                ctx.rendered.mkdir(parents=True)
+                (ctx.rendered / "config").write_text("plaintext", encoding="utf-8")
+                ctx.seed_iso.write_bytes(b"plaintext")
+                out = io.StringIO()
+                with mock.patch("sys.stdin", io.StringIO(stdin)), mock.patch("sys.stdout", out), \
+                        mock.patch.object(cchouse_mod.getpass, "getpass", side_effect=EOFError):
+                    rc = cchouse_mod.run_pipeline(ctx)
+                self.assertEqual(rc, 1)
+                self.assertIn("输入已结束，请在终端交互运行", out.getvalue())
+                self.assertIn(hint, out.getvalue())
+                self.assertNotIn("traceback", out.getvalue().lower())
+                self.assertFalse(ctx.env_path.exists())
+                self.assertFalse(ctx.seed_iso.exists())
+                self.assertFalse(ctx.rendered.exists())
+                state = json.loads(ctx.state_path.read_text(encoding="utf-8"))
+                self.assertEqual(state["failed_step"], "up:config")
+                self.assertEqual(state["status"], "FAILED")
+
     def test_failure_stops_records_state_and_resume_continues(self):
         with tempfile.TemporaryDirectory() as td:
             calls = []

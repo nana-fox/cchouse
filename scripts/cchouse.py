@@ -530,7 +530,13 @@ def run_preflight_check(env_path, route, check_stripe=True):
 
 def _prompt_with_default(prompt_label, default_val):
     suffix = f" [{default_val}]" if default_val else " [可回车留空]"
-    ans = input(f"{prompt_label}{suffix}: ").strip()
+    try:
+        ans = input(f"{prompt_label}{suffix}: ").strip()
+    except EOFError:
+        if default_val:
+            print(f"\n输入已结束，使用默认值 [{default_val}]。")
+            return default_val
+        raise StepError("输入已结束，请在终端交互运行或加 --non-interactive") from None
     return ans if ans else default_val
 
 
@@ -837,13 +843,18 @@ def do_config(ctx):
     """第一轮逻辑：无回显读取节点链接 → 解析 → 探测出口 → 生成密钥 → 写 600 权限 instance.env。"""
     args = ctx.args
     tag, route, private_dir = ctx.tag, ctx.route, ctx.private_dir
-    if args.link_stdin:
-        raw_link = sys.stdin.readline().rstrip("\r\n")
-    else:
-        try:
+    try:
+        if args.link_stdin:
+            raw_link = sys.stdin.readline()
+            if raw_link == "":
+                raise EOFError
+            raw_link = raw_link.rstrip("\r\n")
+        else:
             raw_link = getpass.getpass("请粘贴单节点代理链接（输入不回显，支持 socks5/http/vless/trojan/ss）: ")
-        except (EOFError, KeyboardInterrupt):
-            raise StepError("已取消输入节点链接") from None
+    except EOFError:
+        raise StepError("输入已结束，请在终端交互运行，或用 --link-stdin 提供节点链接") from None
+    except KeyboardInterrupt:
+        raise StepError("已取消输入节点链接") from None
 
     try:
         single_fields = parse_node_link(raw_link)
