@@ -3,7 +3,6 @@ import hashlib
 import io
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -361,8 +360,8 @@ class TestVirtualBoxScript(unittest.TestCase):
 
     def test_verify_warns_only_for_accept_new_hostkey_trust(self):
         import re
-        bash = shutil.which("bash")
-        if not bash:
+        bash = cchouse_mod.find_bash()
+        if not bash or not os.path.isfile(bash):
             self.skipTest("需要 bash")
         src = (ROOT / "scripts" / "verify-linux.sh").read_text(encoding="utf-8")
         found = re.search(r"^warn_unverified_hostkey\(\) \{\n.*?\n\}$", src, re.S | re.M)
@@ -371,24 +370,31 @@ class TestVirtualBoxScript(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             script = root / "check.sh"
-            script.write_text(harness, encoding="utf-8")
+            script.write_bytes(harness.encode("utf-8"))
             env_file = root / "instance.env"
-            env_file.write_text("TAG=cc01\n", encoding="utf-8")
+            env_file.write_bytes(b"TAG=cc01\n")
             trust = root / "logs" / "hostkey.trust"
             trust.parent.mkdir()
+
+            def for_bash(path):
+                # Git Bash 不把环境变量里的反斜杠路径当成文件。argv 会被 MSYS 转换，这里不会。
+                text = str(path)
+                if os.name == "nt" and len(text) >= 2 and text[1] == ":":
+                    return "/" + text[0].lower() + text[2:].replace("\\", "/")
+                return text
 
             def run():
                 proc = subprocess.run(
                     [bash, str(script)],
                     capture_output=True, text=True, encoding="utf-8", errors="replace",
-                    env={**os.environ, "ENV_FILE": str(env_file), "LC_ALL": "en_US.UTF-8"},
+                    env={**os.environ, "ENV_FILE": for_bash(env_file), "LC_ALL": "en_US.UTF-8"},
                 )
                 self.assertEqual(proc.returncode, 0, proc.stderr)
                 return proc.stdout
 
-            trust.write_text("accept-new\n", encoding="utf-8")
+            trust.write_bytes(b"accept-new\n")
             self.assertEqual(run(), "WARN 未经串口核对主机密钥\n")
-            trust.write_text("serial\n", encoding="utf-8")
+            trust.write_bytes(b"serial\n")
             self.assertEqual(run(), "")
             trust.unlink()
             self.assertEqual(run(), "")
