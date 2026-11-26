@@ -48,8 +48,25 @@ def find_vboxmanage():
     return None
 
 
+def _private_tart_candidates():
+    tools = Path.home() / "Library" / "Application Support" / "cchouse" / "bootstrap" / "tools"
+    if not tools.is_dir():
+        return []
+    found = []
+    for entry in sorted(tools.iterdir(), reverse=True):
+        cand = entry / "Contents" / "MacOS" / "tart"
+        if entry.name.startswith("tart-") and cand.is_file():
+            found.append(str(cand))
+    return found
+
+
 def find_tart():
-    for cand in (shutil.which("tart"), str(Path.home() / ".local/bin/tart"), "/opt/homebrew/bin/tart"):
+    for cand in (
+        shutil.which("tart"),
+        str(Path.home() / ".local/bin/tart"),
+        "/opt/homebrew/bin/tart",
+        *_private_tart_candidates(),
+    ):
         if cand and os.path.isfile(cand):
             return cand
     return None

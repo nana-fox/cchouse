@@ -119,9 +119,9 @@ class TestDownloads(unittest.TestCase):
             self.assertEqual(res, "downloaded")
             self.assertEqual(dest.read_bytes(), PAYLOAD)
             self.assertEqual([c[1] for c in srv.calls], [0, cut, 2 * cut])  # 每次都从断点 Range 续传
-            self.assertEqual([c.args[0] for c in slp.call_args_list], [2.0, 4.0])  # 指数退避
-            self.assertTrue(logs[0].startswith("img.tvm 第 1/5 次续传"))
-            self.assertIn("第 2/5 次续传", logs[1])
+            self.assertEqual([c.args[0] for c in slp.call_args_list], [2.0, 2.0])  # 有新进展重置退避
+            self.assertIn("第 1/30 次续传", logs[0])
+            self.assertIn("第 2/30 次续传", logs[1])
 
     def test_truncated_download_never_verified_or_deleted(self):
         with tempfile.TemporaryDirectory() as td:
@@ -132,8 +132,8 @@ class TestDownloads(unittest.TestCase):
                 with self.assertRaises(downloads.DownloadError) as cm:
                     downloads.fetch_verified(["u"], dest, sha256=PAYLOAD_SHA256, size=len(PAYLOAD), opener=srv)
             self.assertIn("连接提前结束", str(cm.exception))
-            self.assertEqual(len(srv.calls), 6)  # 首次 + 5 次续传
-            self.assertEqual([c.args[0] for c in slp.call_args_list], [2.0, 4.0, 8.0, 16.0, 32.0])
+            self.assertEqual(len(srv.calls), 7)  # 首次写 1000B（有进展重置）+ 5 次无进展续传 + 熔断前最后 1 次
+            self.assertEqual([c.args[0] for c in slp.call_args_list], [2.0, 2.0, 4.0, 8.0, 16.0, 30.0])
             dig.assert_not_called()  # 未下完不校验
             self.assertTrue(Path(str(dest) + ".part").is_file())  # 不删 .part
             self.assertFalse(dest.exists())

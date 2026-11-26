@@ -1347,6 +1347,22 @@ def step_snapshot(ctx):
     else:
         raise StepError("当前后端不支持自动保存快照")
     ctx.state["clean_snapshot"] = snap
+    if not ctx.dry_run:
+        if platform.system() == "Darwin":
+            try:
+                entry, in_path = launcher_mod.install_cli_entry()
+                if entry:
+                    ctx.state["cli_entry"] = str(entry)
+                    ctx.state["cli_entry_in_path"] = bool(in_path)
+            except OSError as exc:
+                print(f"  WARN  命令入口 ~/.local/bin/cchouse 写入失败：{exc}")
+            try:
+                paths = launcher_mod.create(ctx.tag, ctx.state)
+                if paths:
+                    print(f"  已创建桌面启动入口：{', '.join(paths)}")
+            except (OSError, subprocess.SubprocessError) as exc:
+                print(f"  WARN  桌面启动入口创建失败：{exc}")
+        ctx.save_state()
     return False
 
 
@@ -1400,6 +1416,17 @@ def print_timing_table(ctx, steps):
 def print_handoff(ctx):
     print("\n== 部署完成，交给你 ==")
     print(f"- 客机 {ctx.vm_name} 已开机，干净快照：{ctx.state.get('clean_snapshot')}")
+    launchers = ctx.state.get("launchers") or []
+    if launchers:
+        print(f"- 启动图标：{launchers[-1]}（双击即可打开客机窗口）")
+    cli_entry = ctx.state.get("cli_entry")
+    if cli_entry:
+        if ctx.state.get("cli_entry_in_path"):
+            cli_cmd = "cchouse"
+        else:
+            cli_cmd = cli_entry
+            print(f"- 命令入口已安装到 {cli_entry}（当前 PATH 未包含 ~/.local/bin，可直接运行该完整路径）")
+        print(f"- 日常命令：{cli_cmd} open --tag {ctx.tag} | {cli_cmd} stop --tag {ctx.tag} | {cli_cmd} status --tag {ctx.tag} | {cli_cmd} restore --tag {ctx.tag}")
     print("- 请在客机桌面核对 check.html 全绿，然后自行登录 Claude Code。")
     print("- Claude Code 的 OAuth 登录链接只能在客机浏览器里打开，严禁复制到宿主浏览器。")
     print("- cchouse 不会替你登录、注册、订阅或付款。")
@@ -1539,9 +1566,13 @@ def cmd_up(args):
     return run_pipeline(ctx)
 
 
+def _tart_bin():
+    return "tart" if shutil.which("tart") else (preflight_mod.find_tart() or "tart")
+
+
 def _tart_inventory():
     proc = subprocess.run(
-        ["tart", "list", "--source", "local", "--format", "json"],
+        [_tart_bin(), "list", "--source", "local", "--format", "json"],
         check=True, capture_output=True, encoding="utf-8",
     )
     try:
@@ -1696,6 +1727,7 @@ def cmd_remove(args):
             inventory = {}
 
         vm_actions = REMOVE_BACKENDS[backend](vm_name, snapshot, private_dir, inventory) if owned else []
+        launcher_items = launcher_mod.preview(tag, state)
         golden = inventory.get(golden_name)
         if args.purge_cache and golden:
             if golden.get("Running"):
@@ -1705,6 +1737,8 @@ def cmd_remove(args):
         print("将删除：")
         for label, _cmd in vm_actions:
             print(f"  - {label}")
+        for lpath in launcher_items:
+            print(f"  - 启动图标 {lpath}")
         if private_dir.exists():
             for name in ("seed.iso", "rendered"):
                 residual = private_dir / name
@@ -1737,9 +1771,11 @@ def cmd_remove(args):
 
         for _label, cmd in vm_actions:
             subprocess.run(cmd, check=True)
+        if launcher_items:
+            launcher_mod.remove(tag, state)
         if args.purge_cache:
             if golden:
-                subprocess.run(["tart", "delete", golden_name], check=True)
+                subprocess.run([_tart_bin(), "delete", golden_name], check=True)
             for path, _size in cache_items:
                 if _remove_path(path.parent.resolve()) != path.parent:
                     raise StepError("缓存目录在卸载期间改变")
@@ -1857,29 +1893,60 @@ def _backend_status(info):
     raise StepError(f"当前后端 {backend} 暂不支持该操作")
 
 
+def _sync_tart_ip_and_known_hosts(info):
+    """Tart 重启或 restore 后 DHCP IP 可能变化；复用既有 known_hosts 中已固定的主机公钥映射到新 IP。"""
+    if info["backend"] != "tart":
+        return _env_raw_value(info["env_path"], "GUEST_IP") if info["env_path"].is_file() else None
+    try:
+        proc = subprocess.run(
+            [_tart_bin(), "ip", info["vm_name"], "--wait", "2"],
+            capture_output=True, text=True, timeout=10,
+        )
+        ip = (proc.stdout or "").strip().splitlines()[0].strip() if proc.stdout and proc.stdout.strip() else ""
+    except (OSError, subprocess.SubprocessError):
+        ip = ""
+    if not render_mod.is_ipv4(ip):
+        return _env_raw_value(info["env_path"], "GUEST_IP") if info["env_path"].is_file() else None
+    if info["env_path"].is_file() and _env_raw_value(info["env_path"], "GUEST_IP") != ip:
+        update_env_value(info["env_path"], "GUEST_IP", ip)
+    kh = info["known_hosts"]
+    if kh.is_file():
+        lines = kh.read_text(encoding="utf-8").splitlines()
+        if not any(line.startswith(f"{ip} ") for line in lines):
+            for line in lines:
+                parts = line.split()
+                if len(parts) >= 3 and parts[1].startswith("ssh-"):
+                    lines.append(f"{ip} {parts[1]} {parts[2]}")
+                    kh.write_text("\n".join(lines) + "\n", encoding="utf-8")
+                    if os.name != "nt":
+                        os.chmod(kh, 0o600)
+                    break
+    return ip
+
+
 def _ssh_graceful_poweroff(info):
     """经 SSH 执行 sync + sudo -n /usr/bin/systemctl poweroff。返回 True 表示已发送关机命令。"""
     ssh_key = info["ssh_key"]
     env_path = info["env_path"]
     if not ssh_key.is_file() or not env_path.is_file():
         return False
-    ip = _env_raw_value(env_path, "GUEST_IP")
+    ip = _sync_tart_ip_and_known_hosts(info) if info["backend"] == "tart" else _env_raw_value(env_path, "GUEST_IP")
     if not ip:
         return False
     port = _env_raw_value(env_path, "SSH_PORT") if info["backend"] == "virtualbox" else None
     kh = info["known_hosts"]
     cmd = ["ssh", "-F", "none", "-i", str(ssh_key), "-o", "BatchMode=yes", "-o", "ConnectTimeout=5"]
     if kh.is_file():
-        cmd += ["-o", "StrictHostKeyChecking=yes", "-o", f"UserKnownHostsFile={kh}"]
+        cmd += ["-o", "StrictHostKeyChecking=yes", "-o", f'UserKnownHostsFile="{kh}"']
     else:
         cmd += ["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"]
     if port:
         cmd += ["-p", str(port)]
-    cmd += [f"claude@{ip}", "sync; sudo -n /usr/bin/systemctl poweroff"]
+    cmd += [f"claude@{ip}", "printf 'CCHOUSE_POWEROFF_SENT\\n'; sync; sudo -n /usr/bin/systemctl poweroff"]
     try:
-        proc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
-        # systemctl poweroff 会断开 SSH 连接，退出码 0 或 255 均表示已触发关机
-        return proc.returncode in (0, 255)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        # systemctl poweroff 会断开 SSH 连接（退出码 0 或 255），以回显标记确认确实已连上并触发关机
+        return proc.returncode in (0, 255) and "CCHOUSE_POWEROFF_SENT" in (proc.stdout or "")
     except (OSError, subprocess.SubprocessError):
         return False
 
@@ -1939,6 +2006,7 @@ def cmd_open(args):
         if info["backend"] == "tart":
             info["logs"].mkdir(parents=True, exist_ok=True)
             subprocess.run(_tart_cmd("open", info["vm_name"], info["logs"] / "tart-gui.log"), check=True)
+            print("提示：关机请用桌面右键 Safe Shutdown 或 cchouse stop")
         elif info["backend"] == "virtualbox":
             subprocess.run(_virtualbox_cmd("gui", VmName=info["vm_name"]), check=True)
         else:
