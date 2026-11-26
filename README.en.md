@@ -77,7 +77,7 @@ To run each step yourself, or to have an AI agent install it for you, see [docs/
 | Your computer | VM software | Status |
 |---|---|---|
 | Apple Silicon Mac (M series) | Tart | ✅ Public `v2.0.0-preview.2` cold install finished on a Mac mini |
-| Windows (x64) | VirtualBox | `preview.3` pending validation |
+| Windows (x64) | VirtualBox | ✅ `v2.0.0-preview.3` passed two public blind installs on a real Windows 11 PC |
 | Intel Mac | — | Not supported for now |
 
 The guest is always Debian 13 + Chromium + Claude Code. A Linux computer is not supported as the host.
@@ -85,6 +85,7 @@ The guest is always Debian 13 + Chromium + Claude Code. A Linux computer is not 
 **First install with an empty cache** (includes the image and Claude Code downloads)
 
 - **Apple Silicon Mac**: a public `v2.0.0-preview.2` empty-cache install on a Mac mini took **2 minutes 15 seconds**, covering the download, automated verification, and saving a clean snapshot. The download went through the host proxy. The image averaged 20.67 MiB/s, and Claude Code averaged 16.31 MiB/s.
+- **Windows 11 (x64)**: two public `v2.0.0-preview.3` blind installs on a real PC, each starting with an empty cache and no VirtualBox, took **10 minutes 21 seconds** and **9 minutes 13 seconds** inside the installer, covering the automatic VirtualBox install, downloads, import, automated verification, and saving a clean snapshot.
 
 ---
 
