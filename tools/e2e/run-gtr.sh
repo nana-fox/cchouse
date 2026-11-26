@@ -144,6 +144,7 @@ LOG2="$TMP_DIR/step2.log"
     "$SCRIPT_DIR/gtr-remote.ps1" \
     "$REPO_ROOT/scripts/vm-vmware.ps1" \
     "$REPO_ROOT/scripts/windows-hostkey.ps1" \
+    "$REPO_ROOT/scripts/windows-native.ps1" \
     "$SCRIPT_DIR/guest-checks.sh" \
     "${GTR_USER}@${GTR_HOST}:${REMOTE_RUN_SCP}/"
 

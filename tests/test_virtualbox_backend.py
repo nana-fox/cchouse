@@ -370,6 +370,7 @@ class TestVirtualBoxScript(unittest.TestCase):
         self.assertNotIn("ssh_host_ed25519_key >/dev/ttyS0", firstboot)
         self.assertNotIn("cat /etc/ssh/ssh_host_ed25519_key", firstboot)
         self.assertIn("windows-hostkey.ps1", uploader)
+        self.assertIn("windows-native.ps1", uploader)
         tart = (ROOT / "scripts" / "vm-tart.sh").read_text(encoding="utf-8")
         self.assertIn("ssh-keyscan", tart)
 

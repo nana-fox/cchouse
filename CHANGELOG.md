@@ -2,6 +2,7 @@
 
 ## v2.0-preview
 
+- Windows PowerShell 5.1 的 SSH 探测遇到超时会继续重试，主机密钥不符仍立即停止。Windows 脚本统一按原生命令退出码处理失败，保留独立的标准错误输出。CI 覆盖首次 SSH 超时后重试成功的路径。
 - Windows 上的 `cchouse up` 默认使用 VirtualBox，已有 VMware 实例的安装记录需使用新的 tag 创建 VirtualBox 实例。安装器直接采用并显示出口时区和预期出口 IP。修复 Windows PowerShell 5.1 遇到 VBoxManage 探测 stderr 时中止的问题，CI 增加 5.1 回归测试。首次 SSH 连接须同时通过本实例 NAT 转发与监听进程核对：优先核对 `VBox.log` 中的 PID，日志未提供 PID 时核对 VirtualBox 安装目录下的进程路径。
 - `cchouse.py remove` 增加 VirtualBox：按 `state.json` 里的虚拟机名精确匹配，先关机，再 `VBoxManage unregistervm --delete`。Windows 开机若串口没有主机公钥，要先确认 NAT 转发属于本实例，才用 `accept-new` 收录 `known_hosts`；`verify-linux.sh` 会记一条 WARN「未经串口核对主机密钥」。
 - 新增 `cchouse.py remove --tag`。根据安装记录精确清理 Tart 或 VMware 实例，先列清单再确认。默认保留共享黄金镜像和下载缓存，可用 `--purge-cache` 同时清理。

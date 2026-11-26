@@ -43,12 +43,6 @@ function Get-CchouseOvftool {
   throw "ovftool.exe not found (bundled with VMware Workstation)"
 }
 
-function Fix-KeyAcl([string]$path) {
-  if (Test-Path $path) {
-    & icacls.exe $path /inheritance:r /grant:r "${env:USERNAME}:(R,W)" | Out-Null
-  }
-}
-
 function Set-VmxKeys([string]$vmxPath, [hashtable]$kv) {
   $lines = [System.Collections.Generic.List[string]]::new()
   foreach ($l in [System.IO.File]::ReadAllLines($vmxPath)) {
@@ -99,8 +93,7 @@ function Import-CchouseOva([string]$ovaPath, [string]$name, [string]$destDir) {
   $ovf = Get-CchouseOvftool
   New-Item -ItemType Directory -Force -Path $destDir | Out-Null
   Write-Host "Importing $ovaPath -> $destDir\$name..."
-  & $ovf --name=$name $ovaPath $destDir
-  if ($LASTEXITCODE -ne 0) { throw "ovftool import failed" }
+  Invoke-CchouseNativeChecked -FilePath $ovf -ArgumentList @("--name=$name", $ovaPath, $destDir) -FailureMessage "ovftool import failed"
 }
 
 function Invoke-CchouseFirstboot([string]$vmxPath, [string]$seedIso, [int]$seconds = 55, [string]$hostKeyLog = "") {
@@ -117,12 +110,11 @@ function Invoke-CchouseFirstboot([string]$vmxPath, [string]$seedIso, [int]$secon
     "msg.autoAnswer" = "TRUE"
   }
   Write-Host "Starting offline firstboot (nogui, ${seconds}s)..."
-  & $vmr -T ws start $vmxPath nogui
-  if ($LASTEXITCODE -ne 0) { throw "firstboot start failed" }
+  Invoke-CchouseNativeChecked -FilePath $vmr -ArgumentList @("-T", "ws", "start", $vmxPath, "nogui") -FailureMessage "firstboot start failed"
   Start-Sleep $seconds
-  & $vmr -T ws stop $vmxPath soft 2>$null | Out-Null
+  Invoke-CchouseNative -FilePath $vmr -ArgumentList @("-T", "ws", "stop", $vmxPath, "soft") | Out-Null
   Start-Sleep 5
-  & $vmr -T ws stop $vmxPath hard 2>$null | Out-Null
+  Invoke-CchouseNative -FilePath $vmr -ArgumentList @("-T", "ws", "stop", $vmxPath, "hard") | Out-Null
   Start-Sleep 2
   Write-Host "FIRSTBOOT_STOPPED=OK"
 }
@@ -160,8 +152,9 @@ function Invoke-CchouseBoot([string]$vmxPath, [string]$seedIso, [string]$keyPath
     $sleepFor = [int][Math]::Min(3, $remaining)
     if ($sleepFor -lt 1) { break }
     Start-Sleep -Seconds $sleepFor
-    $ipOut = & $vmr -T ws getGuestIPAddress $vmxPath 2>$null
-    if ($LASTEXITCODE -eq 0 -and $ipOut -match '^\d+\.\d+\.\d+\.\d+$' -and $ipOut -notmatch '^127\.') {
+    $ipResult = Invoke-CchouseNative -FilePath $vmr -ArgumentList @("-T", "ws", "getGuestIPAddress", $vmxPath)
+    $ipOut = $ipResult.Output -join "`n"
+    if ($ipResult.ExitCode -eq 0 -and $ipOut -match '^\d+\.\d+\.\d+\.\d+$' -and $ipOut -notmatch '^127\.') {
       $ip = $ipOut.Trim()
     }
     if (-not $ip) {
@@ -200,9 +193,8 @@ function Invoke-CchouseBoot([string]$vmxPath, [string]$seedIso, [string]$keyPath
 
 function New-CchouseSnapshot([string]$vmxPath, [string]$name) {
   $vmr = Get-CchouseVmrun
-  & $vmr -T ws deleteSnapshot $vmxPath $name 2>$null | Out-Null
-  & $vmr -T ws snapshot $vmxPath $name
-  if ($LASTEXITCODE -ne 0) { throw "vmrun snapshot failed" }
+  Invoke-CchouseNative -FilePath $vmr -ArgumentList @("-T", "ws", "deleteSnapshot", $vmxPath, $name) | Out-Null
+  Invoke-CchouseNativeChecked -FilePath $vmr -ArgumentList @("-T", "ws", "snapshot", $vmxPath, $name) -FailureMessage "vmrun snapshot failed"
   Write-Host "SNAPSHOT_OK=$name"
 }
 
@@ -210,18 +202,16 @@ function Remove-CchouseVM([string]$vmxPath) {
   if (-not (Test-Path -LiteralPath $vmxPath -PathType Leaf)) { return }
   $vmr = Get-CchouseVmrun
   $vmxPath = (Get-Item -LiteralPath $vmxPath).FullName
-  $running = & $vmr -T ws list
-  if ($LASTEXITCODE -ne 0) { throw "vmrun list failed" }
+  $running = Invoke-CchouseNativeChecked -FilePath $vmr -ArgumentList @("-T", "ws", "list") -FailureMessage "vmrun list failed"
   $runningPaths = $running | Select-Object -Skip 1 | Where-Object { $_.Trim() } | ForEach-Object {
     [System.IO.Path]::GetFullPath($_.Trim())
   }
   if ($runningPaths -icontains $vmxPath) {
-    & $vmr -T ws stop $vmxPath hard
-    if ($LASTEXITCODE -ne 0) { throw "vmrun stop failed for $vmxPath" }
+    Invoke-CchouseNativeChecked -FilePath $vmr -ArgumentList @("-T", "ws", "stop", $vmxPath, "hard") -FailureMessage "vmrun stop failed for $vmxPath"
   }
   # Workstation deletes the VM and snapshots together.
-  & $vmr -T ws deleteVM $vmxPath
-  if ($LASTEXITCODE -ne 0 -or (Test-Path -LiteralPath $vmxPath)) {
+  Invoke-CchouseNativeChecked -FilePath $vmr -ArgumentList @("-T", "ws", "deleteVM", $vmxPath) -FailureMessage "vmrun deleteVM failed for $vmxPath"
+  if (Test-Path -LiteralPath $vmxPath) {
     throw "vmrun deleteVM failed for $vmxPath"
   }
 }
@@ -234,8 +224,8 @@ if ($CcOp) {
       if (Test-Path -LiteralPath $CcVmx) {
         if ($CcReplaceExisting -ne "yes") { throw "Existing VMX is not owned by this install: $CcVmx" }
         $vmr = Get-CchouseVmrun
-        & $vmr -T ws stop $CcVmx hard 2>$null | Out-Null
-        & $vmr -T ws deleteVM $CcVmx 2>$null | Out-Null
+        Invoke-CchouseNative -FilePath $vmr -ArgumentList @("-T", "ws", "stop", $CcVmx, "hard") | Out-Null
+        Invoke-CchouseNative -FilePath $vmr -ArgumentList @("-T", "ws", "deleteVM", $CcVmx) | Out-Null
         Remove-Item -Recurse -Force (Split-Path $CcVmx -Parent) -ErrorAction SilentlyContinue
       }
       Import-CchouseOva $CcOva $CcVmName $CcVmDir

@@ -1,5 +1,5 @@
 ﻿# Function tests for scripts/vm-virtualbox.ps1.
-# Dot-source only. The native stderr test uses a fake VBoxManage command.
+# Dot-source only. Native-command tests use fake VBoxManage and SSH commands.
 $ErrorActionPreference = "Stop"
 $scriptPath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\scripts\vm-virtualbox.ps1"))
 . $scriptPath
@@ -200,7 +200,11 @@ try {
     $fakeVBox = Join-Path $tmp "VBoxManage.cmd"
     [System.IO.File]::WriteAllLines($fakeVBox, @(
       "@echo off",
-      'if "%2"=="test-registered" exit /b 0',
+      'if "%2"=="test-registered" (',
+      '  echo showvminfo warning 1>&2',
+      '  echo healthy stdout',
+      '  exit /b 0',
+      ')',
       "echo VM not registered 1>&2",
       "exit /b 1"
     ), [System.Text.Encoding]::ASCII)
@@ -209,7 +213,11 @@ try {
     try {
       Assert-False "native stderr and exit 1 mean VM is unregistered" (Test-CchouseVmRegistered "test-unregistered")
       Assert-True "native exit 0 means VM is registered" (Test-CchouseVmRegistered "test-registered")
-      Assert-Equal "optional VBoxManage calls preserve caller preference" $ErrorActionPreference "Stop"
+      $native = Invoke-CchouseNative -FilePath $fakeVBox -ArgumentList @("showvminfo", "test-registered")
+      Assert-Equal "successful native command with stderr" $native.ExitCode 0
+      Assert-Equal "stdout is separate from stderr" ($native.Output -join "|") "healthy stdout"
+      Assert-True "native stderr was captured" ($native.Stderr -match "showvminfo warning")
+      Assert-Equal "native calls preserve caller preference" $ErrorActionPreference "Stop"
     } finally {
       $env:CCHOUSE_VBOXMANAGE = $oldVBox
     }
@@ -232,6 +240,50 @@ try {
   Assert-Equal "accept-new mark" ([System.IO.File]::ReadAllText($trustPath)) "accept-new`n"
   Write-CchouseHostKeyTrustMark -SerialLogPath $serial -Pinned:$true
   Assert-Equal "serial mark" ([System.IO.File]::ReadAllText($trustPath)) "serial`n"
+
+  if ($env:OS -eq "Windows_NT") {
+    $fakeSsh = Join-Path $tmp "ssh.cmd"
+    $attemptLog = Join-Path $tmp "ssh-attempts"
+    $ipFile = Join-Path $tmp "guest-ip"
+    [System.IO.File]::WriteAllLines($fakeSsh, @(
+      '@echo off',
+      'if "%1"=="--key-mismatch" (',
+      '  echo WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! 1>&2',
+      '  echo Host key verification failed. 1>&2',
+      '  exit /b 255',
+      ')',
+      'if exist "%~dp0ssh-attempts" (',
+      '  echo success>>"%~dp0ssh-attempts"',
+      '  exit /b 0',
+      ')',
+      'echo timeout>"%~dp0ssh-attempts"',
+      'echo Connection timed out during banner exchange 1>&2',
+      'exit /b 255'
+    ), [System.Text.Encoding]::ASCII)
+
+    $oldSsh = $script:CchouseSystem32Ssh
+    $script:CchouseSystem32Ssh = $fakeSsh
+    try {
+      & {
+        function Get-CchouseVBoxManage { return $fakeVBox }
+        function Get-CchouseIdeController { return "IDE" }
+        function Invoke-CchouseVBox {}
+        function Start-CchouseVmDetached {}
+        function Start-Sleep {}
+        function Get-CchouseShowvminfoLines { return $vmLines }
+        function Resolve-CchouseProbeDecision { return "probe" }
+        Invoke-CchouseVBoxBoot -Name "claude-cc01" -KnownHostsPath $kh -IpFile $ipFile -SshPort 2301 -HostKeyLog $serial
+      }
+      Assert-Equal "SSH retries the timed-out banner exchange" ((Get-Content -LiteralPath $attemptLog) -join ",") "timeout,success"
+      Assert-Equal "boot records IP after successful retry" ([System.IO.File]::ReadAllText($ipFile)) "127.0.0.1"
+      Assert-Throws "native SSH host key mismatch stops probing" {
+        Invoke-CchouseSshTrue -Target "claude@127.0.0.1" -SshOption @("--key-mismatch")
+      } "host key verification failed"
+      Assert-Equal "SSH keeps caller preference" $ErrorActionPreference "Stop"
+    } finally {
+      $script:CchouseSystem32Ssh = $oldSsh
+    }
+  }
 } finally {
   if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force }
 }

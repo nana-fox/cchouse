@@ -37,21 +37,17 @@ function Get-CchouseVBoxManage {
 }
 
 function Invoke-CchouseVBox {
-  param([string[]]$CcArgumentList)
+  param([string[]]$CcArgumentList, [string]$FailureMessage = "VBoxManage failed")
   $vbm = Get-CchouseVBoxManage
   if (-not $vbm) { throw "VBoxManage.exe not found (install VirtualBox or set CCHOUSE_VBOXMANAGE)" }
-  & $vbm @CcArgumentList
-  if ($LASTEXITCODE -ne 0) { throw "VBoxManage failed (rc=$LASTEXITCODE)" }
+  Invoke-CchouseNativeChecked -FilePath $vbm -ArgumentList $CcArgumentList -FailureMessage $FailureMessage
 }
 
 function Invoke-CchouseVBoxOptional {
   param([string[]]$CcArgumentList)
   $vbm = Get-CchouseVBoxManage
   if (-not $vbm) { throw "VBoxManage.exe not found" }
-  # Windows PowerShell 5.1 treats native stderr as an error even when redirected.
-  $ErrorActionPreference = "Continue"
-  $output = @(& $vbm @CcArgumentList 2>$null)
-  return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $output }
+  Invoke-CchouseNative -FilePath $vbm -ArgumentList $CcArgumentList
 }
 
 function Get-CchouseVirtualBoxInstallArgs {
@@ -255,13 +251,10 @@ function Import-CchouseVBoxOva {
   param([string]$OvaPath, [string]$Name, [string]$DestDir, [int]$SshPort, [string]$HostKeyLog)
   if (-not (Test-Path -LiteralPath $OvaPath)) { throw "OVA not found" }
   Assert-CchouseSshPort -Port $SshPort
-  $vbm = Get-CchouseVBoxManage
-  if (-not $vbm) { throw "VBoxManage.exe not found (install VirtualBox or set CCHOUSE_VBOXMANAGE)" }
   New-Item -ItemType Directory -Force -Path $DestDir | Out-Null
   if (Test-CchouseVmRegistered $Name) {
     Invoke-CchouseVBoxOptional -CcArgumentList @("controlvm", $Name, "poweroff") | Out-Null
-    & $vbm unregistervm $Name --delete
-    if ($LASTEXITCODE -ne 0) { throw "unregistervm failed" }
+    Invoke-CchouseVBox -CcArgumentList @("unregistervm", $Name, "--delete") -FailureMessage "unregistervm failed"
   }
   Invoke-CchouseVBox -CcArgumentList @("import", $OvaPath, "--vsys", "0", "--vmname", $Name, "--basefolder", $DestDir)
   $rule = "ssh,tcp,127.0.0.1,$SshPort,,22"
@@ -329,15 +322,15 @@ function Invoke-CchouseVBoxBoot {
   $vbm = Get-CchouseVBoxManage
   if (-not $vbm) { throw "VBoxManage.exe not found" }
   $ide = Get-CchouseIdeController $Name
-  & $vbm storageattach $Name --storagectl $ide --port 1 --device 0 --type dvddrive --medium emptydrive
-  if ($LASTEXITCODE -ne 0) { throw "detach seed ISO failed" }
+  Invoke-CchouseVBox -CcArgumentList @(
+    "storageattach", $Name, "--storagectl", $ide, "--port", "1", "--device", "0", "--type", "dvddrive", "--medium", "emptydrive"
+  ) -FailureMessage "detach seed ISO failed"
   if ($SeedIso) {
     Invoke-CchouseVBoxOptional -CcArgumentList @("closemedium", "dvd", $SeedIso) | Out-Null
     if (Test-Path -LiteralPath $SeedIso) { Remove-Item -LiteralPath $SeedIso -Force }
     if (Test-Path -LiteralPath $SeedIso) { throw "seed.iso still present" }
   }
-  & $vbm modifyvm $Name --cableconnected1 on
-  if ($LASTEXITCODE -ne 0) { throw "enable NIC failed" }
+  Invoke-CchouseVBox -CcArgumentList @("modifyvm", $Name, "--cableconnected1", "on") -FailureMessage "enable NIC failed"
   # Read the serial log while the VM is off. A running VM may lock the file.
   Enable-CchouseVBoxSerialLog -Name $Name -HostKeyLog $HostKeyLog
   $serialText = Read-CchouseSerialText -Path $HostKeyLog
@@ -352,9 +345,7 @@ function Invoke-CchouseVBoxBoot {
   Start-CchouseVmDetached $Name
 
   if (-not (Test-Path -LiteralPath $script:CchouseSystem32Ssh)) { throw "System32 OpenSSH ssh.exe not found" }
-  if ($KeyPath -and (Test-Path -LiteralPath $KeyPath)) {
-    & icacls.exe $KeyPath /inheritance:r /grant:r "${env:USERNAME}:(R,W)" | Out-Null
-  }
+  Fix-KeyAcl $KeyPath
   $ok = $false
   $startedAt = Get-Date
   while (-not (Test-CchouseSshDeadlineReached -StartedAt $startedAt -LimitSeconds $script:CchouseSshWaitSeconds)) {
@@ -394,8 +385,7 @@ function Invoke-CchouseVBoxBoot {
 function Remove-CchouseVBoxVM {
   param([string]$Name)
   if ($Name -notmatch '^claude-[a-z][a-z0-9_-]{1,15}$') { throw "VM name is not an exact instance name" }
-  $vbm = Get-CchouseVBoxManage
-  if (-not $vbm) { throw "VBoxManage.exe not found" }
+  if (-not (Get-CchouseVBoxManage)) { throw "VBoxManage.exe not found" }
   if (-not (Test-CchouseVmRegistered $Name)) { return }
   $info = @(Get-CchouseShowvminfoLines -Name $Name)
   $reported = Get-CchouseVmNameFromLines -Lines $info
@@ -410,21 +400,18 @@ function Remove-CchouseVBoxVM {
     }
   }
   if ($vmState -ne "poweroff" -and $vmState -ne "aborted") {
-    & $vbm controlvm $Name poweroff
-    if ($LASTEXITCODE -ne 0) { throw "poweroff failed for $Name" }
+    Invoke-CchouseVBox -CcArgumentList @("controlvm", $Name, "poweroff") -FailureMessage "poweroff failed for $Name"
     if (-not (Wait-CchousePowerOff $Name 40)) { throw "poweroff timed out for $Name" }
   }
-  & $vbm unregistervm $Name --delete
-  if ($LASTEXITCODE -ne 0) { throw "unregistervm failed for $Name" }
+  Invoke-CchouseVBox -CcArgumentList @("unregistervm", $Name, "--delete") -FailureMessage "unregistervm failed for $Name"
   if (Test-CchouseVmRegistered $Name) { throw "VM $Name is still registered" }
 }
 
 function New-CchouseVBoxSnapshot {
   param([string]$Name, [string]$SnapName)
-  $vbm = Get-CchouseVBoxManage
   Invoke-CchouseVBoxOptional -CcArgumentList @("snapshot", $Name, "delete", $SnapName) | Out-Null
-  & $vbm snapshot $Name take $SnapName --description "cchouse clean"
-  if ($LASTEXITCODE -ne 0) { throw "VBoxManage snapshot take failed" }
+  Invoke-CchouseVBox -CcArgumentList @("snapshot", $Name, "take", $SnapName, "--description", "cchouse clean") `
+    -FailureMessage "VBoxManage snapshot take failed"
   Write-Host "SNAPSHOT_OK=$SnapName"
 }
 

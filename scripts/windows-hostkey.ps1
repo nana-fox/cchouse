@@ -3,8 +3,19 @@
 # serial log during firstboot. The host writes known_hosts from that line.
 # Do not print the serial log or any private key.
 
+. (Join-Path $PSScriptRoot "windows-native.ps1")
+
 $script:CchouseSystem32Ssh = "C:\Windows\System32\OpenSSH\ssh.exe"
 $script:CchouseSshWaitSeconds = 180
+
+function Fix-KeyAcl {
+  param([string]$Path)
+  if ($Path -and (Test-Path -LiteralPath $Path)) {
+    Invoke-CchouseNativeChecked -FilePath "icacls.exe" -ArgumentList @(
+      $Path, "/inheritance:r", "/grant:r", "${env:USERNAME}:(R,W)"
+    ) -FailureMessage "SSH key ACL update failed" | Out-Null
+  }
+}
 
 function ConvertTo-CchouseOpenSshPath {
   param([string]$Path)
@@ -150,25 +161,9 @@ function Invoke-CchouseSshTrue {
   if (-not (Test-Path -LiteralPath $script:CchouseSystem32Ssh)) {
     throw "System32 OpenSSH ssh.exe not found"
   }
-  $errPath = [System.IO.Path]::GetTempFileName()
-  $code = 1
-  $errText = ""
-  $previousNative = $PSNativeCommandUseErrorActionPreference
-  $PSNativeCommandUseErrorActionPreference = $false
-  try {
-    & $script:CchouseSystem32Ssh @SshOption $Target "true" 2>$errPath | Out-Null
-    $code = $LASTEXITCODE
-    if (Test-Path -LiteralPath $errPath) {
-      $errText = [System.IO.File]::ReadAllText($errPath)
-    }
-  } finally {
-    $PSNativeCommandUseErrorActionPreference = $previousNative
-    if (Test-Path -LiteralPath $errPath) {
-      Remove-Item -LiteralPath $errPath -Force -ErrorAction SilentlyContinue
-    }
-  }
-  if (Test-CchouseHostKeyMismatch -Stderr $errText) {
+  $result = Invoke-CchouseNative -FilePath $script:CchouseSystem32Ssh -ArgumentList ($SshOption + @($Target, "true"))
+  if (Test-CchouseHostKeyMismatch -Stderr $result.Stderr) {
     throw "host key verification failed for $Target"
   }
-  return ($code -eq 0)
+  return ($result.ExitCode -eq 0)
 }
