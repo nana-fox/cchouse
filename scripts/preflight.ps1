@@ -87,10 +87,15 @@ $errors = @("MISSING_PYTHON: Windows 未检测到真实 Python 3（已排除 Win
 if (-not $vmrunFound) {
   $errors += "MISSING_VMWARE: 未检测到 VMware Workstation Pro (vmrun.exe)"
 }
-# 与 preflight.py 的 VMWARE_LINUX_DISK_MIN_GB / VMWARE_LINUX_DISK_RECOMMENDED_GB 保持一致。
-# 实测来源：status-w7.md 2026-11-26 12:01 DISK_MEASURED。VirtualBox 缓存+客机+干净快照 5924945920 字节，卷减少 6196707328 字节。按十进制 GB 向上取整为 7/10。磁盘数字不看 vmrun 在不在。
-$diskMinGb = 7
-$diskRecommendedGb = 10
+# 与 preflight.py 保持一致。磁盘数字不看 vmrun 在不在。
+# VirtualBox 默认路线：卷减少 6196707328 字节，十进制 GB 向上取整为 7/10。#39 接入前本脚本不按它检查。
+$virtualBoxDiskMinGb = 7
+$virtualBoxDiskRecommendedGb = 10
+# 手动 vmware-linux：卷减少 9418551296 字节（8.772 GiB），向上取整为 9/12。当前 $Route 仍是这一条。
+$vmwareDiskMinGb = 9
+$vmwareDiskRecommendedGb = 12
+$diskMinGb = $vmwareDiskMinGb
+$diskRecommendedGb = $vmwareDiskRecommendedGb
 $diskFreeGb = $null
 try {
   $diskFreeGb = Get-CchouseInstallFreeGb

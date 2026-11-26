@@ -243,14 +243,27 @@ class TestCchouseV2(unittest.TestCase):
             preflight_mod.TART_LINUX_DISK_MIN_GB,
         )
 
-        # Windows 只用 VirtualBox 实测。与 Mac 一样按十进制 GB 向上取整，再留约 3 GB。
+        # VirtualBox 是 Windows 默认路线。与 Mac 一样按十进制 GB 向上取整，再留约 3 GB。
+        # #39 合并前没有这条路线，disk_requirement_gb 先不返回这组数字。
         vbox_kept = 1770708992 + 4154236928
         vbox_drop = 6196707328
         self.assertEqual(vbox_kept, 5924945920)
         self.assertEqual(math.ceil(vbox_drop / 1_000_000_000), 7)
-        self.assertEqual(preflight_mod.VMWARE_LINUX_DISK_MIN_GB, 7)
-        self.assertEqual(preflight_mod.VMWARE_LINUX_DISK_RECOMMENDED_GB, 10)
-        self.assertEqual(preflight_mod.disk_requirement_gb("vmware-linux"), (7, 10, False))
+        self.assertEqual(preflight_mod.VIRTUALBOX_DISK_MIN_GB, 7)
+        self.assertEqual(preflight_mod.VIRTUALBOX_DISK_RECOMMENDED_GB, 10)
+
+        # 手动 --route vmware-linux。检查用的 GB 按 1024**3，8.772 GiB 向上取整为 9。
+        vmware_kept = 1770708992 + 6934653192
+        vmware_drop = 9418551296
+        self.assertEqual(vmware_kept, 8705362184)
+        self.assertEqual(math.ceil(vmware_drop / (1024 ** 3)), 9)
+        self.assertEqual(preflight_mod.VMWARE_LINUX_DISK_MIN_GB, 9)
+        self.assertEqual(preflight_mod.VMWARE_LINUX_DISK_RECOMMENDED_GB, 12)
+        self.assertEqual(preflight_mod.disk_requirement_gb("vmware-linux"), (9, 12, False))
+        self.assertNotEqual(
+            preflight_mod.disk_requirement_gb("vmware-linux")[:2],
+            (preflight_mod.VIRTUALBOX_DISK_MIN_GB, preflight_mod.VIRTUALBOX_DISK_RECOMMENDED_GB),
+        )
 
         below, _warn = preflight_mod.assess_install_disk(8.9, "tart-linux")
         self.assertTrue(any("INSUFFICIENT_DISK" in item and "至少需要 9 GB" in item for item in below))
@@ -262,15 +275,15 @@ class TestCchouseV2(unittest.TestCase):
         ok_err, ok_warn = preflight_mod.assess_install_disk(12.0, "tart-linux")
         self.assertEqual((ok_err, ok_warn), ([], []))
 
-        win_below, win_warn = preflight_mod.assess_install_disk(6.9, "vmware-linux")
-        self.assertTrue(any("INSUFFICIENT_DISK" in item and "至少需要 7 GB" in item for item in win_below))
+        win_below, win_warn = preflight_mod.assess_install_disk(8.9, "vmware-linux")
+        self.assertTrue(any("INSUFFICIENT_DISK" in item and "至少需要 9 GB" in item for item in win_below))
         self.assertFalse(any("估算" in item for item in win_below))
         self.assertEqual(win_warn, [])
-        win_mid_err, win_mid_warn = preflight_mod.assess_install_disk(7.0, "vmware-linux")
+        win_mid_err, win_mid_warn = preflight_mod.assess_install_disk(9.0, "vmware-linux")
         self.assertEqual(win_mid_err, [])
-        self.assertTrue(any("建议至少 10 GB" in item for item in win_mid_warn))
+        self.assertTrue(any("建议至少 12 GB" in item for item in win_mid_warn))
         self.assertFalse(any("估算" in item for item in win_mid_warn))
-        win_ok_err, win_ok_warn = preflight_mod.assess_install_disk(10.0, "vmware-linux")
+        win_ok_err, win_ok_warn = preflight_mod.assess_install_disk(12.0, "vmware-linux")
         self.assertEqual((win_ok_err, win_ok_warn), ([], []))
 
         # v1 macOS 客机仍走 30/50 GB，不套用 Debian 实测值。
@@ -284,8 +297,13 @@ class TestCchouseV2(unittest.TestCase):
             self.assertFalse((Path(td) / "not-created").exists())
 
         ps1 = (ROOT / "scripts" / "preflight.ps1").read_text(encoding="utf-8")
-        self.assertIn("$diskMinGb = 7", ps1)
-        self.assertIn("$diskRecommendedGb = 10", ps1)
+        self.assertIn("$virtualBoxDiskMinGb = 7", ps1)
+        self.assertIn("$virtualBoxDiskRecommendedGb = 10", ps1)
+        self.assertIn("$vmwareDiskMinGb = 9", ps1)
+        self.assertIn("$vmwareDiskRecommendedGb = 12", ps1)
+        self.assertIn("$diskMinGb = $vmwareDiskMinGb", ps1)
+        self.assertIn("$diskRecommendedGb = $vmwareDiskRecommendedGb", ps1)
+        self.assertNotIn("$diskMinGb = $virtualBoxDiskMinGb", ps1)
         self.assertIn("MISSING_VMWARE: 未检测到 VMware Workstation Pro (vmrun.exe)", ps1)
         self.assertIn("至少需要 $diskMinGb GB", ps1)
         self.assertIn("建议至少 $diskRecommendedGb GB", ps1)

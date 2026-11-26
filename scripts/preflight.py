@@ -196,14 +196,22 @@ def find_tart_linux_golden_images(th=None):
 # 默认 ~/.tart 与缓存目录在同一卷。TART_HOME 在另一卷时，仍按这一合计检查该卷。
 TART_LINUX_DISK_MIN_GB = 9
 TART_LINUX_DISK_RECOMMENDED_GB = 12
-# 实测来源：status-w7.md 2026-11-26 12:01 DISK_MEASURED。
+# VirtualBox 是 Windows 默认路线。实测来源：status-w7.md 2026-11-26 12:01 DISK_MEASURED。
 # GTR，VirtualBox 7.2.22，HVCI 开，正式 OVA。NTFS 实际分配：
 #   缓存 + 客机 + 干净快照 = 5924945920 字节
 #   安装前后该卷可用空间减少 6196707328 字节（约 5.8 GiB，十进制 6.197 GB）
 # 与 Mac 相同：按十进制 GB 向上取整（6.197 → 7），建议值再留约 3 GB（10）。
-# 预检路线键仍是 vmware-linux。磁盘数字不看 vmrun 在不在。
-VMWARE_LINUX_DISK_MIN_GB = 7
-VMWARE_LINUX_DISK_RECOMMENDED_GB = 10
+# #39 合并前还没有这条路线。常量先放在这里，disk_requirement_gb 先不返回它。
+VIRTUALBOX_DISK_MIN_GB = 7
+VIRTUALBOX_DISK_RECOMMENDED_GB = 10
+# 手动 --route vmware-linux。实测来源：status-w7.md 2026-11-26 11:54 DISK_VMWARE。
+# GTR，HVCI 开，同一份正式 OVA。NTFS 实际分配：
+#   缓存 + 快照后客机 = 8705362184 字节（8.108 GiB）
+#   安装前后该卷可用空间减少 9418551296 字节（8.772 GiB）
+# 检查用的 GB 按 1024**3。8.772 向上取整为 9，建议值再留约 3 GB（12）。
+# 这组数字不看 vmrun 在不在。
+VMWARE_LINUX_DISK_MIN_GB = 9
+VMWARE_LINUX_DISK_RECOMMENDED_GB = 12
 
 
 def default_install_dir():
@@ -239,7 +247,11 @@ def install_disk_probe_path(route, tart_home=None):
 
 
 def disk_requirement_gb(route):
-    """返回 (最低 GB, 建议 GB, 是否为估算)。两条路线都是实测。macos-tart 沿用单独的 30/50 GB 规则。"""
+    """返回 (最低 GB, 建议 GB, 是否为估算)。tart-linux 与手动 vmware-linux 都是实测。
+
+    VirtualBox 默认路线的 7/10 在 VIRTUALBOX_DISK_MIN_GB / VIRTUALBOX_DISK_RECOMMENDED_GB。
+    #39 接入该路线后再在这里返回。macos-tart 沿用单独的 30/50 GB 规则。
+    """
     if route == "tart-linux":
         return TART_LINUX_DISK_MIN_GB, TART_LINUX_DISK_RECOMMENDED_GB, False
     if route == "vmware-linux":
