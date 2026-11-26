@@ -365,7 +365,8 @@ class TestVirtualBoxManifest(unittest.TestCase):
         self.assertNotIn("flush ruleset", golden)
         self.assertNotIn("flush ruleset", ova)
         self.assertIn("绝不执行 flush ruleset", nft)
-        self.assertNotIn("virtualbox", (ROOT / "guest-linux" / "image-manifest.json").read_text(encoding="utf-8"))
+        image_manifest = json.loads((ROOT / "guest-linux" / "image-manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual({art["route"] for art in image_manifest["artifacts"]}, {"virtualbox-linux", "tart-linux"})
 
     def _mutate(self, **changes):
         data = json.loads(MANIFEST.read_text(encoding="utf-8"))
@@ -455,9 +456,8 @@ class TestVirtualBoxScript(unittest.TestCase):
         self.assertIn('"delete" { Remove-CchouseVBoxVM -Name $CcVmName -VmDir $CcVmDir }', src)
         firstboot = src.split("function Invoke-CchouseVBoxFirstboot", 1)[1].split("function Invoke-CchouseVBoxBoot", 1)[0]
         self.assertLess(firstboot.find("Enable-CchouseVBoxSerialLog"), firstboot.find("Start-CchouseVmDetached"))
-        self.assertLess(src.rfind("Resolve-CchouseFirstbootStop"), src.find("HARD_POWEROFF=1"))
-        self.assertLess(src.find("HARD_POWEROFF=1"), src.find("FIRSTBOOT_STOPPED=OK"))
-        self.assertNotIn("Wait-CchousePowerOff $Name 20 | Out-Null", src)
+        self.assertLess(firstboot.find("-FirstbootLog $HostKeyLog"), firstboot.find("FIRSTBOOT_STOPPED=OK"))
+        self.assertIn("-TimeoutMs $timeoutMs", boot)
 
     def test_preflight_reports_virtualbox_route_and_amd64_image(self):
         proc = subprocess.run(
@@ -486,7 +486,7 @@ class TestVirtualBoxScript(unittest.TestCase):
         self.assertIn("ConnectTimeout=$ConnectTimeout", helper)
         self.assertNotIn("StrictHostKeyChecking=no", helper)
         ssh_fn = helper.split("function Invoke-CchouseSshTrue", 1)[1].split("function ", 1)[0]
-        self.assertLess(ssh_fn.find("Test-CchouseHostKeyMismatch"), ssh_fn.find("return"))
+        self.assertLess(ssh_fn.index("Test-CchouseHostKeyMismatch"), ssh_fn.index("return ($process.ExitCode -eq 0)"))
         verify = (ROOT / "scripts" / "verify-linux.sh").read_text(encoding="utf-8")
         self.assertIn('warn "未经串口核对主机密钥"', verify)
         self.assertIn("hostkey.trust", verify)

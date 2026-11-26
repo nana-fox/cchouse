@@ -3,6 +3,7 @@
 ## v2.0-preview
 
 - 交互式 `cchouse up` 等待输入节点链接时暂停后台下载日志，下载继续进行。输入结束后恢复输出。
+- VirtualBox 离线首启等待客机刷盘、串口确认和正常关机后才卸载配置盘并联网。联网 SSH 就绪探测单次最多 10 秒，总等待预算为 180 秒。
 - 中英 README 增加 Windows 单行引导入口。安装器准备私有 Python，缺少 VirtualBox 时会发起安装并提示用户确认 UAC。
 - 自检按安装卷的剩余空间检查完整安装。VirtualBox 路线至少 7 GB、建议 10 GB。Tart Debian 13 路线至少 9 GB、建议 12 GB。低于建议值时只提示。
 

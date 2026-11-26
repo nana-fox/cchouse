@@ -119,10 +119,6 @@ try {
 }
 Assert-False "64 hex is accepted as a hash" $rejectedValid
 
-Assert-Throws "both stops failed" { Resolve-CchouseFirstbootStop -AfterAcpi:$false -AfterHard:$false } "timed out"
-Assert-Equal "acpi stop" (Resolve-CchouseFirstbootStop -AfterAcpi:$true -AfterHard:$false) "acpi"
-Assert-Equal "hard stop" (Resolve-CchouseFirstbootStop -AfterAcpi:$false -AfterHard:$true) "hard"
-
 Assert-Throws "port 0" { Assert-CchouseSshPort -Port 0 } "CcSshPort is required"
 Assert-Throws "port 65536" { Assert-CchouseSshPort -Port 65536 } "CcSshPort is required"
 Assert-CchouseSshPort -Port 2301
@@ -186,8 +182,6 @@ Assert-True "timeout capped" ($fallback -contains "ConnectTimeout=5")
 Assert-False "never no" ($fallback -contains "StrictHostKeyChecking=no")
 $floor = @(Get-CchouseSshVerifyOptions -KnownHostsPath "C:\kh" -Pinned:$true -ConnectTimeout 0)
 Assert-True "timeout floor" ($floor -contains "ConnectTimeout=1")
-Assert-True "deadline past" (Test-CchouseSshDeadlineReached -StartedAt (Get-Date).AddSeconds(-181) -LimitSeconds 180)
-Assert-False "deadline fresh" (Test-CchouseSshDeadlineReached -StartedAt (Get-Date) -LimitSeconds 180)
 Assert-True "changed key" (Test-CchouseHostKeyMismatch -Stderr "WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!")
 Assert-True "verify failed" (Test-CchouseHostKeyMismatch -Stderr "Host key verification failed.")
 Assert-False "connection refused is not a mismatch" (Test-CchouseHostKeyMismatch -Stderr "Connection refused")
@@ -264,7 +258,8 @@ try {
     $ova = Join-Path $tmp "image.ova"
     [System.IO.File]::WriteAllText($ova, "synthetic OVA")
     $fixtureName = "claude-cc01"
-    $fixtureUuid = "11111111-aaaa-bbbb-cccc-111111111111"
+    $fixtureUuid = [guid]::NewGuid().ToString()
+    $otherUuid = [guid]::NewGuid().ToString()
     $config = Join-Path (Join-Path $vmDir $fixtureName) "$fixtureName.vbox"
     $vm = @{ Registered = $true; PowerOff = $true; Config = $config; ReportedName = $fixtureName; State = "running" }
     $commands = [System.Collections.Generic.List[string]]::new()
@@ -273,7 +268,7 @@ try {
       switch ($CcArgumentList[0]) {
         "list" {
           Assert-Equal "only list registered VMs" ($CcArgumentList -join " ") "list vms"
-          '"claude-cc01-extra" {22222222-aaaa-bbbb-cccc-222222222222}'
+          '"claude-cc01-extra" {{{0}}}' -f $otherUuid
           if ($vm.Registered) { '"{0}" {{{1}}}' -f $fixtureName, $fixtureUuid }
         }
         "controlvm" { $commands.Add($CcArgumentList -join " ") }
@@ -356,30 +351,48 @@ try {
   Write-CchouseHostKeyTrustMark -SerialLogPath $serial -Pinned:$true
   Assert-Equal "serial mark" ([System.IO.File]::ReadAllText($trustPath)) "serial`n"
 
-  if ($env:OS -eq "Windows_NT") {
-    $fakeSsh = Join-Path $tmp "ssh.cmd"
-    $attemptLog = Join-Path $tmp "ssh-attempts"
-    $ipFile = Join-Path $tmp "guest-ip"
-    [System.IO.File]::WriteAllLines($fakeSsh, @(
-      '@echo off',
-      'if "%1"=="--key-mismatch" (',
-      '  echo WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! 1>&2',
-      '  echo Host key verification failed. 1>&2',
-      '  exit /b 255',
-      ')',
-      'if exist "%~dp0ssh-attempts" (',
-      '  echo success>>"%~dp0ssh-attempts"',
-      '  exit /b 0',
-      ')',
-      'echo timeout>"%~dp0ssh-attempts"',
-      'echo Connection timed out during banner exchange 1>&2',
-      'exit /b 255'
-    ), [System.Text.Encoding]::ASCII)
+  & {
+    $states = [System.Collections.Generic.Queue[string]]::new()
+    function Invoke-CchouseVBoxOptional { return @{ ExitCode = 0; Output = @($states.Dequeue()) } }
+    function Start-Sleep {}
+    foreach ($withMarker in @($true, $false)) {
+      $states.Enqueue('VMState="poweroff"')
+      $states.Enqueue('VMState="running"')
+      $states.Enqueue('VMState="poweroff"')
+      $completionLog = Join-Path $tmp "firstboot.serial"
+      [System.IO.File]::WriteAllText($completionLog, "")
+      if ($withMarker) {
+        # VBoxManage starts asynchronously. Publish the token only after the VM runs.
+        function Start-Sleep {
+          if ($states.Count -eq 1) {
+            [System.IO.File]::WriteAllText($completionLog, "noise`r`nCCHOUSE_FIRSTBOOT_DONE`r`n")
+          }
+        }
+        Assert-True "firstboot waits for provisioning and clean poweroff" (
+          Wait-CchousePowerOff -Name "claude-cc01" -Seconds 3 -FirstbootLog $completionLog
+        )
+        function Start-Sleep {}
+      } else {
+        Assert-Throws "early poweroff does not confirm firstboot" {
+          Wait-CchousePowerOff -Name "claude-cc01" -Seconds 3 -FirstbootLog $completionLog
+        } "without confirming"
+      }
+    }
+    $states.Enqueue('VMState="aborted"')
+    Assert-False "aborted VM does not confirm firstboot" (
+      Wait-CchousePowerOff -Name "claude-cc01" -Seconds 3 -FirstbootLog $completionLog
+    )
+  }
 
+  if ($env:OS -eq "Windows_NT") {
+    $ipFile = Join-Path $tmp "guest-ip"
     $oldSsh = $script:CchouseSystem32Ssh
-    $script:CchouseSystem32Ssh = $fakeSsh
+    $script:CchouseSystem32Ssh = (Get-Process -Id $PID).Path
+    $probe = (Get-Command Invoke-CchouseSshTrue).ScriptBlock
     try {
+      $clock = [System.Diagnostics.Stopwatch]::StartNew()
       & {
+        $attempts = [System.Collections.Generic.List[string]]::new()
         function Get-CchouseVBoxManage { return $fakeVBox }
         function Get-CchouseIdeController { return "IDE" }
         function Invoke-CchouseVBox {}
@@ -387,12 +400,27 @@ try {
         function Start-Sleep {}
         function Get-CchouseShowvminfoLines { return $vmLines }
         function Resolve-CchouseProbeDecision { return "probe" }
+        function Invoke-CchouseSshTrue {
+          param($Target, $SshOption, $TimeoutMs)
+          Assert-True "boot passes a hard timeout" ($TimeoutMs -gt 0 -and $TimeoutMs -le 10000)
+          if ($attempts.Count -eq 0) {
+            $attempts.Add("timeout")
+            return (& $probe -Target $Target -TimeoutMs 1500 -SshOption @(
+              "-NoProfile", "-NonInteractive", "-Command", 'Start-Sleep -Seconds 30 #'
+            ))
+          }
+          $attempts.Add("success")
+          return (& $probe -Target $Target -SshOption @("-NoProfile", "-NonInteractive", "-Command", 'exit 0 #'))
+        }
         Invoke-CchouseVBoxBoot -Name "claude-cc01" -KnownHostsPath $kh -IpFile $ipFile -SshPort 2301 -HostKeyLog $serial
+        Assert-Equal "SSH retries a hung subprocess" ($attempts -join ",") "timeout,success"
       }
-      Assert-Equal "SSH retries the timed-out banner exchange" ((Get-Content -LiteralPath $attemptLog) -join ",") "timeout,success"
+      Assert-True "hung probe was terminated" ($clock.Elapsed.TotalSeconds -lt 15)
       Assert-Equal "boot records IP after successful retry" ([System.IO.File]::ReadAllText($ipFile)) "127.0.0.1"
       Assert-Throws "native SSH host key mismatch stops probing" {
-        Invoke-CchouseSshTrue -Target "claude@127.0.0.1" -SshOption @("--key-mismatch")
+        Invoke-CchouseSshTrue -Target "claude@127.0.0.1" -SshOption @(
+          "-NoProfile", "-NonInteractive", "-Command", '[Console]::Error.WriteLine("REMOTE HOST IDENTIFICATION HAS CHANGED"); exit 255 #'
+        )
       } "host key verification failed"
       Assert-Equal "SSH keeps caller preference" $ErrorActionPreference "Stop"
     } finally {
@@ -403,7 +431,6 @@ try {
   if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force }
 }
 
-Assert-False "hard poweroff wait is not ignored" $src.Contains('Wait-CchousePowerOff $Name 20 | Out-Null')
 Assert-True "single IDE regex" $src.Contains('^storagecontrollername\d+="([^"]*IDE[^"]*)"')
 Assert-False "second match does not clobber the capture" $src.Contains('$Matches[1] -match')
 

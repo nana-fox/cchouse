@@ -378,6 +378,10 @@ jobs:
             echo "- **Guest + OVA duration**: \`${ELAPSED_MIN}m${ELAPSED_SEC}s\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Smoke-test offline provisioning and seedless reboot
+        shell: bash
+        run: bash guest-linux/image-builder/smoke-test-ova-firstboot.sh "$WORK_DIR/ova-stage/cchouse-debian13-amd64-disk1.vmdk"
+
       - name: Upload OVA artifact
         uses: actions/upload-artifact@v4
         with:

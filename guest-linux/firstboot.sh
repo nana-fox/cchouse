@@ -154,16 +154,14 @@ chmod 644 /etc/claude-code/managed-settings.json
 # 8. 禁用局域网广播与自动更新（--no-block 防 sysinit 阶段死锁）
 systemctl disable --no-block avahi-daemon.service avahi-daemon.socket cups-browsed.service apt-daily.timer apt-daily-upgrade.timer 2>/dev/null || true
 
-# 9. 加载实例 nftables、记录内核实际生效规则摘要、启用并拉起服务、写 done 标记
+# 9. 加载实例 nftables、记录内核实际生效规则摘要、启用并拉起服务
 /usr/sbin/nft -f "$DST/nftables.conf"
 /usr/local/sbin/cchouse-probe nft-live-sha >/var/lib/cchouse/expected-nft-live.sha256
 systemctl daemon-reload
 systemctl enable cchouse-nftables.service cchouse-mihomo.service cchouse-timesync.timer
 systemctl start --no-block cchouse-mihomo.service cchouse-timesync.timer
-touch /var/lib/cchouse/firstboot.done
-systemctl disable cchouse-firstboot.service || true
 
-# 10. 离线安装 Claude Code 原生二进制（无需 Node.js，置于 done 之后且非致命；先原子落盘再 rename，避免硬断电截断）
+# 10. 离线安装 Claude Code 原生二进制（无需 Node.js；失败时保留原有的非致命警告）
 if [ -f "$MNT/claude-code.tgz" ]; then
   if tar -xzf "$MNT/claude-code.tgz" -C /tmp package/claude \
     && install -m 755 -o root -g root /tmp/package/claude /usr/local/bin/.claude.tmp \
@@ -176,5 +174,11 @@ if [ -f "$MNT/claude-code.tgz" ]; then
   fi
 fi
 
-# 首次注入全部关键文件与二进制强制刷盘，避免后续 tart stop / 关窗硬断电导致 ext4 脏页截断
+# 首次注入结束后才写 done，并刷盘后通知 VirtualBox 宿主。
+touch /var/lib/cchouse/firstboot.done
+systemctl disable cchouse-firstboot.service || true
 sync
+if [ -f "$MNT/poweroff-after-provision" ]; then
+  timeout 2 sh -c 'printf "\nCCHOUSE_FIRSTBOOT_DONE\n" >/dev/ttyS0'
+  systemctl --no-block poweroff
+fi

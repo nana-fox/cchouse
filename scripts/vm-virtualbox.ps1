@@ -14,7 +14,7 @@ param(
   [string]$CcKnownHosts = "",
   [string]$CcIpFile = "",
   [string]$CcSnapshot = "cchouse-clean",
-  [int]$CcFirstbootSeconds = 56,
+  [int]$CcFirstbootSeconds = 180,
   [int]$CcSshPort = 0,
   [string]$CcInstaller = "",
   [string]$CcSha256 = "",
@@ -218,22 +218,26 @@ function Start-CchouseVmDetached {
 }
 
 function Wait-CchousePowerOff {
-  param([string]$Name, [int]$Seconds)
-  for ($i = 0; $i -lt $Seconds; $i++) {
+  param([string]$Name, [int]$Seconds, [string]$FirstbootLog)
+  $clock = [System.Diagnostics.Stopwatch]::StartNew()
+  $started = $false
+  while ($clock.Elapsed.TotalSeconds -lt $Seconds) {
     $info = Invoke-CchouseVBoxOptional -CcArgumentList @("showvminfo", $Name, "--machinereadable")
     if ($info.ExitCode -eq 0) {
-      if ('VMState="poweroff"' -in $info.Output -or 'VMState="aborted"' -in $info.Output) { return $true }
+      if ('VMState="aborted"' -in $info.Output) { return (-not $FirstbootLog) }
+      if ('VMState="poweroff"' -in $info.Output) {
+        if (-not $FirstbootLog) { return $true }
+        $serialText = Read-CchouseSerialText -Path $FirstbootLog
+        if ($serialText -cmatch '(?m)^CCHOUSE_FIRSTBOOT_DONE\r?$') { return $true }
+        # The detached launcher may not have started the VM yet.
+        if ($started) { throw "firstboot stopped without confirming offline provisioning" }
+      } elseif ('VMState="running"' -in $info.Output) {
+        $started = $true
+      }
     }
     Start-Sleep -Seconds 1
   }
   return $false
-}
-
-function Resolve-CchouseFirstbootStop {
-  param([bool]$AfterAcpi, [bool]$AfterHard)
-  if ($AfterAcpi) { return "acpi" }
-  if ($AfterHard) { return "hard" }
-  throw "firstboot shutdown timed out"
 }
 
 function Enable-CchouseVBoxSerialLog {
@@ -283,6 +287,7 @@ function Import-CchouseVBoxOva {
 function Invoke-CchouseVBoxFirstboot {
   param([string]$Name, [string]$SeedIso, [int]$Seconds, [string]$HostKeyLog)
   if (-not (Test-Path -LiteralPath $SeedIso)) { throw "seed.iso not found" }
+  if (-not $HostKeyLog) { throw "CcHostKeyLog is required for firstboot" }
   $ide = Get-CchouseIdeController $Name
   Invoke-CchouseVBox -CcArgumentList @(
     "storageattach", $Name,
@@ -293,19 +298,15 @@ function Invoke-CchouseVBoxFirstboot {
     "--medium", $SeedIso
   )
   Enable-CchouseVBoxSerialLog -Name $Name -HostKeyLog $HostKeyLog
-  Write-Host "Starting offline firstboot (headless, ${Seconds}s)..."
+  [System.IO.File]::WriteAllText($HostKeyLog, "")
+  Write-Host "Starting offline firstboot (headless, up to ${Seconds}s)..."
   Start-CchouseVmDetached $Name
-  Start-Sleep -Seconds $Seconds
-  Invoke-CchouseVBoxOptional -CcArgumentList @("controlvm", $Name, "acpipowerbutton") | Out-Null
-  $afterAcpi = Wait-CchousePowerOff $Name 40
-  $afterHard = $false
-  if (-not $afterAcpi) {
+  if (-not (Wait-CchousePowerOff -Name $Name -Seconds $Seconds -FirstbootLog $HostKeyLog)) {
     Invoke-CchouseVBoxOptional -CcArgumentList @("controlvm", $Name, "poweroff") | Out-Null
-    $afterHard = Wait-CchousePowerOff $Name 20
-  }
-  $how = Resolve-CchouseFirstbootStop -AfterAcpi:$afterAcpi -AfterHard:$afterHard
-  if ($how -eq "hard") {
-    Write-Host "HARD_POWEROFF=1"
+    if (-not (Wait-CchousePowerOff -Name $Name -Seconds 20)) {
+      throw "firstboot shutdown timed out; could not stop the offline VM"
+    }
+    throw "firstboot did not shut down cleanly within ${Seconds}s; provisioning was not confirmed"
   }
   Write-Host "FIRSTBOOT_STOPPED=OK"
 }
@@ -349,13 +350,13 @@ function Invoke-CchouseVBoxBoot {
   if (-not (Test-Path -LiteralPath $script:CchouseSystem32Ssh)) { throw "System32 OpenSSH ssh.exe not found" }
   Fix-KeyAcl $KeyPath
   $ok = $false
-  $startedAt = Get-Date
-  while (-not (Test-CchouseSshDeadlineReached -StartedAt $startedAt -LimitSeconds $script:CchouseSshWaitSeconds)) {
-    $remaining = [int][Math]::Floor($script:CchouseSshWaitSeconds - ((Get-Date) - $startedAt).TotalSeconds)
-    if ($remaining -lt 1) { break }
-    $sleepFor = [int][Math]::Min(3, $remaining)
-    if ($sleepFor -lt 1) { break }
-    Start-Sleep -Seconds $sleepFor
+  $clock = [System.Diagnostics.Stopwatch]::StartNew()
+  $budgetMs = $script:CchouseSshWaitSeconds * 1000
+  while ($clock.ElapsedMilliseconds -lt $budgetMs) {
+    $remainingMs = $budgetMs - $clock.ElapsedMilliseconds
+    if ($remainingMs -le 0) { break }
+    Start-Sleep -Milliseconds ([int][Math]::Min(3000, $remainingMs))
+    if ($clock.ElapsedMilliseconds -ge $budgetMs) { break }
     $info = @(Get-CchouseShowvminfoLines -Name $Name)
     $decision = Resolve-CchouseProbeDecision -Name $Name -Lines $info -Port $SshPort -VBoxManage $vbm
     if ($decision -eq "reject") {
@@ -363,11 +364,11 @@ function Invoke-CchouseVBoxBoot {
     }
     if ($decision -ne "probe") { continue }
     $pinned = [bool]$trust.Pinned
-    $timeout = $remaining
-    if ($timeout -gt 5) { $timeout = 5 }
-    $verify = @(Get-CchouseSshVerifyOptions -KnownHostsPath $KnownHostsPath -Pinned:$pinned -ConnectTimeout $timeout)
+    $timeoutMs = [int][Math]::Min(10000, ($budgetMs - $clock.ElapsedMilliseconds))
+    if ($timeoutMs -le 0) { break }
+    $verify = @(Get-CchouseSshVerifyOptions -KnownHostsPath $KnownHostsPath -Pinned:$pinned)
     $sshOpts = @("-F", "none", "-p", "$SshPort", "-i", $KeyPath) + $verify
-    if (Invoke-CchouseSshTrue -Target "claude@127.0.0.1" -SshOption $sshOpts) {
+    if (Invoke-CchouseSshTrue -Target "claude@127.0.0.1" -SshOption $sshOpts -TimeoutMs $timeoutMs) {
       $ok = $true
       break
     }

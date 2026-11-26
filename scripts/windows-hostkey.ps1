@@ -147,23 +147,35 @@ function Test-CchouseHostKeyMismatch {
   return $false
 }
 
-function Test-CchouseSshDeadlineReached {
-  param([datetime]$StartedAt, [int]$LimitSeconds)
-  if ($LimitSeconds -le 0) { $LimitSeconds = $script:CchouseSshWaitSeconds }
-  return (((Get-Date) - $StartedAt).TotalSeconds -ge $LimitSeconds)
-}
-
 function Invoke-CchouseSshTrue {
   param(
     [string]$Target,
-    [string[]]$SshOption
+    [string[]]$SshOption,
+    [int]$TimeoutMs = 10000
   )
   if (-not (Test-Path -LiteralPath $script:CchouseSystem32Ssh)) {
     throw "System32 OpenSSH ssh.exe not found"
   }
-  $result = Invoke-CchouseNative -FilePath $script:CchouseSystem32Ssh -ArgumentList ($SshOption + @($Target, "true"))
-  if (Test-CchouseHostKeyMismatch -Stderr $result.Stderr) {
-    throw "host key verification failed for $Target"
+  $startInfo = [System.Diagnostics.ProcessStartInfo]::new($script:CchouseSystem32Ssh)
+  # Use the Windows argv quoting rules on both PowerShell 5.1 and 7. Preserve
+  # the quotes SSH needs inside UserKnownHostsFile="path with spaces".
+  $startInfo.Arguments = (($SshOption + @($Target, "true") | ForEach-Object {
+    '"' + ($_ -replace '(\\*)"', '$1$1\"' -replace '(\\+)$', '$1$1') + '"'
+  }) -join ' ')
+  $startInfo.UseShellExecute = $false
+  $startInfo.RedirectStandardError = $true
+  $process = [System.Diagnostics.Process]::Start($startInfo)
+  try {
+    $stderr = $process.StandardError.ReadToEndAsync()
+    if (-not $process.WaitForExit($TimeoutMs)) {
+      try { $process.Kill() } catch { if (-not $process.HasExited) { throw } }
+      return $false
+    }
+    if (Test-CchouseHostKeyMismatch -Stderr ($stderr.GetAwaiter().GetResult())) {
+      throw "host key verification failed for $Target"
+    }
+    return ($process.ExitCode -eq 0)
+  } finally {
+    $process.Dispose()
   }
-  return ($result.ExitCode -eq 0)
 }
