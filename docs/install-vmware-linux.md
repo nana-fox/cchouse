@@ -1,12 +1,14 @@
-# Windows / Intel Mac 安装手册（VMware + Debian 13）
+# Windows 安装手册（VMware + Debian 13）
 
-本手册面向 **Windows（x64，家庭版与专业版通用）** 与 **Intel Mac**，采用免费版 VMware + 预装好的 Debian 13 黄金镜像（`guest-linux/`），只覆盖网页版与 Claude Code CLI（不含 Claude Desktop）。
+> Intel Mac 暂不支持。
+
+本手册面向 **Windows（x64，家庭版与专业版通用）**，采用免费版 VMware + 预装好的 Debian 13 黄金镜像（`guest-linux/`），只覆盖网页版与 Claude Code CLI（不含 Claude Desktop）。
 
 > Apple Silicon Mac 优先走 [install-tart-linux.md](install-tart-linux.md)（Tart + Debian 13 arm64 轻量路线）或 [build.md](build.md)（Tart + macOS 客机）。
 
 ---
 
-## 最快路径：一条命令 `cchouse up`（预览；当前自动导入仅支持 Windows + VMware Workstation，Intel Mac 下载与配置完成后按本手册手工导入）
+## 最快路径：一条命令 `cchouse up`（Windows + VMware Workstation）
 
 ```bash
 python3 -I scripts/cchouse.py up --tag cc01
@@ -30,8 +32,7 @@ python3 -I scripts/cchouse.py up --tag cc01
 1. **开启 CPU 虚拟化**：确认 BIOS/UEFI 已开启 Intel VT-x / AMD-V。
    - *Windows 11 VBS / 内存完整性提示*：若系统开启了 VBS，VMware 17.x 会自动在 WHP 之上运行（略慢但可用，且嵌套虚拟化不可用）。`preflight` 会提示该状态，**不要为了提速关闭 VBS**。
 2. **安装免费版 VMware**（Broadcom 自 2024-11 起对个人与商用均免费，需登录 Broadcom 官网下载官方原版安装包并核对签名）：
-   - Windows：VMware Workstation Pro
-   - Intel Mac：VMware Fusion Pro
+   - 安装 VMware Workstation Pro。
 3. **自备外部 IP 代理**：按 [proxy-modes.md](proxy-modes.md) 确定 `EXIT_MODE=single` 或 `chain`。
 
 ---
@@ -47,9 +48,12 @@ python3 -I scripts/preflight.py --route vmware-linux
 确认输出 JSON 中 `ok: true`（已检测到 `vmrun` 路径、足够磁盘空间，并记录 `host.detected_vmnet_cidr` 作为实际 VMware NAT 网段），再在**私有目录**准备 `instance.env`（不要放进仓库）：
 
 - Windows 示例：`%LOCALAPPDATA%\cchouse\<TAG>\instance.env`
-- macOS 示例：`~/Library/Application Support/cchouse/<TAG>/instance.env`
 
-复制 `instance.env.linux.example` 并填写（**渲染前务必把 `VMNET_CIDR` 改成 `preflight.py` 探测到的实际 `vmnet8` 网段**，否则 `firstboot` 会把错误的 SSH 白名单写死进 `nftables`；键盘布局由 `GUEST_KEYBOARD` 控制，默认 `us`，可按需改为 `gb`/`de`/`jp` 等 2–3 位小写 XKB 代码），同时拉取校验后的 Claude Code 原生二进制包（无需 Node.js），再校验与渲染：
+按下面顺序准备，**全部完成后再渲染**（渲染器缺 `SSH_PUBKEY` 会直接退出）：
+
+1. **生成专用 SSH 密钥**：`ssh-keygen -t ed25519 -f "<PRIVATE_DIR>/id_ed25519" -N ""`，将 `.pub` 单行内容填入 `instance.env` 的 `SSH_PUBKEY`（**必填**，firstboot 会关闭密码登录）。
+2. **填节点与预期出口**：节点协议、地址和认证参数（`SINGLE_TYPE`、`SINGLE_SERVER`、`SINGLE_PORT` 等），以及预期出口 `EXPECTED_EGRESS_IP` / `EXPECTED_EGRESS_LOC` / `EXPECTED_EGRESS_ASN` 和对应的 `TIMEZONE`。
+3. **其余参数**：复制 `instance.env.linux.example` 并填写（**渲染前务必把 `VMNET_CIDR` 改成 `preflight.py` 探测到的实际 `vmnet8` 网段**，否则 `firstboot` 会把错误的 SSH 白名单写死进 `nftables`；键盘布局由 `GUEST_KEYBOARD` 控制，默认 `us`，可按需改为 `gb`/`de`/`jp` 等 2–3 位小写 XKB 代码），同时拉取校验后的 Claude Code 原生二进制包（无需 Node.js），再校验与渲染：
 
 ```bash
 python3 -I scripts/fetch-claude-code.py --platform linux-x64 --out "<PRIVATE_DIR>/claude-code.tgz"
@@ -76,8 +80,7 @@ python3 -I scripts/render.py "<PRIVATE_DIR>/instance.env" "<PRIVATE_DIR>/rendere
 
 ## 阶段 3：首次开机零泄漏注入（三层硬锁）
 
-1. **准备 SSH 密钥并配置 `.vmx`**：
-   - 在私有目录生成专用密钥：`ssh-keygen -t ed25519 -f "<PRIVATE_DIR>/id_ed25519" -N ""`，将 `.pub` 单行内容填入 `instance.env` 的 `SSH_PUBKEY`（**必填**，firstboot 会关闭密码登录）。
+1. **配置 `.vmx`**（SSH 密钥已在阶段 1 生成并填入 `SSH_PUBKEY`）：
    - 编辑 `.vmx`，确保网络使用 NAT、首启物理断开、禁用共享文件夹与拖放：
      ```ini
      ethernet0.connectionType = "nat"
@@ -92,12 +95,12 @@ python3 -I scripts/render.py "<PRIVATE_DIR>/instance.env" "<PRIVATE_DIR>/rendere
    将 `seed.iso` 挂载到虚拟光驱（确保光驱设置为开机连接）。
    - **不采用 `cloud-init`**，**不采用 VMware `guestinfo.*`**。
 3. **首次开机并在控制台确认注入完成（不要用 `nogui` 盲等）**：
-   - 启动虚拟机（Workstation 用 `-T ws`，Fusion 用 `-T fusion`），在 VMware 控制台确认：
+   - 启动虚拟机（Workstation 用 `-T ws`），在 VMware 控制台确认：
      - `/var/lib/cchouse/firstboot.done` 已生成（若失败，控制台登录页或 `systemctl status cchouse-firstboot`、`/var/lib/cchouse/firstboot.log` 会显示原因）；
      - 在控制台查看客机新生成的 SSH 主机公钥（`cat /etc/ssh/ssh_host_ed25519_key.pub`）。
 4. **销毁明文、接通网卡并录入 `known_hosts`**：
    - 关机或卸载虚拟光驱，**立即删除 `seed.iso` 与 `<PRIVATE_DIR>/rendered/`**；
-   - 将 `.vmx` 改为 `ethernet0.startConnected = "TRUE"` 后启动（或实测 `vmrun -T ws|fusion connectNamedDevice "<VMX_PATH>" ethernet0`）；
+   - 将 `.vmx` 改为 `ethernet0.startConnected = "TRUE"` 后启动（或实测 `vmrun -T ws connectNamedDevice "<VMX_PATH>" ethernet0`）；
    - 在控制台 `ip -4 addr` 确认 NAT DHCP 分配的 `GUEST_IP`（回填 `instance.env` 的 `GUEST_IP`），并将步骤 3 核对过的 SSH 主机公钥写入 `<PRIVATE_DIR>/known_hosts`。
 
 ---

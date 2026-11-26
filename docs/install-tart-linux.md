@@ -6,7 +6,7 @@
 
 ---
 
-## 最快路径：一条命令 `cchouse up`（预览）
+## 最快路径：一条命令 `cchouse up`
 
 ```bash
 python3 -I scripts/cchouse.py up --tag cc01
@@ -36,7 +36,11 @@ python3 -I scripts/cchouse.py up --tag cc01
 python3 -I scripts/preflight.py --route tart-linux
 ```
 
-在私有目录（默认 `~/Library/Application Support/cchouse/<TAG>`，权限 `700`）生成 SSH 密钥并准备 `instance.env`（复制 `instance.env.linux.example`）：
+在私有目录（默认 `~/Library/Application Support/cchouse/<TAG>`，权限 `700`）按下面顺序准备，**全部完成后再渲染**（渲染器缺 `SSH_PUBKEY` 会直接退出）：
+
+1. 生成专用 SSH 密钥：`ssh-keygen -t ed25519 -f "<PRIVATE_DIR>/id_ed25519" -N ""`。
+2. 复制 `instance.env.linux.example` 为 `instance.env`，填入节点协议、地址和认证参数（`SINGLE_TYPE`、`SINGLE_SERVER`、`SINGLE_PORT` 等），以及预期出口 `EXPECTED_EGRESS_IP` / `EXPECTED_EGRESS_LOC` / `EXPECTED_EGRESS_ASN` 和对应的 `TIMEZONE`。
+3. 核对以下参数：
 
 - `GUEST_OS=linux`
 - `VMNET_CIDR=192.168.64.0/24`（Tart 默认共享 NAT 网段）
