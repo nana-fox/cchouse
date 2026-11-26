@@ -320,7 +320,8 @@ class TestUpPipeline(unittest.TestCase):
             self.assertEqual(state2["status"], "DONE")
             self.assertNotIn("failed_step", state2)
             self.assertEqual(len(state2["timings"]), len(cchouse_mod.UP_STEPS))
-            self.assertIn("check.html", out2.getvalue())
+            self.assertIn("网络检查页（Network Check）", out2.getvalue())
+            self.assertNotIn("check.html", out2.getvalue())
             self.assertIn("严禁复制到宿主浏览器", out2.getvalue())
 
     def test_unexpected_error_deletes_plaintext_marks_failed_and_reraises(self):

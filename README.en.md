@@ -9,7 +9,7 @@ cchouse runs a small isolated virtual machine on your computer. You use Claude o
 
 [中文](README.md) | English
 
-![After the automated checks pass, open the network check page on the VM desktop and sign in only after every check passes (example image; the IP is a documentation sample address)](docs/assets/check-all-green.png)
+![The network check page (Network Check). Example image; the IP is a documentation sample address.](docs/assets/check-all-green.png)
 
 ---
 
@@ -41,7 +41,7 @@ The quick start runs the current installer from `main` and uses the `v2.0.0-prev
 **Step 1: Install the base tools** (one time)
 
 - On an **Apple Silicon Mac**, install [Homebrew](https://brew.sh), Git, and Python 3, then run `brew install cirruslabs/cli/tart`.
-- On **Windows (x64)**, install [Git for Windows](https://git-scm.com/download/win), Python 3 (run it as `py -3` in PowerShell), and the OpenSSH client (Windows Settings → Optional features). Confirm that CPU virtualization is enabled in the BIOS. You do not install VirtualBox yourself.
+- On **Windows (x64)**, install [Git for Windows](https://git-scm.com/download/win), Python 3 (run it as `py -3` in PowerShell), and the OpenSSH client (Windows Settings → Optional features). Confirm that CPU virtualization is enabled in the BIOS. If VirtualBox is not installed, the installer sets it up. Approve the system prompt once when it appears.
 
 **Step 2: Run this one command and paste a node link**
 
@@ -55,9 +55,9 @@ When prompted, paste only the node link. The input is not shown. That is the onl
 
 If installation fails, it stops on the step that failed. Fix the cause it prints, then rerun this same command from the same directory. The installer resumes from the saved steps and the downloads it has already checked.
 
-**Step 3: Open the VM desktop, and sign in only after every network check passes**
+**Step 3: Look at the network check page (Network Check)**
 
-On a Mac, after verification passes, the installer opens the guest window. In the guest's Chromium, look at the Network Check page (the picture above). On Windows, the installer does not open a window. Open claude-cc01 in VirtualBox, and look at the same page in the guest's Chromium. After every network check passes, sign in to Claude in **the browser inside the VM**. That page checks the network only. It does not say anything about the account.
+It is the picture above. You can sign in when the command-line verification has passed. The first time you open the network check page (Network Check), a red bar may appear. The fix is on main. Run `cchouse up` again so the generated config includes the fix. The command-line verification is what counts. Sign in from the browser inside the VM. This page checks the network only. It does not say anything about the account.
 
 > The authorization link shown when you sign in to Claude Code must also be opened in the browser inside the VM. Do not copy it into the browser on your own computer.
 
@@ -160,7 +160,7 @@ If the install has not created `instance.env` yet, omit `--env` and collect the 
 <details>
 <summary><b>What if VirtualBox is not installed?</b></summary>
 
-You do not download it yourself. If it is missing, the installer installs the Windows base package: winget first, and if that fails, it downloads the official installer, checks the SHA-256, and installs it silently. Do not install the Extension Pack. If Windows asks for permission, allow it once. If VirtualBox is already installed, the installer does not install it again.
+If VirtualBox is not installed, the installer sets it up. Approve the system prompt once when it appears.
 
 </details>
 

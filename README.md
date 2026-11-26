@@ -9,7 +9,7 @@
 
 中文 | [English](README.en.md)
 
-![自动验收通过后，在虚拟机桌面打开网络检查页，全部通过后再登录（图为示例，IP 为文档示例地址）](docs/assets/check-all-green.png)
+![网络检查页（Network Check）。图为示例，IP 为文档示例地址。](docs/assets/check-all-green.png)
 
 ---
 
@@ -41,7 +41,7 @@ cchouse 的做法：只走你配置的那一个节点，把虚拟机的时区、
 **第 1 步：装好基础软件**（一次性）
 
 - 在 **Apple Silicon Mac** 上先装 [Homebrew](https://brew.sh)、Git 和 Python 3，再运行 `brew install cirruslabs/cli/tart`。
-- 在 **Windows（x64）** 上先装 [Git for Windows](https://git-scm.com/download/win)、Python 3（在 PowerShell 里用 `py -3` 运行）、OpenSSH 客户端（Windows 设置 → 可选功能），并确认 BIOS 里已开启 CPU 虚拟化。VirtualBox 不用自己装。
+- 在 **Windows（x64）** 上先装 [Git for Windows](https://git-scm.com/download/win)、Python 3（在 PowerShell 里用 `py -3` 运行）、OpenSSH 客户端（Windows 设置 → 可选功能），并确认 BIOS 里已开启 CPU 虚拟化。没装 VirtualBox 时安装器会自动装好，中途点一次系统授权。
 
 **第 2 步：运行这一条命令，粘贴节点链接**
 
@@ -55,9 +55,9 @@ Windows PowerShell 把命令里的 `python3` 换成 `py -3`。
 
 安装失败会停在出错的步骤。处理提示的原因后，从同一个目录重跑这一条命令。安装器会续用已保存的步骤和已经校验过的下载文件。
 
-**第 3 步：打开虚拟机桌面，网络检查全部通过后再登录**
+**第 3 步：看网络检查页（Network Check）**
 
-Mac 上，安装器验收通过后会自动打开客机窗口。在客机的 Chromium 里看 Network Check 检查页（就是上面那张图）。Windows 上，安装器不会自动打开窗口，请在 VirtualBox 里打开 claude-cc01，同样在客机的 Chromium 里看这一页。网络检查全部通过后，再在**虚拟机里的浏览器**登录 Claude。这一页只检查网络，不代表账号状态。
+它就是上面那张图。命令行验收通过就可以登录。首次打开网络检查页（Network Check）可能显示红条，修复已在主线，重新运行 `cchouse up` 生成的配置即包含修复；命令行验收结果为准。在虚拟机里的浏览器登录。这一页只检查网络，不代表账号状态。
 
 > 登录 Claude Code 时弹出的授权链接，也只能在虚拟机里的浏览器打开，不要复制到你本机的浏览器。
 
@@ -160,7 +160,7 @@ py -3 -I scripts/doctor.py --env "$env:LOCALAPPDATA\cchouse\cc01\instance.env"
 <details>
 <summary><b>还没有 VirtualBox 怎么办？</b></summary>
 
-不用自己去下载。安装器发现没装时会安装 Windows 基础包：先用 winget，失败再下载官方安装包，核对 SHA-256 后静默安装。不要安装 Extension Pack。Windows 弹出提权确认时点允许，只此一次。已经装好时，安装器不会重装。
+没装 VirtualBox 时安装器会自动装好，中途点一次系统授权。
 
 </details>
 

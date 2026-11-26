@@ -1129,7 +1129,7 @@ def print_timing_table(ctx, steps):
 def print_handoff(ctx):
     print("\n== 部署完成，交给你 ==")
     print(f"- 客机 {ctx.vm_name} 已开机，干净快照：{ctx.state.get('clean_snapshot')}")
-    print("- 请在客机桌面核对 check.html 全绿，然后自行登录 Claude Code。")
+    print("- 请看客机里的网络检查页（Network Check）。命令行验收通过就可以登录。首次打开可能显示红条，修复已在主线，重新运行 cchouse up 生成的配置即包含修复；命令行验收结果为准。")
     print("- Claude Code 的 OAuth 登录链接只能在客机浏览器里打开，严禁复制到宿主浏览器。")
     print("- cchouse 不会替你登录、注册、订阅或付款。")
 
