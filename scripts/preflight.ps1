@@ -42,6 +42,22 @@ function Find-RealPython {
   return $null
 }
 
+function Get-CchouseInstallFreeGb {
+  # 安装目录：%LOCALAPPDATA%\cchouse。目录还不存在时检查其已存在的父目录，不创建。
+  $root = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $env:USERPROFILE "AppData\Local" }
+  $probe = Join-Path $root "cchouse"
+  while (-not (Test-Path -LiteralPath $probe)) {
+    $parent = Split-Path -Parent $probe
+    if (-not $parent -or $parent -eq $probe) { break }
+    $probe = $parent
+  }
+  $item = Get-Item -LiteralPath $probe
+  $drive = Get-PSDrive -Name $item.PSDrive.Name
+  if ($null -eq $drive.Free) { return $null }
+  # 与 preflight.py 一样按十进制 GB 检查，先比较后取显示精度。
+  return $drive.Free / 1000000000.0
+}
+
 $vbsNote = Get-VbsNote
 $found = Find-RealPython
 if ($found) {
@@ -67,6 +83,28 @@ if ($found) {
 $warnings = @()
 if ($vbsNote) { $warnings += $vbsNote }
 $errors = @("MISSING_PYTHON: Windows 未检测到真实 Python 3（已排除 WindowsApps 商店占位）或 uv，请先安装后重跑 preflight")
+# 与 preflight.py 的 VirtualBox 阈值保持一致。
+$diskMinGb = 7
+$diskRecommendedGb = 10
+$diskFreeGb = $null
+$nextAction = "install_python_or_uv"
+if ($Route -in @("auto", "virtualbox-linux")) {
+  try {
+    $diskFreeGb = Get-CchouseInstallFreeGb
+    if ($null -ne $diskFreeGb) {
+      $freeDisplay = [math]::Floor($diskFreeGb * 10) / 10
+      if ($diskFreeGb -lt $diskMinGb) {
+        $errors += "INSUFFICIENT_DISK: 安装目录所在卷剩余 $freeDisplay GB，完整安装至少需要 $diskMinGb GB（含下载的镜像）。请清理该卷空间后再安装。"
+        $nextAction = "free_disk"
+      } elseif ($diskFreeGb -lt $diskRecommendedGb) {
+        $warnings += "LOW_DISK: 安装目录所在卷剩余 $freeDisplay GB，建议至少 $diskRecommendedGb GB。"
+      }
+      $diskFreeGb = [math]::Round($diskFreeGb, 1)
+    }
+  } catch {
+    $warnings += "DISK_CHECK_FAILED: 未能读取安装目录所在卷的剩余空间。"
+  }
+}
 $payload = [ordered]@{
   ok = $false
   status = "HUMAN_WAIT"
@@ -74,11 +112,15 @@ $payload = [ordered]@{
     os = "Windows"
     arch = $env:PROCESSOR_ARCHITECTURE
     python = $null
+    disk_free_gb = $diskFreeGb
+    disk_min_gb = $diskMinGb
+    disk_recommended_gb = $diskRecommendedGb
+    disk_estimate = $false
   }
   route = $Route
   errors = $errors
   warnings = $warnings
-  next_action = "install_python_or_uv"
+  next_action = $nextAction
 }
 $payload | ConvertTo-Json -Depth 6
 exit 1

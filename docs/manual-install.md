@@ -18,7 +18,7 @@
    - **单节点模式（`EXIT_MODE=single`，默认推荐）**：1 个固定出口节点（SOCKS5 / HTTP / VLESS / Trojan / Shadowsocks / SSH；不支持 Hysteria2 / TUIC 等纯 UDP 协议）。仅 v2 Linux 客机支持。若该节点拦截 Stripe（如 Webshare），只影响在 claude.ai 网页上付款，安装验收会给出提示但不拦截；需要时可加一个 Stripe 备用节点。
    - **链式模式（`EXIT_MODE=chain`，进阶）**：前置节点（自建 VPS / CF 前置 / 机场）→ 固定 ISP 出口（v1 macOS Tart 与 v2 Linux 均支持）；若所用 ISP 屏蔽 Stripe，可额外开启 `STRIPE_EXIT_MODE`（v1 macOS 必须为 `front` 或 `tmh-chain`）。
    - 详细配置见 [proxy-modes.md](proxy-modes.md)，自建前置见 [front.md](front.md)。
-2. **本机硬件建议**：内存 ≥ 16 GB；磁盘剩余空间（VirtualBox / Tart Debian 13 客机 ≥ 25 GB，v1 Tart macOS 客机 ≥ 50 GB）。
+2. **本机硬件建议**：内存 16 GB。完整安装含下载，Windows 至少需要 7 GB、建议 10 GB，Apple Silicon 的 Debian 13 客机至少需要 9 GB、建议 12 GB。v1 Tart macOS 客机建议至少 50 GB。
 
 ---
 

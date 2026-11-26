@@ -108,6 +108,24 @@ python -I scripts/doctor.py --env "$env:LOCALAPPDATA\cchouse\<TAG>\instance.env"
 - 加 `--vm-ssh` 时会额外尝试采集 `guest/firstboot.log`、`guest/verify-linux.json`、`guest/mihomo-status.txt` 与 `guest/nft-ruleset.txt`；若客机不可达或某项无权限读取，脚本依然正常生成 zip，并在 `manifest.json` 的 `missing` 字段写明缺哪一项及原因。
 - **不会打包 `instance.env` 原文或私钥文件**：所有写入 zip 的文本与 JSON 都会经过统一脱敏，自动抹除 `instance.env` 中的密码、UUID、密钥、节点地址、用户名/密码 URL、Authorization 头与 PEM 私钥块。即便如此，发给外部前仍建议先粗略扫一眼包内文件确认无额外个人备注。
 
+## Windows 一键安装后的诊断与卸载
+
+在 PowerShell 中使用引导脚本准备的 Python 和源码。把下面的 `<工作目录>` 换成安装器输出的工作目录。默认实例名为 `cc01`。
+
+```powershell
+$root = Join-Path $env:LOCALAPPDATA 'cchouse\bootstrap'
+$python = Get-ChildItem -Path (Join-Path $root 'tools\python-*-embed-amd64\python.exe') -File | Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty FullName
+$source = '<工作目录>'
+
+# 导出脱敏诊断包
+& $python -I (Join-Path $source 'scripts\doctor.py') --env "$env:LOCALAPPDATA\cchouse\cc01\instance.env"
+
+# 预览并卸载实例
+& $python -I (Join-Path $source 'scripts\cchouse.py') remove --tag cc01
+```
+
+实例尚未生成 `instance.env` 时，导出诊断包可省略 `--env` 参数。卸载自定义实例时使用实际 `--tag` 和原 `--private-dir`。
+
 ## 远程部署排障与交接
 
 以下来自 [ex02 实测记录](records/2026-11-16-ex02.md)，适用于控制端经 UU 维护其他用户宿主、再由宿主 SSH 进入客机的流程。

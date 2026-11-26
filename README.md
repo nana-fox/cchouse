@@ -36,14 +36,21 @@ cchouse 的做法：只走你配置的那一个节点，把虚拟机的时区、
 
 ## 快速开始
 
-本文对应镜像 `v2.0.0-preview.2`。安装器按仓库内的镜像清单下载并校验文件。[镜像大小与 SHA-256](guest-linux/image-manifest.json)
+安装器会下载并校验匹配的客机镜像和官方 Claude Code 包。[镜像清单](guest-linux/image-manifest.json)
 
-**第 1 步：装好基础软件和虚拟机软件**（一次性）
+### Windows（x64）
 
-- 在 **Apple Silicon Mac** 上先装 [Homebrew](https://brew.sh)、Git 和 Python 3，再运行 `brew install cirruslabs/cli/tart`。
-- 在 **Windows（x64）** 上先装 [Git for Windows](https://git-scm.com/download/win)、Python 3（在 PowerShell 里用 `py -3` 运行）、OpenSSH 客户端（Windows 设置 → 可选功能），并确认 BIOS 里已开启 CPU 虚拟化。再安装 VMware Workstation Pro（下载需要 Broadcom 账号），安装器会用到它的 `vmrun.exe` 和 `ovftool.exe`。
+打开 Windows PowerShell，运行下面这一行。待 `v2.0.0-preview.3` 发布资产并填入校验值后即可使用。
 
-**第 2 步：运行安装器，粘贴单节点链接**
+```powershell
+$f = "$env:TEMP\cchouse-bootstrap-$([guid]::NewGuid().ToString('N')).ps1"; iwr https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.3/bootstrap-windows.ps1 -UseBasicParsing -OutFile $f -ErrorAction Stop; if ((Get-FileHash $f -Algorithm SHA256).Hash -ne '<PREVIEW3_WINDOWS_SHA256>') { throw 'SHA-256 mismatch' }; Unblock-File -LiteralPath $f; powershell -NoProfile -ExecutionPolicy RemoteSigned -File $f -CleanupBootstrap
+```
+
+按提示粘贴自己的节点链接，输入不会回显。缺少 VirtualBox 时，安装器会自动安装。Windows 弹出用户账户控制（UAC）提示时，点一次「是」。
+
+### Apple Silicon Mac
+
+先装 [Homebrew](https://brew.sh)、Git 和 Python 3，再运行 `brew install cirruslabs/cli/tart`。
 
 ```bash
 git clone https://github.com/nana-fox/cchouse.git
@@ -51,13 +58,11 @@ cd cchouse
 python3 -I scripts/cchouse.py up --tag cc01
 ```
 
-Windows PowerShell 用 `py -3 -I scripts/cchouse.py up --tag cc01`。
+按提示粘贴自己的节点链接。
 
-提示时粘贴节点链接，输入不会回显。安装器会自动采用并显示出口时区和预期出口 IP，继续运行至自动验收。安装器在后台通过宿主网络下载并校验镜像和官方 Claude Code 包，同时完成配置和自检。Apple Silicon Mac 和 Windows 会自动创建客机（导入镜像或克隆已有黄金镜像）、离线注入配置、清理明文配置文件、联网重启、运行 `verify-linux.sh --fail-closed` 并在通过后保存干净快照。[手动安装](docs/manual-install.md)
+### 打开客机并登录
 
-安装失败会停在出错的步骤。处理提示的原因后，从同一个目录重跑原命令，保留相同的 `--tag` 和自定义目录参数。安装器会续用已保存的步骤和校验过的下载文件。
-
-**第 3 步：打开虚拟机桌面，网络检查全部通过后再登录**
+安装器会配置客机、运行自动验收，并在通过后保存干净快照。遇到错误时，按提示处理后重跑同一条命令。安装器会复用已校验的下载和已完成的步骤。
 
 自动验收通过后，打开虚拟机桌面上的网络检查页（就是上面那张图）。网络检查全部通过后，再在**虚拟机里的浏览器**登录 Claude。这一页只检查网络，不代表账号状态。
 
@@ -72,7 +77,7 @@ Windows PowerShell 用 `py -3 -I scripts/cchouse.py up --tag cc01`。
 | 你的电脑 | 用什么虚拟机软件 | 状态 |
 |---|---|---|
 | Apple Silicon Mac（M 系列） | Tart | ✅ `v2.0.0-preview.2` 已在 Mac mini 完成公开版冷安装 |
-| Windows（x64） | VMware Workstation Pro | ✅ `preview.2` 已通过真机导入和桌面验收 |
+| Windows（x64） | VirtualBox | `preview.3` 待验证 |
 | Intel Mac | — | 暂不支持 |
 
 虚拟机里统一是 Debian 13 + Chromium + Claude Code。不支持 Linux 电脑作为宿主机。
@@ -80,14 +85,13 @@ Windows PowerShell 用 `py -3 -I scripts/cchouse.py up --tag cc01`。
 **空缓存首次安装耗时**（包括镜像和 Claude Code 下载）
 
 - **Apple Silicon Mac** 在 Mac mini 实测 `v2.0.0-preview.2` 公共版空缓存安装用时 **2 分 15 秒**，涵盖下载、自动验收和保存干净快照。下载经宿主代理，镜像平均 20.67 MiB/s，Claude Code 平均 16.31 MiB/s。
-- **Windows（VMware）** 实测 `v2.0.0-preview.2` 从导入到桌面验收通过约 **3 分 05 秒**。镜像约 1.58 GB，含下载的空缓存全程待测。
 
 ---
 
 ## 你需要准备什么
 
 - **一个节点**（cchouse 不提供节点）。支持 SOCKS5、HTTP(S)、VLESS、Trojan、Shadowsocks；不支持 Hysteria2、TUIC、WireGuard 这类走 UDP 的协议。最好是固定 IP、地区稳定的节点。
-- **电脑配置**：建议内存 16 GB 以上，硬盘剩余 25 GB 以上。
+- **电脑配置**：建议内存 16 GB。含所需下载，Windows 安装卷至少剩余 **7 GB**（建议 **10 GB**），Apple Silicon 至少 **9 GB**（建议 **12 GB**）。
 
 > **关于 Stripe**：有些节点会拦截付款服务 Stripe。这只影响在 claude.ai 网页上付款，不影响登录和日常使用；安装时会提示你，但不会拦着你装。这只检查能否连通，不代表付款一定成功。需要的话可以加一个付款专用节点，见 [docs/proxy-modes.md](docs/proxy-modes.md)。
 
@@ -134,7 +138,7 @@ Stripe 不通只影响在 claude.ai 网页上付款。已经订阅的、或在�
 <details>
 <summary><b>电脑开着 Clash 的 TUN 模式，首次验收出口连测失败？</b></summary>
 
-等 1–2 分钟，再从同一目录重跑快速开始里的安装命令，使用相同的 `--tag`。安装器会续跑并重新验收。如果客机已经关机，先在虚拟机软件中启动同一台客机。
+等 1–2 分钟，再重跑快速开始里的同一条安装命令。安装器会续跑并重新验收。如果客机已经关机，先在虚拟机软件中启动同一台客机。
 
 如果仍失败，可以在宿主 Clash 的兜底规则前为节点本身的 IPv4 地址加一条直连规则，例如 `IP-CIDR,<节点IPv4>/32,DIRECT,no-resolve`，然后重跑原安装命令。直连规则只配置在宿主 Clash。
 
@@ -143,15 +147,13 @@ Stripe 不通只影响在 claude.ai 网页上付款。已经订阅的、或在�
 <details>
 <summary><b>装的时候出错了怎么办？</b></summary>
 
-用安装时生成的 `instance.env` 导出脱敏诊断包。已启动的客机可加 `--vm-ssh`，让工具尝试采集客机诊断信息。以下命令使用默认目录和标签 `cc01`。
+用安装时生成的 `instance.env` 导出脱敏诊断包。已启动的客机可加 `--vm-ssh`，让工具尝试采集客机诊断信息。以下 Mac 示例使用默认目录和标签 `cc01`。
 
 ```bash
 python3 -I scripts/doctor.py --env "$HOME/Library/Application Support/cchouse/cc01/instance.env"
 ```
 
-```powershell
-py -3 -I scripts/doctor.py --env "$env:LOCALAPPDATA\cchouse\cc01\instance.env"
-```
+Windows 请按[一键安装后的诊断说明](docs/operations.md#windows-一键安装后的诊断与卸载)操作。
 
 如果安装还未生成 `instance.env`，可省略 `--env` 参数，先采集宿主诊断。
 
@@ -159,26 +161,19 @@ py -3 -I scripts/doctor.py --env "$env:LOCALAPPDATA\cchouse\cc01\instance.env"
 
 </details>
 
-<details>
-<summary><b>VMware 为什么要注册 Broadcom 账号？</b></summary>
-
-VMware 现在个人免费使用，但官方要求先在 Broadcom 官网注册账号才能下载，这一步目前绕不开。我们在评估不需要注册的替代方案。Apple Silicon Mac 用的 Tart 不需要注册。
-
-</details>
-
 ---
 
 ## 卸载
 
-等安装命令结束后，在克隆的 cchouse 目录运行，`cc01` 换成安装时使用的 `--tag`。
+在 Mac 上，等安装命令结束后，在克隆的 cchouse 目录运行。把 `cc01` 换成安装时使用的 `--tag`。
 
 ```bash
 python3 -I scripts/cchouse.py remove --tag cc01
 ```
 
-Windows PowerShell 用 `py -3 -I scripts/cchouse.py remove --tag cc01`。安装时指定过 `--private-dir`，卸载时也传同一路径。
+Windows 请按[一键安装后的卸载说明](docs/operations.md#windows-一键安装后的诊断与卸载)操作。安装时指定过 `--private-dir`，卸载时也传同一路径。
 
-安装器会先列出它能确认归属的虚拟机、干净快照、私有目录和临时明文，再询问是否删除。回车默认取消，`--yes` 会跳过确认。在 VMware 中，删除虚拟机也会删除它的所有内置快照。在 VirtualBox 中，卸载会先关机，再用 `VBoxManage unregistervm --delete` 删除安装记录里名字精确匹配的那一台。旧安装缺少能验证归属的记录时，请在虚拟机软件中核对后，按提示手动清理。
+安装器会先列出它能确认归属的虚拟机、干净快照、私有目录和临时明文，再询问是否删除。回车默认取消，`--yes` 会跳过确认。在 VirtualBox 中，卸载会先关机，再用 `VBoxManage unregistervm --delete` 删除安装记录里名字精确匹配的那一台。旧安装缺少能验证归属的记录时，请在虚拟机软件中核对后，按提示手动清理。
 
 黄金镜像和下载缓存默认保留，供其他实例复用。确认无需复用时，可加 `--purge-cache`，清单会列出对应 Tart 黄金镜像和可识别的下载缓存及大小。结束时会显示剩余内容和手动清理方法。
 

@@ -2,6 +2,9 @@
 
 ## v2.0-preview
 
+- 中英 README 增加 Windows 单行引导入口。安装器准备私有 Python，缺少 VirtualBox 时会发起安装并提示用户确认 UAC。
+- 自检按安装卷的剩余空间检查完整安装。VirtualBox 路线至少 7 GB、建议 10 GB。Tart Debian 13 路线至少 9 GB、建议 12 GB。低于建议值时只提示。
+
 - Windows 安装与验收统一使用 VirtualBox（`virtualbox-linux`）。环境自检、诊断、卸载与 GTR 验收同步切换。旧后端的实例留在原私有目录，请为新安装使用新的 tag。
 
 - Windows PowerShell 5.1 的 SSH 探测遇到超时会继续重试，主机密钥不符仍立即停止。Windows 脚本统一按原生命令退出码处理失败，保留独立的标准错误输出。CI 覆盖首次 SSH 超时后重试成功的路径。
