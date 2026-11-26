@@ -14,6 +14,8 @@ SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 import render  # noqa: E402
 
+VERIFY_TIMEOUT_SECONDS = 300
+
 # Send only the verifier's non-secret inputs. Keys, proxy credentials, and host
 # paths must never be passed to the guest.
 GUEST_KEYS = (
@@ -39,7 +41,8 @@ def verify(env, flags, hostkey_trust=""):
     known_hosts = Path(env["SSH_KNOWN_HOSTS"]).resolve().as_posix()
     ssh_args = [
         ssh, "-T", "-F", "none", "-i", str(identity), "-o", "BatchMode=yes",
-        "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=yes",
+        "-o", "ConnectTimeout=5", "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=2",
+        "-o", "StrictHostKeyChecking=yes",
         "-o", f'UserKnownHostsFile="{known_hosts}"', "-p", port, f"claude@{guest_ip}",
     ]
     guest_env = dict(env)
@@ -50,7 +53,9 @@ def verify(env, flags, hostkey_trust=""):
         config += "export CCHOUSE_HOSTKEY_TRUST=accept-new\n"
     shell_script = (SCRIPTS / "verify-linux.sh").read_text(encoding="utf-8")
     command = "bash -s -- --guest-local " + " ".join(flags)
-    return subprocess.run(ssh_args + [command], input=(config + shell_script).encode("utf-8")).returncode
+    return subprocess.run(
+        ssh_args + [command], input=(config + shell_script).encode("utf-8"), timeout=VERIFY_TIMEOUT_SECONDS,
+    ).returncode
 
 
 def main():
@@ -64,6 +69,9 @@ def main():
         trust_file = args.env.parent / "logs" / "hostkey.trust"
         trust = trust_file.read_text(encoding="utf-8-sig").strip() if trust_file.is_file() else ""
         return verify(render.load_env(args.env), flags, trust)
+    except subprocess.TimeoutExpired:
+        print(f"客机验收 SSH 超过 {VERIFY_TIMEOUT_SECONDS} 秒，已终止。", file=sys.stderr)
+        return 124
     except (KeyError, OSError, ValueError) as error:
         print(f"无法启动客机验收：{error}", file=sys.stderr)
         return 1

@@ -1258,6 +1258,28 @@ async function check(fixtures) {
                 if pat.search(line):
                     offenders.append(f"{sh.relative_to(ROOT)}:{no}")
         self.assertEqual(offenders, [])
+    @unittest.skipIf(os.name == "nt", "requires POSIX executable paths")
+    def test_verify_linux_cuts_off_a_stalled_ssh_process(self):
+        import re
+        bash = find_bash()
+        if not bash:
+            self.skipTest("需要 POSIX bash")
+        src = (ROOT / "scripts" / "verify-linux.sh").read_text(encoding="utf-8")
+        bounded = re.search(r"^run_ssh_probe\(\) \{\n.*?^\}", src, re.S | re.M)
+        self.assertIsNotNone(bounded)
+        harness = "\n".join([
+            "PY_CMD=fixture_python",
+            'fixture_python() { "$TEST_PYTHON" "$@"; }',
+            bounded.group(),
+            """run_ssh_probe 0.2 "$TEST_PYTHON" -c 'import time; time.sleep(30)'""",
+        ])
+        result = subprocess.run(
+            [bash, "-c", harness], capture_output=True, text=True, encoding="utf-8", timeout=5,
+            env=dict(os.environ, TEST_PYTHON=sys.executable),
+        )
+        self.assertEqual(result.returncode, 124, result.stderr)
+        self.assertIn("SSH probe exceeded", result.stderr)
+
     def test_verify_linux_cloudflare_loc_retry(self):
         # Cloudflare 国家探测：只在取不到 loc 时最多重试 2 次；国家不符不重试、照常 FAIL；三次都取不到时说明每次原因
         bash = find_bash()

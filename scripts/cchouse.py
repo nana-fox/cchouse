@@ -1166,18 +1166,22 @@ def _ensure_virtualbox_installed(ctx):
     if ctx.dry_run:
         ctx.virtualbox("install", Installer=ctx.vbox_installer, Sha256=man["sha256"])
         return
-    if not vboxmanage_present():
+    if vboxmanage_present():
+        return
+    try:
         ctx.wait_download("virtualbox")
-        try:
-            downloads.require_sha256(ctx.vbox_installer, man["sha256"])
-        except downloads.DownloadError as exc:
-            raise StepError(str(exc)) from None
-    ctx.virtualbox("install", Installer=ctx.vbox_installer, Sha256=man["sha256"])
+        downloads.require_sha256(ctx.vbox_installer, man["sha256"])
+        print(f"  将安装 Oracle VirtualBox {man['version']} 基础包。若弹出 Windows UAC，请确认一次。", flush=True)
+        ctx.virtualbox("install", Installer=ctx.vbox_installer, Sha256=man["sha256"])
+    except (StepError, downloads.DownloadError, OSError) as exc:
+        raise StepError(f"VirtualBox 自动安装失败：{exc}\n  Oracle 官方安装包：{man['url']}") from None
 
 
 def step_import(ctx):
     # 只重建 up 自己建过的虚拟机；同名的既有虚拟机（可能已登录）绝不覆盖
     owned = ctx.state.get("vm_created_by_up") is True
+    if ctx.backend == "virtualbox":
+        _ensure_virtualbox_installed(ctx)
     if not owned and vm_exists(ctx):
         raise StepError(
             f"已存在同名虚拟机 {ctx.vm_name}（非本次 up 创建），为避免覆盖已登录环境不会删除；"
@@ -1200,12 +1204,12 @@ def step_import(ctx):
         apply_virtualbox_guest_net(ctx)
         ctx.state.update(vm_created_by_up=True, vm_name=ctx.vm_name, vm_backend=ctx.backend)
         ctx.save_state()
-        _ensure_virtualbox_installed(ctx)
         ctx.virtualbox(
             "import",
             Ova=ctx.image_path,
             VmName=ctx.vm_name,
             VmDir=ctx.private_dir / "vm",
+            ReplaceExisting="yes" if owned else "no",
             SshPort=str(ctx.vbox_ssh_port),
             HostKeyLog=str(ctx.hostkey_log),
         )
@@ -1481,16 +1485,31 @@ def _tart_remove_plan(vm_name, snapshot, private_dir, inventory):
     ]
 
 
+def _remove_path(path):
+    """用同一种 Windows 路径表示比较归属，并避免把扩展路径传给 PowerShell 路径提供程序。"""
+    if os.name == "nt":
+        path = os.fspath(path).replace("/", "\\")
+        if path[:8].lower() == "\\\\?\\unc\\":
+            path = "\\\\" + path[8:]
+        elif re.match(r"^\\\\\?\\[a-zA-Z]:\\", path):
+            path = path[4:]
+    return Path(path)
+
+
 def _virtualbox_remove_plan(vm_name, snapshot, private_dir, inventory):
     if not isinstance(vm_name, str) or not re.fullmatch(r"claude-[a-z][a-z0-9_-]{1,15}", vm_name):
         raise StepError("state.json 的 VirtualBox 虚拟机名无法精确匹配")
+    vm_dir = private_dir / "vm"
+    config = vm_dir / vm_name / f"{vm_name}.vbox"
+    if _remove_path(config.resolve()) != config:
+        raise StepError("VirtualBox 配置或其上级目录为链接，需手动核对")
     label = f"虚拟机 {vm_name}（先关机，再 VBoxManage unregistervm --delete"
     if snapshot:
         label += f"，含快照 {snapshot}"
-    return [(f"{label}）", [
+    return [(f"{label}） {config}", [
         "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
         str(ROOT / "scripts" / "vm-virtualbox.ps1"),
-        "-CcOp", "delete", "-CcVmName", vm_name,
+        "-CcVmDir", str(vm_dir), "-CcOp", "delete", "-CcVmName", vm_name,
     ])]
 
 
@@ -1502,7 +1521,7 @@ REMOVE_BACKENDS = {
 
 
 def _remove_state(private_dir, root, tag):
-    if private_dir.resolve() != private_dir:
+    if _remove_path(private_dir.resolve()) != private_dir:
         raise StepError("私有目录为链接")
     if not private_dir.exists():
         return {}
@@ -1515,7 +1534,8 @@ def _remove_state(private_dir, root, tag):
         raise StepError("state.json 无法解析") from None
     if not isinstance(state, dict):
         raise StepError("state.json 格式不正确")
-    if state.get("tag", tag) != tag or state.get("private_dir", str(private_dir)) != str(private_dir):
+    recorded_dir = state.get("private_dir", str(private_dir))
+    if state.get("tag", tag) != tag or not isinstance(recorded_dir, str) or _remove_path(recorded_dir) != private_dir:
         raise StepError("state.json 记录的 tag 或私有目录不匹配")
     if not {"tag", "private_dir"} <= state.keys():
         if private_dir != root / tag:
@@ -1530,7 +1550,7 @@ def _download_cache_items(cache_dir, manifest):
     files += [cache_dir / f"claude-code-{arch}.tgz" for arch in ("linux-arm64", "linux-x64")]
     items = []
     for dest in files:
-        if dest.parent.resolve() != dest.parent:
+        if _remove_path(dest.parent.resolve()) != dest.parent:
             continue
         for suffix in ("", ".part", ".verified", ".json"):
             path = dest.with_name(dest.name + suffix)
@@ -1549,14 +1569,15 @@ def cmd_remove(args):
         print("错误：--tag 仅支持小写字母开头的 2-16 位字母/数字/下划线/短横线（如 cc01）", file=sys.stderr)
         return 2
 
-    root = default_private_root().resolve()
-    requested = Path(args.private_dir).expanduser() if args.private_dir else root / tag
-    private_dir = requested.parent.resolve() / requested.name
+    root = _remove_path(default_private_root().resolve())
+    requested = _remove_path(args.private_dir).expanduser() if args.private_dir else root / tag
+    private_dir = _remove_path(requested.parent.resolve()) / requested.name
     vm_name = f"claude-{tag}"
     cache_dir = root / "cache"
     golden_name = None
     try:
-        if private_dir in (root, cache_dir) or _is_inside_repo(private_dir) or private_dir in ROOT.parents:
+        repo = _remove_path(ROOT.resolve())
+        if private_dir in (root, cache_dir, repo) or repo in private_dir.parents or private_dir in repo.parents:
             raise StepError("私有目录是共享目录或仓库路径")
         state = _remove_state(private_dir, root, tag)
         if not state:
@@ -1579,12 +1600,12 @@ def cmd_remove(args):
 
         vm_dir = private_dir / "vm"
         allowed_vm_dirs = {vm_name} if owned and backend == "virtualbox" else set()
-        if vm_dir.resolve() != vm_dir or (vm_dir.exists() and {p.name for p in vm_dir.iterdir()} - allowed_vm_dirs):
+        if _remove_path(vm_dir.resolve()) != vm_dir or (vm_dir.exists() and {p.name for p in vm_dir.iterdir()} - allowed_vm_dirs):
             raise StepError("私有目录的 vm/ 下有无法确认归属的项目")
 
         if state.get("cache_dir"):
-            cache_dir = Path(state["cache_dir"])
-        if not cache_dir.is_absolute() or cache_dir.resolve() != cache_dir:
+            cache_dir = _remove_path(state["cache_dir"])
+        if not cache_dir.is_absolute() or _remove_path(cache_dir.resolve()) != cache_dir:
             raise StepError("记录的缓存目录不是可验证的绝对路径")
         if cache_dir == private_dir or private_dir in cache_dir.parents:
             raise StepError("缓存位于实例私有目录中，请先手动移出缓存")
@@ -1644,7 +1665,7 @@ def cmd_remove(args):
             if golden:
                 subprocess.run(["tart", "delete", golden_name], check=True)
             for path, _size in cache_items:
-                if path.parent.resolve() != path.parent:
+                if _remove_path(path.parent.resolve()) != path.parent:
                     raise StepError("缓存目录在卸载期间改变")
                 path.unlink(missing_ok=True)
         if private_dir.exists():
