@@ -883,7 +883,7 @@ async function check(fixtures) {
                     self.assertNotEqual(r.stdout.strip(), "ok")
 
     def test_docs_keyboard_and_version_consistency(self):
-        for doc_name in ("install-tart-linux.md", "install-vmware-linux.md"):
+        for doc_name in ("install-tart-linux.md", "install-vmware-linux.md", "install-virtualbox-linux.md"):
             text = (ROOT / "docs" / doc_name).read_text(encoding="utf-8")
             self.assertNotIn("按出口地区配置键盘布局", text, doc_name)
             self.assertIn("GUEST_KEYBOARD", text, doc_name)

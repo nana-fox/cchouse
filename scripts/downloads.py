@@ -12,9 +12,11 @@ import base64
 import hashlib
 import json
 import os
+import re
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -115,6 +117,17 @@ def _hash_file(path, algo):
                 break
             h.update(chunk)
     return h
+
+
+def require_sha256(path, expected):
+    """核对本地文件的 SHA-256。不匹配就失败，不发起下载。"""
+    expected = (expected or "").lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", expected):
+        raise DownloadError("SHA-256 格式无效")
+    digest = sha256_file(path)
+    if digest != expected:
+        raise DownloadError("SHA-256 校验不通过")
+    return digest
 
 
 def sha256_file(path):
@@ -391,3 +404,84 @@ def load_image_artifact(manifest_path, route):
         if art.get("route") == route:
             return dict(art, image_version=data.get("image_version", ""))
     raise DownloadError(f"image-manifest.json 中没有路线 {route} 的镜像")
+
+
+# NAT-only base package. The PowerShell installer hardcodes the same arguments
+# and does not trust this list to add bridged or host-only features.
+VBOX_SILENT_ARGS = [
+    "--silent",
+    "--ignore-reboot",
+    "--msiparams",
+    "ADDLOCAL=VBoxApplication",
+    "VBOX_INSTALLDESKTOPSHORTCUT=0",
+    "VBOX_INSTALLQUICKLAUNCHSHORTCUT=0",
+    "VBOX_REGISTERFILEEXTENSIONS=0",
+    "VBOX_START=0",
+]
+_VBOX_FORBIDDEN_MARKERS = ("extpack", "extension_pack", "extension pack")
+
+
+def _vbox_text_forbidden(value):
+    low = value.lower()
+    return any(marker in low for marker in _VBOX_FORBIDDEN_MARKERS)
+
+
+def load_virtualbox_installer(manifest_path):
+    """读取 VirtualBox 基础包装清单。只接受 Oracle 官网 URL，拒绝附加包与再分发。"""
+    data = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise DownloadError("virtualbox-manifest.json 必须是对象")
+    if data.get("schema_version") != 1:
+        raise DownloadError("virtualbox-manifest.json schema_version 必须为 1")
+    if data.get("extension_pack") is not False:
+        raise DownloadError("virtualbox-manifest.json 必须声明 extension_pack=false")
+    if data.get("redistribute") is not False:
+        raise DownloadError("virtualbox-manifest.json 必须声明 redistribute=false（安装包只从官网下载，不随仓库分发）")
+    version = str(data.get("version") or "")
+    build = str(data.get("build") or "")
+    filename = str(data.get("filename") or "")
+    url = str(data.get("url") or "")
+    sha = str(data.get("sha256") or "").lower()
+    if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+        raise DownloadError("virtualbox-manifest.json version 无效")
+    if not re.fullmatch(r"\d+", build):
+        raise DownloadError("virtualbox-manifest.json build 无效")
+    if filename != f"VirtualBox-{version}-{build}-Win.exe":
+        raise DownloadError("virtualbox-manifest.json filename 与 version/build 不一致")
+    if not re.fullmatch(r"[0-9a-f]{64}", sha):
+        raise DownloadError("virtualbox-manifest.json sha256 无效")
+    size = data.get("size_bytes")
+    if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
+        raise DownloadError("virtualbox-manifest.json size_bytes 无效")
+    parsed = urllib.parse.urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme != "https" or host != "download.virtualbox.org":
+        raise DownloadError("virtualbox-manifest.json 只允许 https://download.virtualbox.org 官方地址")
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise DownloadError("virtualbox-manifest.json URL 含多余成分")
+    if parsed.path != f"/virtualbox/{version}/{filename}":
+        raise DownloadError("virtualbox-manifest.json URL 与版本或文件名不一致")
+    for key, val in data.items():
+        if key == "extension_pack":
+            continue
+        texts = []
+        if isinstance(val, str):
+            texts.append(val)
+        elif isinstance(val, list):
+            texts.extend(item for item in val if isinstance(item, str))
+        if any(_vbox_text_forbidden(item) for item in texts):
+            raise DownloadError("virtualbox-manifest.json 不得包含附加包")
+    silent = data.get("silent_args")
+    if silent is not None and list(silent) != VBOX_SILENT_ARGS:
+        raise DownloadError("virtualbox-manifest.json silent_args 必须是 NAT-only 基础包装参数")
+    return {
+        "version": version,
+        "build": build,
+        "filename": filename,
+        "sha256": sha,
+        "size_bytes": size,
+        "url": url,
+        "extension_pack": False,
+        "redistribute": False,
+        "silent_args": list(VBOX_SILENT_ARGS),
+    }

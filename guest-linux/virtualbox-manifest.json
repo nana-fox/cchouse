@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "version": "7.2.22",
+  "build": "175245",
+  "filename": "VirtualBox-7.2.22-175245-Win.exe",
+  "sha256": "afd0ff1656cbe04ed88ce619594ae021419d97cce89fa9bdc443e9a963f1713f",
+  "size_bytes": 178101352,
+  "url": "https://download.virtualbox.org/virtualbox/7.2.22/VirtualBox-7.2.22-175245-Win.exe",
+  "extension_pack": false,
+  "redistribute": false,
+  "silent_args": [
+    "--silent",
+    "--ignore-reboot",
+    "--msiparams",
+    "ADDLOCAL=VBoxApplication",
+    "VBOX_INSTALLDESKTOPSHORTCUT=0",
+    "VBOX_INSTALLQUICKLAUNCHSHORTCUT=0",
+    "VBOX_REGISTERFILEEXTENSIONS=0",
+    "VBOX_START=0"
+  ]
+}

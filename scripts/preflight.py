@@ -2,7 +2,7 @@
 """cchouse 跨平台环境与配置自检（面向用户与外部 AI Agent，输出脱敏 JSON）。
 
 用法：
-  python3 -I scripts/preflight.py [--route auto|macos-tart|tart-linux|vmware-linux] [--env <instance.env>] [--state <state.json>]
+  python3 -I scripts/preflight.py [--route auto|macos-tart|tart-linux|vmware-linux] [--vm-backend virtualbox] [--env <instance.env>] [--state <state.json>]
 """
 import argparse
 import base64
@@ -49,6 +49,20 @@ def find_vmrun():
         if os.path.isfile(p):
             return p
     return None
+
+
+def vmware_linux_host_errors(vmrun_path, vm_backend=None):
+    """vmware-linux 的宿主错误。cchouse up 选定 virtualbox 时不要求本机已有 vmrun。"""
+    if vm_backend == "virtualbox":
+        return []
+    if not vmrun_path:
+        return ["MISSING_VMWARE: 未检测到 vmrun，请人工安装免费版 VMware Workstation/Fusion Pro"]
+    return []
+
+
+def vmnet_mismatch_applies(vm_backend=None):
+    """VirtualBox NAT 固定 10.0.2.0/24，不跟本机 VMnet8 比较。"""
+    return vm_backend != "virtualbox"
 
 
 def detect_vmnet8_cidr():
@@ -432,6 +446,12 @@ def main():
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(description="cchouse preflight checker")
     parser.add_argument("--route", choices=("auto", "macos-tart", "tart-linux", "vmware-linux"), default="auto")
+    parser.add_argument(
+        "--vm-backend",
+        choices=("auto", "tart", "vmware", "virtualbox", "manual"),
+        default=None,
+        help="cchouse up 传入。virtualbox 时不要求 vmrun，也不把 VMNET_CIDR 跟 VMnet8 比较",
+    )
     parser.add_argument("--env", dest="env_path", default=None)
     parser.add_argument("--state", dest="state_path", default=None)
     parser.add_argument("--set-step", dest="set_step", default=None)
@@ -511,14 +531,15 @@ def main():
                 "ARM64_VMWARE_NOTE: vmware-linux 黄金镜像为 amd64（Windows/Intel Mac）；"
                 "Apple Silicon Mac 建议使用 tart-linux（轻量）或 macos-tart（高拟真）路线"
             )
-        if not vmrun_path:
+        for err in vmware_linux_host_errors(vmrun_path, args.vm_backend):
             status = "HUMAN_WAIT"
-            errors.append("MISSING_VMWARE: 未检测到 vmrun，请人工安装免费版 VMware Workstation/Fusion Pro")
+            errors.append(err)
             next_action = "install_vmware_human_wait"
         if disk_gb < 25:
             warnings.append(f"LOW_DISK: 当前可用磁盘 {disk_gb} GB，Debian 13 客机建议 ≥ 25 GB")
 
-    detected_vmnet = detect_vmnet8_cidr() if route == "vmware-linux" else None
+    check_vmnet = route == "vmware-linux" and vmnet_mismatch_applies(args.vm_backend)
+    detected_vmnet = detect_vmnet8_cidr() if check_vmnet else None
     stripe_check = None
     if args.env_path:
         env_errors, env_warnings = validate_env_file(args.env_path, route)

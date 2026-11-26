@@ -451,7 +451,12 @@ class TestUpPipeline(unittest.TestCase):
         secret = "DryRunSecret!42"
         with tempfile.TemporaryDirectory() as td:
             priv = Path(td) / "cc06"
-            for route, backend in (("tart-linux", "tart"), ("vmware-linux", "vmware")):
+            cases = (
+                ("tart-linux", "tart", "vm-tart.sh"),
+                ("vmware-linux", "vmware", "vm-vmware.ps1"),
+                ("vmware-linux", "virtualbox", "vm-virtualbox.ps1"),
+            )
+            for route, backend, marker in cases:
                 proc = subprocess.run(
                     [sys.executable, "-I", str(ROOT / "scripts" / "cchouse.py"), "up", "--tag", "cc06",
                      "--route", route, "--vm-backend", backend, "--private-dir", str(priv), "--cache-dir", str(Path(td) / "cache"),
@@ -468,11 +473,24 @@ class TestUpPipeline(unittest.TestCase):
                 self.assertIn("[9/9]", out)
                 self.assertIn("耗时表", out)
                 self.assertIn("https://mirror.example/cc/cchouse-debian13-", out)
-                self.assertIn("vm-tart.sh" if backend == "tart" else "vm-vmware.ps1", out)
+                self.assertIn(marker, out)
                 self.assertIn("verify-linux.sh", out)
                 self.assertFalse((priv / "state.json").exists())
                 self.assertFalse((priv / "seed.iso").exists())
                 self.assertFalse((Path(td) / "cache").exists())
+                env_text = (priv / "instance.env").read_text(encoding="utf-8")
+                if backend == "virtualbox":
+                    self.assertIn("download.virtualbox.org", out)
+                    self.assertNotIn("Extension_Pack", out)
+                    self.assertNotIn("MISSING_VMWARE", out)
+                    self.assertNotIn("vm-vmware.ps1", out)
+                    self.assertIn("VMNET_CIDR=10.0.2.0/24", env_text)
+                    self.assertIn("GUEST_IP=127.0.0.1\n", env_text)
+                    self.assertIn("GUEST_IF=enp0s3", env_text)
+                    self.assertIn("SSH_PORT=2222", env_text)
+                    self.assertIn("ROUTER_IP=192.168.100.1", env_text)
+                else:
+                    self.assertNotIn("SSH_PORT=", env_text)
 
 
 if __name__ == "__main__":

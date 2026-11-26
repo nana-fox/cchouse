@@ -21,6 +21,8 @@ python3 -I scripts/cchouse.py up --tag cc01
 - 下载慢（前 10 秒 < 1 MB/s）会提示可换直连或镜像源：`--image-mirror <目录URL>` / `CCHOUSE_IMAGE_MIRROR`，`--npm-mirror <registry镜像>` / `CCHOUSE_NPM_MIRROR`（校验值始终以官方 manifest / npm registry 为准）。
 - `--dry-run` 只生成配置并跑 `preflight`，其余步骤只打印命令；`--config-only` 只生成 `instance.env`。
 
+Windows 上如果没有安装 VMware，`cchouse up` 改走 [install-virtualbox-linux.md](install-virtualbox-linux.md)。
+
 以下为手工分步流程（`up` 内部即按此执行，排障时可对照）。
 
 ---
