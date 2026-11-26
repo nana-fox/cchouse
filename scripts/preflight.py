@@ -187,6 +187,91 @@ def find_tart_linux_golden_images(th=None):
     return found
 
 
+# 2026-11-26 只读实测 Mac Tart 完整安装（du，GiB = 1024**3；tart list 的 Size 为四舍五入的整数 GB）：
+#   镜像缓存目录 1109405696（1.033 GiB，含 .tvm 与 Claude Code 包）
+#   黄金镜像 cchouse-debian13-arm64-v2.0.0-preview.2 2268217344（2.112 GiB，Size 2 GB）
+#   客机 2781511680（2.590 GiB，Size 3 GB）
+#   干净快照 2674987008（2.491 GiB，Size 3 GB）
+#   合计 8834121728 字节 = 8.227 GiB。至少 9 GB 是向上取整；建议 12 GB 再留约 3 GB 给客机磁盘增长。
+# 默认 ~/.tart 与缓存目录在同一卷。TART_HOME 在另一卷时，仍按这一合计检查该卷。
+TART_LINUX_DISK_MIN_GB = 9
+TART_LINUX_DISK_RECOMMENDED_GB = 12
+# Windows 未在本机实测。OVA 1584588800 字节（约 1.58 GB）留在缓存。
+# ovftool 导入稀疏 VMDK（虚拟容量 24 GiB，不是厚置备）；包内 VMDK 1584573440 字节。
+# 导入后磁盘按 3 GB 估算（高于 Mac 黄金镜像实测的 2.112 GiB）。1.58 + 3 ≈ 4.5，至少 5 GB；建议再加 3 GB。
+VMWARE_LINUX_DISK_MIN_GB = 5
+VMWARE_LINUX_DISK_RECOMMENDED_GB = 8
+
+
+def default_install_dir():
+    """安装器写入缓存和 Windows 客机的目录。不创建。"""
+    sys_name = platform.system()
+    if sys_name == "Darwin":
+        return Path.home() / "Library" / "Application Support" / "cchouse"
+    if sys_name == "Windows":
+        base = os.environ.get("LOCALAPPDATA")
+        return (Path(base) if base else (Path.home() / "AppData" / "Local")) / "cchouse"
+    return Path.home() / ".local" / "share" / "cchouse"
+
+
+def existing_volume_path(path):
+    """返回 path，若不存在则返回最近的已存在父目录。不创建任何目录。"""
+    cur = Path(path).expanduser()
+    while not cur.exists():
+        parent = cur.parent
+        if parent == cur:
+            return Path.home()
+        cur = parent
+    if cur.is_dir():
+        return cur
+    return cur.parent
+
+
+def install_disk_probe_path(route, tart_home=None):
+    """安装占用所在卷上的一个已存在目录，供 shutil.disk_usage 使用。"""
+    if route in ("macos-tart", "tart-linux"):
+        home = tart_home if tart_home is not None else tart_home_dir()
+        return existing_volume_path(home)
+    return existing_volume_path(default_install_dir())
+
+
+def disk_requirement_gb(route):
+    """返回 (最低 GB, 建议 GB, 是否为估算)。macos-tart 沿用单独的 30/50 GB 规则。"""
+    if route == "tart-linux":
+        return TART_LINUX_DISK_MIN_GB, TART_LINUX_DISK_RECOMMENDED_GB, False
+    if route == "vmware-linux":
+        return VMWARE_LINUX_DISK_MIN_GB, VMWARE_LINUX_DISK_RECOMMENDED_GB, True
+    return None, None, False
+
+
+def assess_install_disk(free_gb, route):
+    """低于实测/估算最低值返回错误，低于建议值只返回警告。"""
+    minimum, recommended, estimate = disk_requirement_gb(route)
+    if minimum is None:
+        return [], []
+    if free_gb < minimum:
+        if estimate:
+            return [ (
+                f"INSUFFICIENT_DISK: 安装目录所在卷剩余 {free_gb} GB，"
+                f"按 OVA 1.58 GB 加导入后 VMDK 估算至少需要 {minimum} GB（估算，不是 Windows 实测）。"
+                "请清理该卷空间后再安装。"
+            ) ], []
+        return [ (
+            f"INSUFFICIENT_DISK: 安装目录所在卷剩余 {free_gb} GB，"
+            f"完整安装至少需要 {minimum} GB（镜像缓存、黄金镜像、客机和干净快照）。"
+            "请清理空间或把 TART_HOME 指到更大的卷。"
+        ) ], []
+    if free_gb < recommended:
+        if estimate:
+            return [], [ (
+                f"LOW_DISK: 安装目录所在卷剩余 {free_gb} GB，可以安装。建议至少 {recommended} GB（Windows 为估算值）。"
+            ) ]
+        return [], [ (
+            f"LOW_DISK: 安装目录所在卷剩余 {free_gb} GB，可以安装。建议至少 {recommended} GB，以便客机磁盘继续增长。"
+        ) ]
+    return [], []
+
+
 def expected_image_for_route(route, manifest_path=None):
     """从 guest-linux/image-manifest.json (schema 2) 解析当前路线期望的黄金镜像元数据。"""
     if route not in ("vmware-linux", "tart-linux"):
@@ -461,8 +546,9 @@ def main():
         route = args.route
 
     resolved_tart_home = tart_home_dir(tart_path) if route in ("macos-tart", "tart-linux") else None
-    disk_probe_path = resolved_tart_home if (resolved_tart_home is not None and resolved_tart_home.exists()) else ROOT
+    disk_probe_path = install_disk_probe_path(route, resolved_tart_home)
     disk_gb = round(shutil.disk_usage(disk_probe_path).free / (1024 ** 3), 1)
+    disk_min_gb, disk_recommended_gb, disk_estimate = disk_requirement_gb(route)
 
     errors = []
     warnings = []
@@ -503,8 +589,11 @@ def main():
             status = "HUMAN_WAIT"
             errors.append("MISSING_TART: 未检测到 tart，请先执行 brew install cirruslabs/cli/tart")
             next_action = "install_tart"
-        if disk_gb < 15:
-            warnings.append(f"LOW_DISK: Tart 目标卷剩余 {disk_gb} GB，Debian 13 arm64 客机建议 ≥ 15 GB")
+        disk_errors, disk_warnings = assess_install_disk(disk_gb, route)
+        errors.extend(disk_errors)
+        warnings.extend(disk_warnings)
+        if disk_errors and status == "PREFLIGHT_OK":
+            next_action = "free_disk"
     elif route == "vmware-linux":
         if sys_name == "Darwin" and arch == "arm64":
             warnings.append(
@@ -515,8 +604,11 @@ def main():
             status = "HUMAN_WAIT"
             errors.append("MISSING_VMWARE: 未检测到 vmrun，请人工安装免费版 VMware Workstation/Fusion Pro")
             next_action = "install_vmware_human_wait"
-        if disk_gb < 25:
-            warnings.append(f"LOW_DISK: 当前可用磁盘 {disk_gb} GB，Debian 13 客机建议 ≥ 25 GB")
+        disk_errors, disk_warnings = assess_install_disk(disk_gb, route)
+        errors.extend(disk_errors)
+        warnings.extend(disk_warnings)
+        if disk_errors and status == "PREFLIGHT_OK":
+            next_action = "free_disk"
 
     detected_vmnet = detect_vmnet8_cidr() if route == "vmware-linux" else None
     stripe_check = None
@@ -580,6 +672,9 @@ def main():
             "arch": arch,
             "ram_gb": ram_gb,
             "disk_free_gb": disk_gb,
+            "disk_min_gb": disk_min_gb,
+            "disk_recommended_gb": disk_recommended_gb,
+            "disk_estimate": disk_estimate,
             "python": platform.python_version(),
             "tart_found": bool(tart_path),
             "tart_home": str(resolved_tart_home) if resolved_tart_home is not None else None,

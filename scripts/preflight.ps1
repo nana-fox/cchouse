@@ -41,6 +41,22 @@ function Find-RealPython {
   return $null
 }
 
+function Get-CchouseInstallFreeGb {
+  # 安装目录：%LOCALAPPDATA%\cchouse。目录还不存在时检查其已存在的父目录，不创建。
+  $root = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $env:USERPROFILE "AppData\Local" }
+  $probe = Join-Path $root "cchouse"
+  while (-not (Test-Path -LiteralPath $probe)) {
+    $parent = Split-Path -Parent $probe
+    if (-not $parent -or $parent -eq $probe) { break }
+    $probe = $parent
+  }
+  $item = Get-Item -LiteralPath $probe
+  $drive = Get-PSDrive -Name $item.PSDrive.Name
+  if ($null -eq $drive.Free) { return $null }
+  # 1GB 为 1024^3，与 preflight.py 的 disk_free_gb 相同。
+  return [math]::Round($drive.Free / 1GB, 1)
+}
+
 $vbsNote = Get-VbsNote
 $found = Find-RealPython
 if ($found) {
@@ -71,6 +87,20 @@ $errors = @("MISSING_PYTHON: Windows 未检测到真实 Python 3（已排除 Win
 if (-not $vmrunFound) {
   $errors += "MISSING_VMWARE: 未检测到 VMware Workstation Pro (vmrun.exe)"
 }
+# 与 preflight.py 的 VMWARE_LINUX_DISK_MIN_GB / VMWARE_LINUX_DISK_RECOMMENDED_GB 保持一致。Windows 数字是估算。
+$diskMinGb = 5
+$diskRecommendedGb = 8
+$diskFreeGb = $null
+try {
+  $diskFreeGb = Get-CchouseInstallFreeGb
+  if ($null -ne $diskFreeGb -and $diskFreeGb -lt $diskMinGb) {
+    $errors += "INSUFFICIENT_DISK: 安装目录所在卷剩余 $diskFreeGb GB，按 OVA 1.58 GB 加导入后 VMDK 估算至少需要 $diskMinGb GB（估算，不是 Windows 实测）。请清理该卷空间后再安装。"
+  } elseif ($null -ne $diskFreeGb -and $diskFreeGb -lt $diskRecommendedGb) {
+    $warnings += "LOW_DISK: 安装目录所在卷剩余 $diskFreeGb GB，可以安装。建议至少 $diskRecommendedGb GB（Windows 为估算值）。"
+  }
+} catch {
+  $warnings += "DISK_CHECK_FAILED: 未能读取安装目录所在卷的剩余空间。"
+}
 
 $nextAction = if ($vmrunFound) { "install_python_or_uv" } else { "install_python_or_uv_and_vmware" }
 $payload = [ordered]@{
@@ -81,6 +111,10 @@ $payload = [ordered]@{
     arch = $env:PROCESSOR_ARCHITECTURE
     python = $null
     vmrun_found = $vmrunFound
+    disk_free_gb = $diskFreeGb
+    disk_min_gb = $diskMinGb
+    disk_recommended_gb = $diskRecommendedGb
+    disk_estimate = $true
   }
   route = $Route
   errors = $errors
