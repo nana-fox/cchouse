@@ -28,7 +28,7 @@
 |---|---|---|---|
 | Apple Silicon Mac | Tart（`tart-linux`） | Debian 13 arm64 + Chromium + Claude Code CLI | [install-tart-linux.md](install-tart-linux.md) |
 | Windows x64 | VMware Workstation Pro（`vmware-linux`） | Debian 13 amd64 + Chromium + Claude Code CLI | [install-vmware-linux.md](install-vmware-linux.md) |
-| Intel Mac | VMware Fusion Pro（`vmware-linux`） | Debian 13 amd64 + Chromium + Claude Code CLI | [install-vmware-linux.md](install-vmware-linux.md) |
+| Intel Mac | 暂不支持 | — | — |
 | Apple Silicon Mac（v1，已冻结） | Tart（`macos-tart`） | macOS + Safari + Claude Code CLI | [build.md](build.md) |
 
 > v1 macOS 客机已冻结，不再新增功能，只保留文档供已有用户维护。仅支持 `EXIT_MODE=chain`。已知限制见 [architecture.md#已知限制](architecture.md#已知限制)。

@@ -1,12 +1,14 @@
-# Windows / Intel Mac 安装手册（VMware + Debian 13）
+# Windows 安装手册（VMware + Debian 13）
 
-本手册面向 **Windows（x64，家庭版与专业版通用）** 与 **Intel Mac**，采用免费版 VMware + 预装好的 Debian 13 黄金镜像（`guest-linux/`），只覆盖网页版与 Claude Code CLI（不含 Claude Desktop）。
+> Intel Mac 暂不支持。
+
+本手册面向 **Windows（x64，家庭版与专业版通用）**，采用免费版 VMware + 预装好的 Debian 13 黄金镜像（`guest-linux/`），只覆盖网页版与 Claude Code CLI（不含 Claude Desktop）。
 
 > Apple Silicon Mac 优先走 [install-tart-linux.md](install-tart-linux.md)（Tart + Debian 13 arm64 轻量路线）或 [build.md](build.md)（Tart + macOS 客机）。
 
 ---
 
-## 最快路径：一条命令 `cchouse up`（预览；当前自动导入仅支持 Windows + VMware Workstation，Intel Mac 下载与配置完成后按本手册手工导入）
+## 最快路径：一条命令 `cchouse up`（Windows + VMware Workstation）
 
 ```bash
 python3 -I scripts/cchouse.py up --tag cc01
@@ -30,8 +32,7 @@ python3 -I scripts/cchouse.py up --tag cc01
 1. **开启 CPU 虚拟化**：确认 BIOS/UEFI 已开启 Intel VT-x / AMD-V。
    - *Windows 11 VBS / 内存完整性提示*：若系统开启了 VBS，VMware 17.x 会自动在 WHP 之上运行（略慢但可用，且嵌套虚拟化不可用）。`preflight` 会提示该状态，**不要为了提速关闭 VBS**。
 2. **安装免费版 VMware**（Broadcom 自 2024-11 起对个人与商用均免费，需登录 Broadcom 官网下载官方原版安装包并核对签名）：
-   - Windows：VMware Workstation Pro
-   - Intel Mac：VMware Fusion Pro
+   - 安装 VMware Workstation Pro。
 3. **自备外部 IP 代理**：按 [proxy-modes.md](proxy-modes.md) 确定 `EXIT_MODE=single` 或 `chain`。
 
 ---
@@ -47,7 +48,6 @@ python3 -I scripts/preflight.py --route vmware-linux
 确认输出 JSON 中 `ok: true`（已检测到 `vmrun` 路径、足够磁盘空间，并记录 `host.detected_vmnet_cidr` 作为实际 VMware NAT 网段），再在**私有目录**准备 `instance.env`（不要放进仓库）：
 
 - Windows 示例：`%LOCALAPPDATA%\cchouse\<TAG>\instance.env`
-- macOS 示例：`~/Library/Application Support/cchouse/<TAG>/instance.env`
 
 按下面顺序准备，**全部完成后再渲染**（渲染器缺 `SSH_PUBKEY` 会直接退出）：
 
@@ -95,12 +95,12 @@ python3 -I scripts/render.py "<PRIVATE_DIR>/instance.env" "<PRIVATE_DIR>/rendere
    将 `seed.iso` 挂载到虚拟光驱（确保光驱设置为开机连接）。
    - **不采用 `cloud-init`**，**不采用 VMware `guestinfo.*`**。
 3. **首次开机并在控制台确认注入完成（不要用 `nogui` 盲等）**：
-   - 启动虚拟机（Workstation 用 `-T ws`，Fusion 用 `-T fusion`），在 VMware 控制台确认：
+   - 启动虚拟机（Workstation 用 `-T ws`），在 VMware 控制台确认：
      - `/var/lib/cchouse/firstboot.done` 已生成（若失败，控制台登录页或 `systemctl status cchouse-firstboot`、`/var/lib/cchouse/firstboot.log` 会显示原因）；
      - 在控制台查看客机新生成的 SSH 主机公钥（`cat /etc/ssh/ssh_host_ed25519_key.pub`）。
 4. **销毁明文、接通网卡并录入 `known_hosts`**：
    - 关机或卸载虚拟光驱，**立即删除 `seed.iso` 与 `<PRIVATE_DIR>/rendered/`**；
-   - 将 `.vmx` 改为 `ethernet0.startConnected = "TRUE"` 后启动（或实测 `vmrun -T ws|fusion connectNamedDevice "<VMX_PATH>" ethernet0`）；
+   - 将 `.vmx` 改为 `ethernet0.startConnected = "TRUE"` 后启动（或实测 `vmrun -T ws connectNamedDevice "<VMX_PATH>" ethernet0`）；
    - 在控制台 `ip -4 addr` 确认 NAT DHCP 分配的 `GUEST_IP`（回填 `instance.env` 的 `GUEST_IP`），并将步骤 3 核对过的 SSH 主机公钥写入 `<PRIVATE_DIR>/known_hosts`。
 
 ---
