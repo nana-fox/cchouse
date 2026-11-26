@@ -74,16 +74,23 @@ f=$(mktemp -t cchouse-bootstrap) && curl -fsSLo "$f" https://github.com/nana-fox
 
 | 你的电脑 | 用什么虚拟机软件 | 状态 |
 |---|---|---|
-| Apple Silicon Mac（M 系列） | Tart | ✅ `v2.0.0-preview.2` 已在 Mac mini 完成公开版冷安装 |
-| Windows（x64） | VirtualBox | ✅ `v2.0.0-preview.3` 已在 Windows 11 实机完成两轮公开版盲装 |
+| Apple Silicon Mac（M 系列） | Tart | ✅ `v2.0.0-preview.4` 已完成公开命令盲装与真机冷下载验收（26 PASS / 0 FAIL / 1 Stripe WARN） |
+| Windows（x64） | VirtualBox | ✅ `v2.0.0-preview.4` 已在 Windows 11 实机完成空缓存公开命令盲装（26 PASS / 0 FAIL / 1 Stripe WARN） |
 | Intel Mac | — | 暂不支持 |
 
 虚拟机里统一是 Debian 13 + Chromium + Claude Code。不支持 Linux 电脑作为宿主机。
 
-**空缓存首次安装耗时**（包括镜像和 Claude Code 下载）
+**空缓存首次安装耗时**（总耗时主要取决于网络下载速度）
 
-- **Apple Silicon Mac** 在 Mac mini 实测 `v2.0.0-preview.2` 公共版空缓存安装用时 **2 分 15 秒**，涵盖下载、自动验收和保存干净快照。下载经宿主代理，镜像平均 20.67 MiB/s，Claude Code 平均 16.31 MiB/s。
-- **Windows 11（x64）** 实机两轮 `v2.0.0-preview.3` 公开版盲装，从空缓存、未装 VirtualBox 开始，安装器内用时分别为 **10 分 21 秒**和 **9 分 13 秒**，涵盖自动安装 VirtualBox、下载、导入、自动验收和保存干净快照。
+首次安装除下载客机镜像和官方 Claude Code 包外，引导阶段还会下载源码包与私有 Python（Mac 未装 Tart 时会下载私有 Tart，Windows 未装 VirtualBox 时会自动下载并安装 VirtualBox）。可按文件大小估算下载时间：
+
+- **客机镜像**：Apple Silicon Mac（`.tvm`）约 **874 MiB**（`915,980,115` 字节），Windows x64（`.ova`）约 **1511 MiB**（`1,584,588,800` 字节，约 1.5 GB）。
+- **官方 Claude Code 包**：约 **175 MiB**（`183,973,219` 字节）。
+
+`v2.0.0-preview.4` 公开命令与真机实测参考（进度持续更新时可继续等待）：
+
+- **Windows 11（x64）**：空缓存公开命令盲装通过（26 PASS / 0 FAIL / 1 Stripe WARN），安装器合计 **48 分 09 秒**；其中客机镜像下载耗时 **45 分 38 秒**（平均 0.37 MB/s，受当时网速影响；Claude Code 16 分 49 秒、VirtualBox 16 分 10 秒与安装步骤重叠）。
+- **Apple Silicon Mac**：公开命令盲装通过（26 PASS / 0 FAIL / 1 Stripe WARN）；该轮镜像与 Claude Code 命中预热缓存，引导阶段下载源码包、私有 Python 和私有 Tart 用时约 **7 分 33 秒**，`cchouse up` 用时 **1 分 57 秒**，全程 **9 分 30 秒**。另在 `v2.0.0-preview.4` 真机冷下载验收中（经宿主代理），TVM 镜像用时 **51.8 秒**（16.85 MiB/s），Claude Code 用时 **15.3 秒**（11.47 MiB/s），除等待输入节点外核心安装与验收用时 **88.5 秒**（同样 26 PASS / 0 FAIL / 1 Stripe WARN）。
 
 ---
 
@@ -128,7 +135,19 @@ Stripe 不通只影响在 claude.ai 网页上付款。已经订阅的、或在�
 <details>
 <summary><b>国内下载很慢怎么办？</b></summary>
 
-安装器下载会沿用宿主网络的代理设置。下载慢时可用 `--image-mirror <镜像目录 URL>` 指定镜像源，下载后仍会核对清单中的 SHA-256。也可在宿主先下载镜像，再按 [手动安装](docs/manual-install.md) 离线导入。
+下载分为两个阶段，均沿用宿主网络的代理设置（如系统代理或终端代理环境变量）：
+
+1. **引导阶段下载**（从 GitHub / Python 官方源拉取源码 zip、私有 Python，以及 Mac 缺少 Tart 时的私有 Tart）：此阶段目前没有进度条，网络较慢时可能静默等待数分钟；`--image-mirror` **不作用于**引导阶段的这些下载。
+2. **镜像与组件下载**（进入 `cchouse up` 后下载客机镜像、官方 Claude Code 包，以及 Windows 缺少 VirtualBox 时的 VirtualBox 安装包）：下载后均会核对清单中的 SHA-256。
+
+**关于 `--image-mirror` 参数**：首页的 Mac 与 Windows 一键引导脚本**目前不支持**直接追加 `--image-mirror` 透传给安装器（`bootstrap-macos.sh` 只接受 `--tag` 与 `--cleanup-bootstrap`，`bootstrap-windows.ps1` 只接受 `-CleanupBootstrap`）。如需为客机镜像指定镜像源，可在运行首页一键命令前先设置环境变量 `CCHOUSE_IMAGE_MIRROR`（下载后仍按清单校验 SHA-256）：
+
+- **Apple Silicon Mac**：先执行 `export CCHOUSE_IMAGE_MIRROR='<镜像目录 URL>'`，再原样运行快速开始中的 Mac 一键命令。
+- **Windows（x64）**：先在同一个 PowerShell 窗口执行 `$env:CCHOUSE_IMAGE_MIRROR = '<镜像目录 URL>'`，再原样运行快速开始中的 Windows 一键命令。
+
+若直接使用 `scripts/cchouse.py up`（见 [手动安装](docs/manual-install.md)），可直接传入 `--image-mirror <镜像目录 URL>`；也可在宿主先下载镜像再离线导入。
+
+**下载中断如何续跑**：无论是引导阶段还是镜像下载中途断流或失败，直接**原样重跑快速开始中的同一条命令**即可续跑。已通过 SHA-256 校验的下载和已完成的步骤都会自动复用。
 
 </details>
 
