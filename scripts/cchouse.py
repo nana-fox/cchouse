@@ -1142,7 +1142,10 @@ def step_seed(ctx):
     py = sys.executable
     try:
         ctx.run([py, "-I", ROOT / "scripts" / "render.py", "--resolve", ctx.env_path, ctx.rendered])
-        ctx.run([py, "-I", ROOT / "scripts" / "make-seed-iso.py", ctx.rendered, ctx.seed_iso, "--claude-tarball", ctx.claude_path])
+        seed_cmd = [py, "-I", ROOT / "scripts" / "make-seed-iso.py", ctx.rendered, ctx.seed_iso, "--claude-tarball", ctx.claude_path]
+        if ctx.backend == "virtualbox":
+            seed_cmd.append("--poweroff-after-provision")
+        ctx.run(seed_cmd)
     finally:
         # 渲染明文只用于打包 ISO，用完即删
         shutil.rmtree(ctx.rendered, ignore_errors=True)
@@ -1244,7 +1247,6 @@ def step_firstboot(ctx):
             "firstboot",
             VmName=ctx.vm_name,
             SeedIso=ctx.seed_iso,
-            FirstbootSeconds="56",
             HostKeyLog=str(ctx.hostkey_log),
         )
     else:

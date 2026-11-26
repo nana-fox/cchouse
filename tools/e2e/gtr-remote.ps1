@@ -39,7 +39,7 @@ switch ($Action) {
   }
 
   "firstboot" {
-    Invoke-CchouseVBoxFirstboot -Name $VmName -SeedIso $seedIso -Seconds 56 -HostKeyLog $hostKeyLog
+    Invoke-CchouseVBoxFirstboot -Name $VmName -SeedIso $seedIso -Seconds 180 -HostKeyLog $hostKeyLog
   }
 
   "reboot" {

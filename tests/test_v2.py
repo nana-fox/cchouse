@@ -1238,9 +1238,15 @@ async function check(fixtures) {
             "tar --format=ustar",
             "actions/upload-artifact@v4",
             "cchouse-debian13-amd64.ovf.tmpl",
+            "guest-linux/virtualbox-manifest.json",
+            "VBOX_GUEST_ADDITIONS_ISO=/tmp/VBoxGuestAdditions.iso",
+            "VBOX_GUEST_ADDITIONS_SHA256=${GA_SHA256}",
+            "拒绝 VirtualBox 附加包",
         ):
             self.assertIn(marker, wf)
         self.assertNotIn("gh release", wf)
+        self.assertNotIn("Oracle_VirtualBox_Extension_Pack", wf)
+        self.assertNotIn(".vbox-extpack", wf)
 
         ovf_text = (ROOT / "guest-linux" / "image-builder" / "cchouse-debian13-amd64.ovf.tmpl").read_text(encoding="utf-8")
         rendered = (

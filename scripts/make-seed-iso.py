@@ -2,7 +2,7 @@
 """将 render.py 渲染目录（及可选的 claude-code.tgz）打包成卷标为 CCHOUSE 的只读配置 ISO。
 
 用法：
-  python3 -I scripts/make-seed-iso.py <rendered目录> <输出.iso路径> [--claude-tarball <claude-code.tgz>]
+  python3 -I scripts/make-seed-iso.py <rendered目录> <输出.iso路径> [--claude-tarball <claude-code.tgz>] [--poweroff-after-provision]
 
 - 输出 ISO 含明文凭据，权限 600，首次开机注入完成后务必立即卸载并删除。
 - 跨平台自动选用本机工具：
@@ -123,6 +123,7 @@ def main():
     parser.add_argument("rendered_dir")
     parser.add_argument("output_iso")
     parser.add_argument("--claude-tarball", default=None)
+    parser.add_argument("--poweroff-after-provision", action="store_true")
     args = parser.parse_args()
 
     rendered = Path(args.rendered_dir)
@@ -137,6 +138,8 @@ def main():
     with tempfile.TemporaryDirectory() as td:
         stage = Path(td) / "CCHOUSE"
         shutil.copytree(rendered, stage)
+        if args.poweroff_after_provision:
+            (stage / "poweroff-after-provision").touch()
         if args.claude_tarball:
             tb = Path(args.claude_tarball)
             if not tb.is_file():

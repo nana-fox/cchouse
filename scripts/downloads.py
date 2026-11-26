@@ -474,6 +474,7 @@ def load_virtualbox_installer(manifest_path):
     silent = data.get("silent_args")
     if silent is not None and list(silent) != VBOX_SILENT_ARGS:
         raise DownloadError("virtualbox-manifest.json silent_args 必须是 NAT-only 基础包装参数")
+    guest_additions = _guest_additions_from(data, version)
     return {
         "version": version,
         "build": build,
@@ -484,4 +485,40 @@ def load_virtualbox_installer(manifest_path):
         "extension_pack": False,
         "redistribute": False,
         "silent_args": list(VBOX_SILENT_ARGS),
+        "guest_additions": guest_additions,
+    }
+
+
+def _guest_additions_from(data, version):
+    """Guest Additions ISO。只接受同版本官方 ISO，拒绝附加包。"""
+    ga = data.get("guest_additions")
+    if not isinstance(ga, dict):
+        raise DownloadError("virtualbox-manifest.json guest_additions 必须是对象")
+    filename = str(ga.get("filename") or "")
+    url = str(ga.get("url") or "")
+    sha = str(ga.get("sha256") or "").lower()
+    expected_name = f"VBoxGuestAdditions_{version}.iso"
+    if filename != expected_name:
+        raise DownloadError("virtualbox-manifest.json guest_additions filename 与 version 不一致")
+    if not re.fullmatch(r"[0-9a-f]{64}", sha):
+        raise DownloadError("virtualbox-manifest.json guest_additions sha256 无效")
+    size = ga.get("size_bytes")
+    if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
+        raise DownloadError("virtualbox-manifest.json guest_additions size_bytes 无效")
+    parsed = urllib.parse.urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme != "https" or host != "download.virtualbox.org":
+        raise DownloadError("virtualbox-manifest.json guest_additions 只允许 https://download.virtualbox.org")
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise DownloadError("virtualbox-manifest.json guest_additions URL 含多余成分")
+    if parsed.path != f"/virtualbox/{version}/{filename}":
+        raise DownloadError("virtualbox-manifest.json guest_additions URL 与版本或文件名不一致")
+    blob = " ".join((filename, url))
+    if _vbox_text_forbidden(blob) or url.lower().endswith(".vbox-extpack"):
+        raise DownloadError("virtualbox-manifest.json guest_additions 不得是附加包")
+    return {
+        "filename": filename,
+        "sha256": sha,
+        "size_bytes": size,
+        "url": url,
     }

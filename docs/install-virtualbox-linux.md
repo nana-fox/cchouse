@@ -30,7 +30,7 @@ Windows 安装器使用 VirtualBox。单独自检可运行 `py -3 -I scripts/pre
 | `GUEST_IF` | `enp0s3` | VirtualBox NAT 网卡在客机里的名字 |
 | `ROUTER_IP` | 不改 | 仍是家里的路由器。验收把它当作必须拦截的地址 |
 
-Windows 上 SSH 使用 `C:\Windows\System32\OpenSSH\ssh.exe`。`C:\Program Files\OpenSSH\ssh.exe` 会忽略 `ConnectTimeout`。`ssh-keyscan.exe` 在开启 HVCI 时会卡住，这条路径不再调用它。首启时客机把 ed25519 主机公钥写到串口日志 `logs/hostkey.serial`，宿主用这一行写入 `known_hosts`。日志里没有这一行时，先确认 `127.0.0.1:<SSH_PORT>` 的 NAT 转发规则和监听进程都属于这台虚拟机，再用 `ssh.exe -o StrictHostKeyChecking=accept-new` 做第一次连接。这种兜底会在 `verify-linux.sh` 里记一条 WARN：未经串口核对主机密钥。等待上限 180 秒，主机密钥对不上就停止。
+Windows 上 SSH 使用 `C:\Windows\System32\OpenSSH\ssh.exe`。`C:\Program Files\OpenSSH\ssh.exe` 会忽略 `ConnectTimeout`。`ssh-keyscan.exe` 在开启 HVCI 时会卡住，这条路径不再调用它。首启时客机把 ed25519 主机公钥写到串口日志 `logs/hostkey.serial`，宿主用这一行写入 `known_hosts`。日志里没有这一行时，先确认 `127.0.0.1:<SSH_PORT>` 的 NAT 转发规则和监听进程都属于这台虚拟机，再用 `ssh.exe -o StrictHostKeyChecking=accept-new` 做第一次连接。这种兜底会在 `verify-linux.sh` 里记一条 WARN：未经串口核对主机密钥。SSH 就绪最多等待 180 秒，单次探测超过 10 秒会终止。主机密钥对不上就停止。
 
 开启 BIOS 虚拟化。Windows 11 开着 VBS 时 VirtualBox 可能更慢，**不要为了提速关闭 VBS**。
 
@@ -38,9 +38,15 @@ Windows 上 SSH 使用 `C:\Windows\System32\OpenSSH\ssh.exe`。`C:\Program Files
 
 ## 虚拟机形态
 
-导入后 `VBoxManage modifyvm` 固定为：BIOS、2 CPU、2048 MB、VMSVGA 128 MB、网卡 1 为 NAT、型号 `82540EM`、剪贴板双向、关闭拖放、关闭声音、关闭 USB。首启时网线断开，验收重启前再接通。不安装 Guest Additions。
+导入后 `VBoxManage modifyvm` 固定为：BIOS、2 CPU、2048 MB、VMSVGA 128 MB、网卡 1 为 NAT、型号 `82540EM`、剪贴板双向、关闭拖放、关闭声音、关闭 USB。首启时网线断开，验收重启前再接通。不挂共享目录。
 
-首启把 `seed.iso` 挂到 IDE 的 port 1 / device 0。注入结束后卸盘、`closemedium`，并删除 `seed.iso`。删不掉就停止，不带着明文光盘继续。
+新构建的 amd64 黄金镜像包含 VirtualBox Guest Additions 7.2.22 和 `open-vm-tools`。`up` 下载的已发布版本以 `guest-linux/image-manifest.json` 为准。构建用的 `VBoxGuestAdditions_7.2.22.iso` 的 SHA-256 取自 Oracle 官方清单，写在 `guest-linux/virtualbox-manifest.json` 的 `guest_additions`。构建只运行这份 GPL 安装器。为当前内核编译模块后，删除 ISO，并 purge `dkms`、`linux-headers` 与 `build-essential`。
+
+镜像在构建时已经 purge `unattended-upgrades`，并禁用 `apt-daily.timer` 与 `apt-daily-upgrade.timer`（`firstboot.sh` 会再关一次）。没有自动升级内核的路径，所以不把编译器留在客机里，也不锁定内核包。以后如果有人手动升级内核，要重做镜像，`vboxguest` 才会重新对上。
+
+服务按 DMI 分开：`open-vm-tools` 只在 VMware 启动（`ConditionVirtualization=vmware`），`vboxadd` 与 `vboxadd-service` 只在 VirtualBox 启动（systemd 的 `oracle`，即 `innotek GmbH` / `VirtualBox`）。Openbox 只在 VirtualBox 下启动 `VBoxClient --clipboard` 和 `VBoxClient --vmsvga`。不启动拖放，不启动无缝模式。宿主侧剪贴板仍是 `--clipboard-mode bidirectional`，拖放仍是 `--drag-and-drop disabled`。Tart / arm64 不装 Guest Additions，仍然只有 `spice-vdagent`。Additions 走虚拟机后门，不改客机 `nftables`。
+
+首启把 `seed.iso` 挂到 IDE 的 port 1 / device 0。客机将配置刷盘后，向串口写入 `CCHOUSE_FIRSTBOOT_DONE` 并正常关机。安装器在 180 秒内确认关机和完成信号后才卸盘、`closemedium`、删除 `seed.iso` 并联网。首启未完成时，排查后可用同一命令重新导入并离线注入。
 
 ---
 

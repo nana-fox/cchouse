@@ -162,7 +162,7 @@ render_and_upload() {
     echo "Verified rendered config.yaml contains Stripe split routing rule."
   fi
   python3 -I "$REPO_ROOT/scripts/make-seed-iso.py" "$TMP_DIR/rendered" "$TMP_DIR/seed.iso" \
-    --claude-tarball "$CLAUDE_TGZ" || return 1
+    --claude-tarball "$CLAUDE_TGZ" --poweroff-after-provision || return 1
 
   # Build GTR-side instance.env for verify-linux.sh (Windows forward-slash paths work for both Git Bash & Windows OpenSSH)
   REMOTE_RUN_WIN_FWD="$(printf '%s' "$REMOTE_RUN_DIR" | tr '\\' '/')"

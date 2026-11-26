@@ -31,6 +31,42 @@ try {
 } catch {}
 $buildTime = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
 
+function Get-CchouseGuestAdditionsIso($ManifestPath, $DestDir, $CurlProxy) {
+  if (-not (Test-Path -LiteralPath $ManifestPath)) { throw "缺少 virtualbox-manifest.json" }
+  $manifest = Get-Content -LiteralPath $ManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+  $ga = $manifest.guest_additions
+  if (-not $ga) { throw "virtualbox-manifest.json 缺少 guest_additions" }
+  $version = [string]$manifest.version
+  $filename = [string]$ga.filename
+  $url = [string]$ga.url
+  $sha = ([string]$ga.sha256).ToLower()
+  $size = [int64]$ga.size_bytes
+  $expectedName = "VBoxGuestAdditions_${version}.iso"
+  $expectedUrl = "https://download.virtualbox.org/virtualbox/$version/$expectedName"
+  if ($filename -ne $expectedName) { throw "Guest Additions 文件名与版本不一致" }
+  if ($url -ne $expectedUrl) { throw "Guest Additions 只允许 Oracle 官网同版本 ISO" }
+  if ($url -match 'extpack|Extension_Pack|Extension Pack') { throw "拒绝 VirtualBox 附加包" }
+  if ($sha -notmatch '^[0-9a-f]{64}$') { throw "Guest Additions SHA-256 无效" }
+  if ($size -le 0) { throw "Guest Additions size_bytes 无效" }
+  $dest = Join-Path $DestDir $filename
+  & curl.exe -fL @CurlProxy $url -o $dest
+  if ($LASTEXITCODE -ne 0) {
+    Remove-Item -LiteralPath $dest -Force -ErrorAction SilentlyContinue
+    throw "下载 Guest Additions ISO 失败"
+  }
+  $gotSize = (Get-Item -LiteralPath $dest).Length
+  if ($gotSize -ne $size) {
+    Remove-Item -LiteralPath $dest -Force
+    throw "Guest Additions 大小不符"
+  }
+  $got = (Get-FileHash -Algorithm SHA256 -LiteralPath $dest).Hash.ToLower()
+  if ($got -ne $sha) {
+    Remove-Item -LiteralPath $dest -Force
+    throw "Guest Additions SHA-256 校验失败"
+  }
+  return @{ Path = $dest; Sha256 = $sha }
+}
+
 function Find-Exe($candidates, $name) {
   foreach ($c in $candidates) {
     if ($c -and (Test-Path $c)) { return $c }
@@ -87,6 +123,12 @@ if ($got256 -ne $MihomoSha256.ToLower()) {
   throw "mihomo SHA-256 校验失败：$got256"
 }
 Write-Host "  OK  mihomo SHA-256 校验通过"
+
+$gaManifest = Join-Path $GuestLinuxDir "virtualbox-manifest.json"
+$gaGot = Get-CchouseGuestAdditionsIso $gaManifest $WorkDir $curlProxy
+$gaIso = $gaGot.Path
+$gaSha = $gaGot.Sha256
+Write-Host "  OK  Guest Additions SHA-256 校验通过"
 
 $vmDir = Join-Path $WorkDir "vm"
 $vmx = Join-Path $vmDir "cchouse-debian13-amd64.vmx"
@@ -278,12 +320,18 @@ if ($LASTEXITCODE -ne 0) { $ErrorActionPreference = $prevEap; throw "ssh mkdir �
 if ($LASTEXITCODE -ne 0) { $ErrorActionPreference = $prevEap; throw "scp guest-linux 失败" }
 & scp.exe @sshOpts $mihomoGz "root@${guestIp}:/tmp/mihomo.gz"
 if ($LASTEXITCODE -ne 0) { $ErrorActionPreference = $prevEap; throw "scp mihomo.gz 失败" }
+try {
+  & scp.exe @sshOpts $gaIso "root@${guestIp}:/tmp/VBoxGuestAdditions.iso"
+  if ($LASTEXITCODE -ne 0) { $ErrorActionPreference = $prevEap; throw "scp Guest Additions ISO 失败" }
+} finally {
+  Remove-Item -LiteralPath $gaIso -Force -ErrorAction SilentlyContinue
+}
 
 $mirrorCmd = ""
 if ($UseUstcMirror) {
   $mirrorCmd = "sed -i 's|deb\.debian\.org|mirrors.ustc.edu.cn|g; s|security\.debian\.org|mirrors.ustc.edu.cn|g' /etc/apt/sources.list /etc/apt/sources.list.d/* /etc/apt/mirrors/* 2>/dev/null || true; "
 }
-$buildCmd = "${mirrorCmd}MIHOMO_VERSION=$MihomoVersion MIHOMO_SHA256=$MihomoSha256 MIHOMO_LOCAL_GZ=/tmp/mihomo.gz SOURCE_COMMIT=$sourceCommit BUILD_TIME=$buildTime bash /tmp/cchouse-guest-linux/image-builder/build-debian13-golden.sh && rm -rf /tmp/cchouse-guest-linux /tmp/mihomo.gz && sync && { nohup sh -c 'sleep 2 && systemctl poweroff' </dev/null >/dev/null 2>&1 & }"
+$buildCmd = "VBOX_GUEST_ADDITIONS_ISO=/tmp/VBoxGuestAdditions.iso VBOX_GUEST_ADDITIONS_SHA256=$gaSha ${mirrorCmd}MIHOMO_VERSION=$MihomoVersion MIHOMO_SHA256=$MihomoSha256 MIHOMO_LOCAL_GZ=/tmp/mihomo.gz SOURCE_COMMIT=$sourceCommit BUILD_TIME=$buildTime bash /tmp/cchouse-guest-linux/image-builder/build-debian13-golden.sh && rm -rf /tmp/cchouse-guest-linux /tmp/mihomo.gz /tmp/VBoxGuestAdditions.iso && sync && { nohup sh -c 'sleep 2 && systemctl poweroff' </dev/null >/dev/null 2>&1 & }"
 & ssh.exe @sshOpts "root@$guestIp" $buildCmd
 $rc = $LASTEXITCODE
 $ErrorActionPreference = $prevEap

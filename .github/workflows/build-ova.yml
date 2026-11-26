@@ -80,6 +80,57 @@ jobs:
           curl -fL --retry 3 --retry-delay 5 "$MIHOMO_URL" -o "$MIHOMO_GZ"
           echo "${MIHOMO_SHA256}  ${MIHOMO_GZ}" | sha256sum -c -
 
+          echo "== [3/4] Checking Guest Additions manifest..."
+          python3 -I - << 'PY'
+          import json, os, pathlib, shlex, sys
+          manifest = json.loads(pathlib.Path("guest-linux/virtualbox-manifest.json").read_text(encoding="utf-8"))
+          ga = manifest.get("guest_additions")
+          if not isinstance(ga, dict):
+              sys.exit("virtualbox-manifest.json 缺少 guest_additions")
+          version = str(manifest.get("version") or "")
+          filename = str(ga.get("filename") or "")
+          url = str(ga.get("url") or "")
+          sha = str(ga.get("sha256") or "").lower()
+          try:
+              size = int(ga.get("size_bytes") or 0)
+          except (TypeError, ValueError):
+              size = 0
+          expected = f"VBoxGuestAdditions_{version}.iso"
+          expected_url = f"https://download.virtualbox.org/virtualbox/{version}/{expected}"
+          if filename != expected or url != expected_url:
+              sys.exit("Guest Additions 只允许 Oracle 官网同版本 ISO")
+          if any(token in url for token in ("extpack", "Extension_Pack", "Extension Pack")):
+              sys.exit("拒绝 VirtualBox 附加包")
+          if len(sha) != 64 or any(ch not in "0123456789abcdef" for ch in sha) or size <= 0:
+              sys.exit("Guest Additions SHA-256 或大小无效")
+          dest = pathlib.Path(os.environ["WORK_DIR"]) / "ga.env"
+          dest.write_text(
+              "\n".join([
+                  f"GA_FILENAME={shlex.quote(filename)}",
+                  f"GA_URL={shlex.quote(url)}",
+                  f"GA_SHA256={shlex.quote(sha)}",
+                  f"GA_SIZE={shlex.quote(str(size))}",
+              ]) + "\n",
+              encoding="utf-8",
+          )
+          PY
+          # shellcheck disable=SC1091
+          . "${WORK_DIR}/ga.env"
+          GA_ISO="${WORK_DIR}/${GA_FILENAME}"
+          echo "== [3/4] Downloading Guest Additions ${GA_FILENAME}..."
+          curl -fL --retry 3 --retry-delay 5 "$GA_URL" -o "$GA_ISO" || { rm -f "$GA_ISO"; exit 1; }
+          got_size="$(stat -c %s "$GA_ISO")"
+          if [ "$got_size" != "$GA_SIZE" ]; then
+            rm -f "$GA_ISO"
+            echo "Guest Additions 大小不符" >&2
+            exit 1
+          fi
+          echo "${GA_SHA256}  ${GA_ISO}" | sha256sum -c - || { rm -f "$GA_ISO"; exit 1; }
+          {
+            echo "GA_ISO=${GA_ISO}"
+            echo "GA_SHA256=${GA_SHA256}"
+          } >> "$GITHUB_ENV"
+
       - name: Boot QEMU/KVM guest and run build-debian13-golden.sh + assert-empty-state.sh
         shell: bash
         run: |
@@ -190,10 +241,11 @@ jobs:
             guest-linux/image-builder/cchouse-firstboot-loader.sh \
             root@127.0.0.1:/tmp/cchouse-guest-linux/image-builder/
           scp "${SCP_OPTS[@]}" "$MIHOMO_GZ" root@127.0.0.1:/tmp/mihomo.gz
+          scp "${SCP_OPTS[@]}" "$GA_ISO" root@127.0.0.1:/tmp/VBoxGuestAdditions.iso
 
           # Reuse existing build-debian13-golden.sh (which invokes assert-empty-state.sh fail-closed).
           # Only background the poweroff so ssh returns the exact exit status of golden + assert-empty-state.
-          BUILD_CMD="TARGET_HYPERVISOR=vmware MIHOMO_ARCH=amd64 MIHOMO_VERSION=${MIHOMO_VERSION} MIHOMO_SHA256=${MIHOMO_SHA256} MIHOMO_LOCAL_GZ=/tmp/mihomo.gz SOURCE_COMMIT=${SOURCE_COMMIT} BUILD_TIME=${BUILD_TIME} bash /tmp/cchouse-guest-linux/image-builder/build-debian13-golden.sh && rm -rf /tmp/cchouse-guest-linux /tmp/mihomo.gz && sync && { nohup sh -c 'sleep 2 && systemctl poweroff' </dev/null >/dev/null 2>&1 & }"
+          BUILD_CMD="VBOX_GUEST_ADDITIONS_ISO=/tmp/VBoxGuestAdditions.iso VBOX_GUEST_ADDITIONS_SHA256=${GA_SHA256} TARGET_HYPERVISOR=vmware MIHOMO_ARCH=amd64 MIHOMO_VERSION=${MIHOMO_VERSION} MIHOMO_SHA256=${MIHOMO_SHA256} MIHOMO_LOCAL_GZ=/tmp/mihomo.gz SOURCE_COMMIT=${SOURCE_COMMIT} BUILD_TIME=${BUILD_TIME} bash /tmp/cchouse-guest-linux/image-builder/build-debian13-golden.sh && rm -rf /tmp/cchouse-guest-linux /tmp/mihomo.gz /tmp/VBoxGuestAdditions.iso && sync && { nohup sh -c 'sleep 2 && systemctl poweroff' </dev/null >/dev/null 2>&1 & }"
           ssh "${SSH_OPTS[@]}" root@127.0.0.1 "$BUILD_CMD"
 
           echo "== Waiting for clean guest poweroff..."
@@ -325,6 +377,10 @@ jobs:
             echo "- **Build time (UTC)**: \`${BUILD_TIME}\`"
             echo "- **Guest + OVA duration**: \`${ELAPSED_MIN}m${ELAPSED_SEC}s\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Smoke-test offline provisioning and seedless reboot
+        shell: bash
+        run: bash guest-linux/image-builder/smoke-test-ova-firstboot.sh "$WORK_DIR/ova-stage/cchouse-debian13-amd64-disk1.vmdk"
 
       - name: Upload OVA artifact
         uses: actions/upload-artifact@v4

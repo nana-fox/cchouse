@@ -3,6 +3,7 @@
 ## v2.0-preview
 
 - 交互式 `cchouse up` 等待输入节点链接时暂停后台下载日志，下载继续进行。输入结束后恢复输出。
+- VirtualBox 离线首启等待客机刷盘、串口确认和正常关机后才卸载配置盘并联网。联网 SSH 就绪探测单次最多 10 秒，总等待预算为 180 秒。
 - 中英 README 增加 Windows 单行引导入口。安装器准备私有 Python，缺少 VirtualBox 时会发起安装并提示用户确认 UAC。
 - 自检按安装卷的剩余空间检查完整安装。VirtualBox 路线至少 7 GB、建议 10 GB。Tart Debian 13 路线至少 9 GB、建议 12 GB。低于建议值时只提示。
 
@@ -10,6 +11,8 @@
 - Windows 首次运行 `up` 时，若缺 VirtualBox，则从 Oracle 下载锁定的 7.2.22 并核对官方 SHA-256。安装前显示说明，至多一次 UAC。下载、校验或安装失败时退出并给出官方链接。`remove` 在现有预览与确认流程中核对实例名称和虚拟机配置路径，关机后按核对过的 UUID 注销并删除虚拟机。
 - Windows 安装与验收统一使用 VirtualBox（`virtualbox-linux`）。环境自检、诊断、卸载与 GTR 验收同步切换。旧后端的实例留在原私有目录，请为新安装使用新的 tag。
 
+- 云端 `build-ova` 按 `guest-linux/virtualbox-manifest.json` 下载并校验 Guest Additions ISO，再传进构建客机。缺这份 ISO 时 amd64 黄金镜像脚本会停。
+- amd64 黄金镜像在 `open-vm-tools` 之外安装 VirtualBox Guest Additions 7.2.22。ISO 为 `VBoxGuestAdditions_7.2.22.iso`，SHA-256 来自同目录官方 `SHA256SUMS`，只使用这份 GPL 安装器。`open-vm-tools` 仅在 DMI 为 VMware 时启动，`vboxadd` 仅在 VirtualBox（systemd `ConditionVirtualization=oracle`）时启动。Openbox 只在 VirtualBox 下启动 `VBoxClient --clipboard` 与 `--vmsvga`，不启动拖放或无缝模式，不挂共享目录。模块编进当前内核后删除 ISO，并 purge `dkms`、`linux-headers` 与 `build-essential`。镜像已 purge `unattended-upgrades` 并禁用 `apt-daily.timer` 与 `apt-daily-upgrade.timer`，内核不会自动升级，因此不保留编译器，也不锁定内核包；之后若手动升级内核，需要重做镜像。Tart/arm64 仍只装 `spice-vdagent`。
 - Windows PowerShell 5.1 的 SSH 探测遇到超时会继续重试，主机密钥不符仍立即停止。Windows 脚本统一按原生命令退出码处理失败，保留独立的标准错误输出。CI 覆盖首次 SSH 超时后重试成功的路径。
 - Windows 上的 `cchouse up` 默认使用 VirtualBox，已有 VMware 实例的安装记录需使用新的 tag 创建 VirtualBox 实例。安装器直接采用并显示出口时区和预期出口 IP。修复 Windows PowerShell 5.1 遇到 VBoxManage 探测 stderr 时中止的问题，CI 增加 5.1 回归测试。首次 SSH 连接须同时通过本实例 NAT 转发与监听进程核对：优先核对 `VBox.log` 中的 PID，日志未提供 PID 时核对 VirtualBox 安装目录下的进程路径。
 - `cchouse.py remove` 增加 VirtualBox：按 `state.json` 里的虚拟机名精确匹配，先关机，再 `VBoxManage unregistervm --delete`。Windows 开机若串口没有主机公钥，要先确认 NAT 转发属于本实例，才用 `accept-new` 收录 `known_hosts`；`verify-linux.sh` 会记一条 WARN「未经串口核对主机密钥」。

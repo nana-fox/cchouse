@@ -21,6 +21,9 @@ MANIFEST = ROOT / "guest-linux" / "virtualbox-manifest.json"
 PS1 = ROOT / "scripts" / "vm-virtualbox.ps1"
 PINNED_SHA = "afd0ff1656cbe04ed88ce619594ae021419d97cce89fa9bdc443e9a963f1713f"
 PINNED_URL = "https://download.virtualbox.org/virtualbox/7.2.22/VirtualBox-7.2.22-175245-Win.exe"
+# SHA-256 of VBoxGuestAdditions_7.2.22.iso from the 7.2.22 SHA256SUMS. The Win.exe line in that file matches PINNED_SHA.
+PINNED_GA_SHA = "fc41354d8b974051fa33ca5a4f9c999a58c6e0dfc595b02a924a544392234b3d"
+PINNED_GA_URL = "https://download.virtualbox.org/virtualbox/7.2.22/VBoxGuestAdditions_7.2.22.iso"
 
 
 def _single_fields():
@@ -302,6 +305,68 @@ class TestVirtualBoxManifest(unittest.TestCase):
         self.assertFalse(got["extension_pack"])
         self.assertFalse(got["redistribute"])
         self.assertIn("ADDLOCAL=VBoxApplication", got["silent_args"])
+        ga = got["guest_additions"]
+        self.assertEqual(ga["filename"], "VBoxGuestAdditions_7.2.22.iso")
+        self.assertEqual(ga["sha256"], PINNED_GA_SHA)
+        self.assertEqual(ga["size_bytes"], 53207040)
+        self.assertEqual(ga["url"], PINNED_GA_URL)
+        self.assertNotEqual(ga["sha256"], PINNED_SHA)
+
+    def test_guest_additions_rejects_add_on_and_missing_block(self):
+        packed = self._mutate(guest_additions={
+            "filename": "VBoxGuestAdditions_7.2.22.iso",
+            "sha256": PINNED_GA_SHA,
+            "size_bytes": 53207040,
+            "url": "https://download.virtualbox.org/virtualbox/7.2.22/Oracle_VirtualBox_Extension_Pack-7.2.22.vbox-extpack",
+        })
+        with self.assertRaises(downloads.DownloadError):
+            self._load_data(packed)
+        missing = self._mutate()
+        missing.pop("guest_additions")
+        with self.assertRaises(downloads.DownloadError):
+            self._load_data(missing)
+
+    def test_amd64_ova_installs_guest_additions_and_drops_the_compiler(self):
+        golden = (ROOT / "guest-linux" / "image-builder" / "build-debian13-golden.sh").read_text(encoding="utf-8")
+        ova = (ROOT / "guest-linux" / "image-builder" / "build-ova-from-cloud-image.ps1").read_text(encoding="utf-8")
+        tart = (ROOT / "guest-linux" / "image-builder" / "build-tart-linux-from-cloud-image.sh").read_text(encoding="utf-8")
+        aes = (ROOT / "guest-linux" / "image-builder" / "assert-empty-state.sh").read_text(encoding="utf-8")
+        doc = (ROOT / "docs" / "install-virtualbox-linux.md").read_text(encoding="utf-8")
+        nft = (ROOT / "guest-linux" / "nftables.conf").read_text(encoding="utf-8")
+        self.assertIn('if [ "$MIHOMO_ARCH" = "amd64" ]', golden)
+        self.assertIn("VBoxLinuxAdditions.run", golden)
+        self.assertIn("--nox11", golden)
+        self.assertIn("cchouse_unit_dropin vboxadd.service oracle", golden)
+        self.assertIn("cchouse_unit_dropin open-vm-tools.service vmware", golden)
+        self.assertIn("VBoxClient --clipboard", golden)
+        self.assertIn("VBoxClient --vmsvga", golden)
+        self.assertNotIn("--draganddrop", golden)
+        self.assertNotIn("--seamless", golden)
+        self.assertIn("apt-get purge -y build-essential dkms", golden)
+        self.assertIn("unattended-upgrades", golden)
+        self.assertIn("spice-vdagent", golden)
+        self.assertNotIn("modprobe", golden)
+        self.assertIn("ConditionVirtualization=oracle", aes)
+        self.assertIn("ConditionVirtualization=vmware", aes)
+        self.assertIn("modinfo", aes)
+        self.assertNotIn("modprobe", aes)
+        self.assertIn("unattended-upgrades", aes)
+        self.assertIn('cchouse_image_arch" = "amd64"', aes)
+        self.assertIn("Get-CchouseGuestAdditionsIso", ova)
+        self.assertIn("VBOX_GUEST_ADDITIONS_SHA256=$gaSha", ova)
+        self.assertIn("Remove-Item -LiteralPath $gaIso", ova)
+        self.assertIn("拒绝 VirtualBox 附加包", ova)
+        self.assertNotIn("Oracle_VirtualBox_Extension_Pack", ova)
+        self.assertNotIn(".vbox-extpack", ova)
+        self.assertNotIn("VBOX_GUEST_ADDITIONS", tart)
+        self.assertNotIn("不安装 Guest Additions", doc)
+        self.assertIn("unattended-upgrades", doc)
+        self.assertIn("不锁定内核包", doc)
+        self.assertNotIn("flush ruleset", golden)
+        self.assertNotIn("flush ruleset", ova)
+        self.assertIn("绝不执行 flush ruleset", nft)
+        image_manifest = json.loads((ROOT / "guest-linux" / "image-manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual({art["route"] for art in image_manifest["artifacts"]}, {"virtualbox-linux", "tart-linux"})
 
     def _mutate(self, **changes):
         data = json.loads(MANIFEST.read_text(encoding="utf-8"))
@@ -391,9 +456,8 @@ class TestVirtualBoxScript(unittest.TestCase):
         self.assertIn('"delete" { Remove-CchouseVBoxVM -Name $CcVmName -VmDir $CcVmDir }', src)
         firstboot = src.split("function Invoke-CchouseVBoxFirstboot", 1)[1].split("function Invoke-CchouseVBoxBoot", 1)[0]
         self.assertLess(firstboot.find("Enable-CchouseVBoxSerialLog"), firstboot.find("Start-CchouseVmDetached"))
-        self.assertLess(src.rfind("Resolve-CchouseFirstbootStop"), src.find("HARD_POWEROFF=1"))
-        self.assertLess(src.find("HARD_POWEROFF=1"), src.find("FIRSTBOOT_STOPPED=OK"))
-        self.assertNotIn("Wait-CchousePowerOff $Name 20 | Out-Null", src)
+        self.assertLess(firstboot.find("-FirstbootLog $HostKeyLog"), firstboot.find("FIRSTBOOT_STOPPED=OK"))
+        self.assertIn("-TimeoutMs $timeoutMs", boot)
 
     def test_preflight_reports_virtualbox_route_and_amd64_image(self):
         proc = subprocess.run(
@@ -422,7 +486,7 @@ class TestVirtualBoxScript(unittest.TestCase):
         self.assertIn("ConnectTimeout=$ConnectTimeout", helper)
         self.assertNotIn("StrictHostKeyChecking=no", helper)
         ssh_fn = helper.split("function Invoke-CchouseSshTrue", 1)[1].split("function ", 1)[0]
-        self.assertLess(ssh_fn.find("Test-CchouseHostKeyMismatch"), ssh_fn.find("return"))
+        self.assertLess(ssh_fn.index("Test-CchouseHostKeyMismatch"), ssh_fn.index("return ($process.ExitCode -eq 0)"))
         verify = (ROOT / "scripts" / "verify-linux.sh").read_text(encoding="utf-8")
         self.assertIn('warn "未经串口核对主机密钥"', verify)
         self.assertIn("hostkey.trust", verify)
