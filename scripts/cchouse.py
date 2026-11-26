@@ -12,8 +12,7 @@
   1-2. 下载同时：无回显读取单节点链接 → 解析 → 探测出口 IP/时区 → 生成密钥与 600 权限 instance.env → preflight。
   3. 渲染 + 生成 seed.iso（渲染明文打包后立即删除）。
   4-9. 下载校验完成后：导入/克隆镜像 → 挂 seed.iso 首启注入 → 删明文并联网重启 → verify-linux.sh --fail-closed → 干净快照。
-     Tart 用 scripts/vm-tart.sh，VMware(Windows) 用 scripts/vm-vmware.ps1。
-     Windows 上没有 vmrun 时改用 scripts/vm-virtualbox.ps1（Oracle 官网基础包，NAT + 127.0.0.1 端口转发）。
+     Apple Silicon 用 scripts/vm-tart.sh，Windows 默认用 scripts/vm-virtualbox.ps1（NAT + 127.0.0.1 端口转发）。
 每步开始/结束/耗时/是否命中缓存写入 <私有目录>/state.json，结束打印耗时表；任一步失败即停，
 再次运行同一命令从失败步骤继续，并提示用 scripts/doctor.py 导出脱敏诊断包。
 红线：链接和密码不回显、不写日志；明文用完即删；绝不放宽断网保护。
@@ -555,18 +554,6 @@ def run_preflight_check(env_path, route, check_stripe=True, vm_backend=None):
     return proc.returncode, parsed, proc.stderr.strip()
 
 
-def _prompt_with_default(prompt_label, default_val):
-    suffix = f" [{default_val}]" if default_val else " [可回车留空]"
-    try:
-        ans = input(f"{prompt_label}{suffix}: ").strip()
-    except EOFError:
-        if default_val:
-            print(f"\n输入已结束，使用默认值 [{default_val}]。")
-            return default_val
-        raise StepError("输入已结束，请在终端交互运行或加 --non-interactive") from None
-    return ans if ans else default_val
-
-
 def _print_next_steps(env_path, private_dir, route, backend=None):
     if route == "tart-linux":
         doc = "docs/install-tart-linux.md"
@@ -643,19 +630,17 @@ def vboxmanage_present():
     return False
 
 
-def detect_vm_backend(route, system=None, vmware_installed=None):
-    """Apple Silicon 的 tart-linux 用 tart。Windows 的 vmware-linux：有 vmrun 用 vmware，否则 virtualbox。
+def detect_vm_backend(route, system=None):
+    """Apple Silicon 用 Tart，Windows 的 amd64 OVA 用 VirtualBox。
 
-    Intel Mac 与其他宿主保持 manual。测试注入 system / vmware_installed，不探测本机。
+    共享的 amd64 OVA 在镜像清单中的路线名仍为 vmware-linux。
     """
     sys_name = platform.system() if system is None else system
     if route == "tart-linux":
         return "tart" if sys_name == "Darwin" else "manual"
     if route != "vmware-linux" or sys_name != "Windows":
         return "manual"
-    if vmware_installed is None:
-        vmware_installed = vmware_present()
-    return "vmware" if vmware_installed else "virtualbox"
+    return "virtualbox"
 
 
 def _vbox_port_in_span(port, base=None, span=None):
@@ -1054,8 +1039,6 @@ class UpContext:
         chosen = getattr(self.args, "vm_backend", "auto")
         if chosen and chosen != "auto":
             parts += ["--vm-backend", chosen]
-        elif self.backend == "virtualbox":
-            parts += ["--vm-backend", "virtualbox"]
         return " ".join(parts)
 
 
@@ -1088,32 +1071,24 @@ def do_config(ctx):
         if resolved:
             single_fields["SINGLE_SERVER_IP"] = resolved
 
-    print(f"[cchouse up] 路线：{route} | 协议：{single_fields['SINGLE_TYPE']} | 端口：{single_fields['SINGLE_PORT']}")
+    print(f"[cchouse up] 虚拟机后端：{ctx.backend} | 协议：{single_fields['SINGLE_TYPE']} | 端口：{single_fields['SINGLE_PORT']}")
 
     probed = None
     if not args.no_probe and single_fields["SINGLE_TYPE"] in ("socks5", "http"):
         print("[cchouse up] 正在通过代理探测出口 IP 与时区（凭据不落盘不回显）...")
         probed = probe_egress_via_proxy(single_fields)
-        if probed and probed.get("ip"):
-            print(
-                f"[cchouse up] 探测结果：出口 IP={probed['ip']}，时区={probed.get('timezone') or '未知'}，"
-                f"国家={probed.get('country') or '未知'}，ASN={probed.get('asn') or '未知'}"
-            )
-        else:
-            print("[cchouse up] 未自动探测到出口信息，可在下方手动输入或回车留空。")
-
-    default_tz = args.timezone or (probed.get("timezone") if probed else "") or "America/Los_Angeles"
-    default_ip = args.expected_ip or (probed.get("ip") if probed else "")
-    default_loc = (probed.get("country") if probed else "") or "US"
-    default_asn = (probed.get("asn") if probed else "")
-
-    if args.non_interactive:
-        tz = default_tz
-        expected_ip = default_ip
-    else:
-        ctx.downloader.print_status()
-        tz = _prompt_with_default("出口时区 TIMEZONE（回车确认）", default_tz)
-        expected_ip = _prompt_with_default("预期出口 IP EXPECTED_EGRESS_IP（回车确认）", default_ip)
+    probed = probed or {}
+    egress_cfg = {
+        "timezone": args.timezone or probed.get("timezone") or "America/Los_Angeles",
+        "ip": args.expected_ip or probed.get("ip") or "",
+        "loc": probed.get("country") or "US",
+        "asn": probed.get("asn") or "",
+    }
+    print(
+        f"[cchouse up] 采用出口配置：时区={egress_cfg['timezone']}，"
+        f"预期出口 IP={egress_cfg['ip'] or '未设置'}，"
+        f"国家={egress_cfg['loc']}，ASN={egress_cfg['asn'] or '未知'}"
+    )
 
     try:
         ssh_key, ssh_pubkey = generate_ssh_keypair(private_dir, tag)
@@ -1140,7 +1115,6 @@ def do_config(ctx):
         "router_ip": "192.168.100.1",
         "home_lan_cidr": "192.168.100.0/24",
     }
-    egress_cfg = {"timezone": tz, "ip": expected_ip, "loc": default_loc, "asn": default_asn}
     ssh_port = None
     if ctx.backend == "virtualbox":
         apply_virtualbox_guest_net(ctx)
@@ -1523,7 +1497,7 @@ def finish_manual(ctx, steps):
         doc = "docs/install-virtualbox-linux.md"
     else:
         doc = "docs/install-vmware-linux.md"
-    print("\n== 当前宿主暂不支持自动导入（目前自动化：Apple Silicon + Tart、Windows + VMware Workstation；Windows 未安装 VMware 时用 VirtualBox） ==")
+    print("\n== 当前宿主暂不支持自动导入（默认自动化：Apple Silicon + Tart、Windows + VirtualBox） ==")
     print(f"- 已下载并校验的镜像：{ctx.image_path}")
     print(f"- 首启注入光盘（含明文凭据，首启完成后立即删除）：{ctx.seed_iso}")
     print(f"- 按 {doc} 导入镜像、挂载 seed.iso 首次开机，然后运行：")
@@ -1542,6 +1516,8 @@ def cmd_up(args):
         sys.exit("错误：私有目录/缓存目录不能放在 cchouse 仓库内，请改用用户私有目录")
 
     ctx = UpContext(args, tag, route, private_dir)
+    if ctx.backend == "virtualbox" and ctx.state.get("vm_backend") == "vmware":
+        sys.exit("错误：该实例的安装记录属于 VMware，请使用新的 --tag 创建 VirtualBox 实例")
     return run_pipeline(ctx)
 
 
@@ -1786,13 +1762,13 @@ def main():
     p_up.add_argument("--cache-dir", default=None, help="镜像与 Claude Code 包缓存目录（默认 <私有根目录>/cache，多实例共用）")
     p_up.add_argument("--image-mirror", default=None, help=f"黄金镜像镜像源目录 URL（也可用环境变量 {downloads.IMAGE_MIRROR_ENV}），SHA-256 仍按 manifest 校验")
     p_up.add_argument("--npm-mirror", default=None, help=f"Claude Code tarball 镜像源（也可用环境变量 {downloads.NPM_MIRROR_ENV}），integrity 仍取官方 registry")
-    p_up.add_argument("--timezone", default=None, help="默认出口时区（非交互模式直接采用）")
-    p_up.add_argument("--expected-ip", default=None, help="默认预期出口 IP（非交互模式直接采用）")
+    p_up.add_argument("--timezone", default=None, help="覆盖自动采用的出口时区")
+    p_up.add_argument("--expected-ip", default=None, help="覆盖自动采用的预期出口 IP")
     p_up.add_argument("--link-stdin", action="store_true", help="从标准输入读取一行节点链接（不回显，适合脚本/测试）")
-    p_up.add_argument("--non-interactive", action="store_true", help="跳过交互问答，使用探测或默认值")
+    p_up.add_argument("--non-interactive", action="store_true", help=argparse.SUPPRESS)
     p_up.add_argument("--no-probe", action="store_true", help="跳过宿主机代理出口与 Stripe 探测")
     p_up.add_argument("--vm-backend", choices=("auto", "tart", "vmware", "virtualbox", "manual"), default="auto",
-                      help="虚拟机自动化后端（默认：Apple Silicon→tart；Windows 已装 VMware→vmware，否则 virtualbox；其余→manual）")
+                      help="虚拟机自动化后端（默认：Apple Silicon→tart；Windows→virtualbox；其余→manual）")
     p_up.add_argument("--reconfigure", action="store_true", help="忽略已有 instance.env，重新输入节点链接")
     p_up.add_argument("--config-only", action="store_true", help="只生成 instance.env 并跑 preflight（第一轮行为），不下载不建虚拟机")
     p_up.add_argument("--dry-run", action="store_true", help="只演练：生成配置并跑 preflight，其余步骤只打印命令，不下载、不动虚拟机、不写 state.json")

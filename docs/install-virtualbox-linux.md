@@ -1,6 +1,6 @@
-# Windows 安装手册（未装 VMware 时：VirtualBox + Debian 13）
+# Windows 安装手册（VirtualBox + Debian 13）
 
-本手册只覆盖 **Windows（x64）** 上 **没有安装 VMware Workstation** 的情况。`cchouse up` 检测到 `vmrun` 时仍走 [install-vmware-linux.md](install-vmware-linux.md)。Intel Mac 不走本手册，继续用 VMware Fusion。Apple Silicon 走 [install-tart-linux.md](install-tart-linux.md)。
+本手册覆盖 **Windows（x64）** 上 `cchouse up` 的默认 VirtualBox 路线。已有 VMware 实例时，使用新的 tag 创建 VirtualBox 实例。Apple Silicon 走 [install-tart-linux.md](install-tart-linux.md)。
 
 客机仍是同一份 Debian 13 amd64 黄金镜像。VirtualBox 只提供 NAT，不替换客机系统。
 
@@ -10,14 +10,11 @@
 
 ## `cchouse up` 会做什么
 
-```bash
-python3 -I scripts/cchouse.py up --tag cc01
+```powershell
+py -3 -I scripts/cchouse.py up --tag cc01
 ```
 
-Windows 上选择规则：
-
-- 已安装 VMware（能找到 `vmrun`）→ VMware 后端。
-- 否则 → 本手册的 VirtualBox 后端。显式指定仍可用 `--vm-backend vmware` 或 `--vm-backend virtualbox`。
+安装器默认使用 VirtualBox。粘贴节点链接后，安装器会自动采用并显示出口时区和预期出口 IP，然后继续安装。
 
 VirtualBox 基础包装从 Oracle 官网下载，版本和 SHA-256 写在 `guest-linux/virtualbox-manifest.json`。下载后校验，再静默安装（`ADDLOCAL=VBoxApplication`，不要桌面快捷方式、不要注册文件关联、不要装完自启）。`--msiparams` 放在参数最后，后面每一项单独是一个 `NAME=VALUE`（Oracle 手册 *Installing VirtualBox*：`VirtualBox.exe -msiparams NAME=VALUE [...]`）。静默安装仍会弹出 Windows 的 UAC 提权确认；进程已经具备提升权限时可能不再点击。不要为了免确认而关闭 UAC。仓库**不分发**这个安装包，也**不安装** Oracle 的附加包（无 USB 2/3、无主机共享目录）。已有 `VBoxManage.exe` 时跳过下载。清单里的 SHA-256 为空或格式不对时拒绝安装。NAT-only 安装失败不会改走完整安装。
 

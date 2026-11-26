@@ -244,31 +244,38 @@ class TestUpPipeline(unittest.TestCase):
             return fn
         return {name: make(name) for name, _t in cchouse_mod.UP_STEPS}
 
-    def test_prompt_eof_uses_default_and_explains_it(self):
-        out = io.StringIO()
-        with mock.patch("sys.stdin", io.StringIO()), mock.patch("sys.stdout", out):
-            value = cchouse_mod._prompt_with_default("出口时区", "America/Los_Angeles")
-        self.assertEqual(value, "America/Los_Angeles")
-        self.assertIn("输入已结束，使用默认值 [America/Los_Angeles]", out.getvalue())
+    def test_config_applies_detected_egress_without_confirmation(self):
+        egress = {"ip": "203.0.113.9", "timezone": "America/New_York", "country": "US", "asn": "AS64500"}
+        link = "socks5://test-user:test-password@203.0.113.8:1080"
+        with tempfile.TemporaryDirectory() as td:
+            ctx = _ctx(td, link_stdin=False, non_interactive=False, no_probe=False)
+            with mock.patch.object(cchouse_mod.getpass, "getpass", return_value=link) as prompt, \
+                    mock.patch("builtins.input", side_effect=AssertionError("unexpected confirmation")), \
+                    mock.patch.object(cchouse_mod, "probe_egress_via_proxy", return_value=egress), \
+                    mock.patch.object(cchouse_mod, "generate_ssh_keypair", return_value=(ctx.ssh_key, "ssh-ed25519 AAAA test")), \
+                    mock.patch("sys.stdout", io.StringIO()) as out:
+                cchouse_mod.do_config(ctx)
+            prompt.assert_called_once()
+            env = ctx.env_path.read_text(encoding="utf-8")
+            self.assertIn("TIMEZONE=America/New_York\n", env)
+            self.assertIn("EXPECTED_EGRESS_IP=203.0.113.9\n", env)
+            self.assertIn("时区=America/New_York，预期出口 IP=203.0.113.9", out.getvalue())
+            self.assertNotIn("test-password", out.getvalue())
 
     def test_required_input_eof_fails_and_cleans_plaintext(self):
-        for link_stdin, stdin, hint in (
-            (True, "socks5://u:p@203.0.113.9:1080\n", "--non-interactive"),
-            (True, "", "--link-stdin"),
-            (False, "", "--link-stdin"),
-        ):
-            with self.subTest(link_stdin=link_stdin, hint=hint), tempfile.TemporaryDirectory() as td:
+        for link_stdin in (True, False):
+            with self.subTest(link_stdin=link_stdin), tempfile.TemporaryDirectory() as td:
                 ctx = _ctx(td, link_stdin=link_stdin, non_interactive=False)
                 ctx.rendered.mkdir(parents=True)
                 (ctx.rendered / "config").write_text("plaintext", encoding="utf-8")
                 ctx.seed_iso.write_bytes(b"plaintext")
                 out = io.StringIO()
-                with mock.patch("sys.stdin", io.StringIO(stdin)), mock.patch("sys.stdout", out), \
+                with mock.patch("sys.stdin", io.StringIO()), mock.patch("sys.stdout", out), \
                         mock.patch.object(cchouse_mod.getpass, "getpass", side_effect=EOFError):
                     rc = cchouse_mod.run_pipeline(ctx)
                 self.assertEqual(rc, 1)
                 self.assertIn("输入已结束，请在终端交互运行", out.getvalue())
-                self.assertIn(hint, out.getvalue())
+                self.assertIn("--link-stdin", out.getvalue())
                 self.assertNotIn("traceback", out.getvalue().lower())
                 self.assertFalse(ctx.env_path.exists())
                 self.assertFalse(ctx.seed_iso.exists())
@@ -461,7 +468,7 @@ class TestUpPipeline(unittest.TestCase):
                 proc = subprocess.run(
                     [sys.executable, "-I", str(ROOT / "scripts" / "cchouse.py"), "up", "--tag", "cc06",
                      "--route", route, "--vm-backend", backend, "--private-dir", str(priv), "--cache-dir", str(Path(td) / "cache"),
-                     "--link-stdin", "--non-interactive", "--no-probe", "--expected-ip", "203.0.113.9",
+                     "--link-stdin", "--no-probe", "--expected-ip", "203.0.113.9",
                      "--reconfigure", "--dry-run", "--image-mirror", "https://mirror.example/cc"],
                     input=f"trojan://{secret}@203.0.113.9:443?sni=a.example#n\n",
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",

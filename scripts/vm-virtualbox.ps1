@@ -44,6 +44,16 @@ function Invoke-CchouseVBox {
   if ($LASTEXITCODE -ne 0) { throw "VBoxManage failed (rc=$LASTEXITCODE)" }
 }
 
+function Invoke-CchouseVBoxOptional {
+  param([string[]]$CcArgumentList)
+  $vbm = Get-CchouseVBoxManage
+  if (-not $vbm) { throw "VBoxManage.exe not found" }
+  # Windows PowerShell 5.1 treats native stderr as an error even when redirected.
+  $ErrorActionPreference = "Continue"
+  $output = @(& $vbm @CcArgumentList 2>$null)
+  return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $output }
+}
+
 function Get-CchouseVirtualBoxInstallArgs {
   # Oracle VirtualBox manual, "Installing on Windows hosts" (public properties):
   #   VirtualBox.exe -msiparams NAME=VALUE [...]
@@ -91,8 +101,8 @@ function Test-CchouseVmRegistered {
   param([string]$Name)
   $vbm = Get-CchouseVBoxManage
   if (-not $vbm -or -not $Name) { return $false }
-  & $vbm showvminfo $Name --machinereadable 2>$null | Out-Null
-  return ($LASTEXITCODE -eq 0)
+  $result = Invoke-CchouseVBoxOptional -CcArgumentList @("showvminfo", $Name, "--machinereadable")
+  return ($result.ExitCode -eq 0)
 }
 
 function Get-CchouseIdeControllerName {
@@ -107,22 +117,12 @@ function Get-CchouseIdeControllerName {
 
 function Get-CchouseIdeController {
   param([string]$Name)
-  $vbm = Get-CchouseVBoxManage
-  if (-not $vbm) { throw "VBoxManage.exe not found" }
-  $info = @(& $vbm showvminfo $Name --machinereadable)
+  $info = @(Get-CchouseShowvminfoLines -Name $Name)
   $controller = Get-CchouseIdeControllerName -Lines $info
   if ([string]::IsNullOrEmpty($controller)) {
     throw "No IDE storage controller on $Name"
   }
   return $controller
-}
-
-function Get-CchouseVmUuidFromLines {
-  param([string[]]$Lines)
-  foreach ($line in @($Lines)) {
-    if ($line -match '^UUID="([^"]+)"') { return $Matches[1] }
-  }
-  return $null
 }
 
 function Get-CchouseVmNameFromLines {
@@ -144,42 +144,44 @@ function Test-CchouseForwardRule {
   return $false
 }
 
-function Test-CchouseListenerCommand {
-  param([string]$CommandLine, [string]$VmUuid, [string]$VmName)
-  if ([string]::IsNullOrWhiteSpace($CommandLine)) { return $false }
-  if ($CommandLine -notmatch '(?i)(^|[\\/"\s])(VBoxHeadless|VBoxNetNAT)\.exe(\s|"|$)') {
-    return $false
+function Get-CchouseVBoxLogPid {
+  param([string]$Name)
+  $log = Invoke-CchouseVBoxOptional -CcArgumentList @("showvminfo", $Name, "--log=0")
+  if ($log.ExitCode -ne 0) { return $null }
+  foreach ($line in ($log.Output | Select-Object -First 32)) {
+    if ($line -match '^(?:\d{2}:\d{2}:\d{2}\.\d+\s+)?Process ID:\s*([1-9][0-9]*)\s*$') {
+      return [int]$Matches[1]
+    }
   }
-  $uuid = ""
-  if ($VmUuid) { $uuid = ($VmUuid -replace '[{}]', '').ToLower() }
-  if ($uuid -and $CommandLine.ToLower().Contains($uuid)) { return $true }
-  if ($VmName) {
-    $escaped = [regex]::Escape($VmName)
-    if ($CommandLine -match "(?i)(--comment|--startvm)\s+`"$escaped`"") { return $true }
-    if ($CommandLine -match "(?i)(--comment|--startvm)\s+$escaped(\s|$)") { return $true }
-  }
-  return $false
-}
-
-function Test-CchouseOwnForward {
-  param([string[]]$Lines, [int]$Port, [string]$ListenerCommand)
-  if (-not (Test-CchouseForwardRule -Lines $Lines -Port $Port)) { return $false }
-  $uuid = Get-CchouseVmUuidFromLines -Lines $Lines
-  $name = Get-CchouseVmNameFromLines -Lines $Lines
-  return [bool](Test-CchouseListenerCommand -CommandLine $ListenerCommand -VmUuid $uuid -VmName $name)
+  return $null
 }
 
 function Resolve-CchouseProbeDecision {
   param(
+    [string]$Name,
     [string[]]$Lines,
     [int]$Port,
-    [string]$ListenerCommand,
-    [bool]$ListenerPresent
+    [string]$VBoxManage
   )
-  # [string] turns $null into "". ListenerPresent is the "nothing is bound yet" signal.
+  if ((Get-CchouseVmNameFromLines -Lines $Lines) -cne $Name) { return "reject" }
   if (-not (Test-CchouseForwardRule -Lines $Lines -Port $Port)) { return "reject" }
-  if (-not $ListenerPresent) { return "wait" }
-  if (Test-CchouseOwnForward -Lines $Lines -Port $Port -ListenerCommand $ListenerCommand) { return "probe" }
+  $listenerId = Get-CchouseLoopbackListenerId -Port $Port
+  if ($null -eq $listenerId) { return "wait" }
+  if ('VMState="running"' -notin $Lines) { return "wait" }
+
+  $vmPid = Get-CchouseVBoxLogPid -Name $Name
+  if ($null -ne $vmPid) {
+    if ($listenerId -eq $vmPid) { return "probe" }
+    return "reject"
+  }
+
+  # If the VM log cannot identify the PID, accept only a VM executable
+  # from the same install directory as VBoxManage.
+  $processPath = (Get-Process -Id $listenerId -ErrorAction SilentlyContinue).Path
+  $installDir = Split-Path -Parent ([System.IO.Path]::GetFullPath($VBoxManage))
+  if ($processPath -in @((Join-Path $installDir "VBoxHeadless.exe"), (Join-Path $installDir "VirtualBoxVM.exe"))) {
+    return "probe"
+  }
   return "reject"
 }
 
@@ -190,32 +192,22 @@ function Assert-CchouseSshPort {
 
 function Get-CchouseShowvminfoLines {
   param([string]$Name)
-  $vbm = Get-CchouseVBoxManage
-  if (-not $vbm) { throw "VBoxManage.exe not found" }
-  return @(& $vbm showvminfo $Name --machinereadable)
+  Invoke-CchouseVBox -CcArgumentList @("showvminfo", $Name, "--machinereadable")
 }
 
-function Get-CchouseLoopbackListenerCommand {
+function Get-CchouseLoopbackListenerId {
   param([int]$Port)
-  $conns = @()
   try {
-    $conns = @(Get-NetTCPConnection -LocalAddress "127.0.0.1" -LocalPort $Port -State Listen -ErrorAction Stop |
-      Where-Object { $null -ne $_ })
+    $conns = @(Get-NetTCPConnection -LocalAddress "127.0.0.1" -LocalPort $Port -State Listen -ErrorAction Stop)
   } catch {
-    $msg = [string]$_.Exception.Message
-    if ($msg -match 'No matching') { return $null }
+    if ($_.FullyQualifiedErrorId -like 'CmdletizationQuery_NotFound*') { return $null }
     throw
   }
   if ($conns.Count -eq 0) { return $null }
-  foreach ($conn in $conns) {
-    $procId = [int]$conn.OwningProcess
-    if ($procId -le 0) { continue }
-    $proc = Get-CimInstance -ClassName Win32_Process -Filter ("ProcessId=" + $procId)
-    if ($null -eq $proc) { continue }
-    if ($null -eq $proc.CommandLine) { return "" }
-    return [string]$proc.CommandLine
+  if ($conns.Count -ne 1 -or [int]$conns[0].OwningProcess -le 0) {
+    throw "SSH forward 127.0.0.1:${Port} has no unique listener PID"
   }
-  return ""
+  return [int]$conns[0].OwningProcess
 }
 
 function Start-CchouseVmDetached {
@@ -230,11 +222,10 @@ function Start-CchouseVmDetached {
 
 function Wait-CchousePowerOff {
   param([string]$Name, [int]$Seconds)
-  $vbm = Get-CchouseVBoxManage
   for ($i = 0; $i -lt $Seconds; $i++) {
-    $info = @(& $vbm showvminfo $Name --machinereadable)
-    foreach ($line in $info) {
-      if ($line -eq 'VMState="poweroff"' -or $line -eq 'VMState="aborted"') { return $true }
+    $info = Invoke-CchouseVBoxOptional -CcArgumentList @("showvminfo", $Name, "--machinereadable")
+    if ($info.ExitCode -eq 0) {
+      if ('VMState="poweroff"' -in $info.Output -or 'VMState="aborted"' -in $info.Output) { return $true }
     }
     Start-Sleep -Seconds 1
   }
@@ -268,7 +259,7 @@ function Import-CchouseVBoxOva {
   if (-not $vbm) { throw "VBoxManage.exe not found (install VirtualBox or set CCHOUSE_VBOXMANAGE)" }
   New-Item -ItemType Directory -Force -Path $DestDir | Out-Null
   if (Test-CchouseVmRegistered $Name) {
-    & $vbm controlvm $Name poweroff 2>$null | Out-Null
+    Invoke-CchouseVBoxOptional -CcArgumentList @("controlvm", $Name, "poweroff") | Out-Null
     & $vbm unregistervm $Name --delete
     if ($LASTEXITCODE -ne 0) { throw "unregistervm failed" }
   }
@@ -297,7 +288,6 @@ function Import-CchouseVBoxOva {
 function Invoke-CchouseVBoxFirstboot {
   param([string]$Name, [string]$SeedIso, [int]$Seconds, [string]$HostKeyLog)
   if (-not (Test-Path -LiteralPath $SeedIso)) { throw "seed.iso not found" }
-  $vbm = Get-CchouseVBoxManage
   $ide = Get-CchouseIdeController $Name
   Invoke-CchouseVBox -CcArgumentList @(
     "storageattach", $Name,
@@ -311,11 +301,11 @@ function Invoke-CchouseVBoxFirstboot {
   Write-Host "Starting offline firstboot (headless, ${Seconds}s)..."
   Start-CchouseVmDetached $Name
   Start-Sleep -Seconds $Seconds
-  & $vbm controlvm $Name acpipowerbutton 2>$null | Out-Null
+  Invoke-CchouseVBoxOptional -CcArgumentList @("controlvm", $Name, "acpipowerbutton") | Out-Null
   $afterAcpi = Wait-CchousePowerOff $Name 40
   $afterHard = $false
   if (-not $afterAcpi) {
-    & $vbm controlvm $Name poweroff 2>$null | Out-Null
+    Invoke-CchouseVBoxOptional -CcArgumentList @("controlvm", $Name, "poweroff") | Out-Null
     $afterHard = Wait-CchousePowerOff $Name 20
   }
   $how = Resolve-CchouseFirstbootStop -AfterAcpi:$afterAcpi -AfterHard:$afterHard
@@ -342,7 +332,7 @@ function Invoke-CchouseVBoxBoot {
   & $vbm storageattach $Name --storagectl $ide --port 1 --device 0 --type dvddrive --medium emptydrive
   if ($LASTEXITCODE -ne 0) { throw "detach seed ISO failed" }
   if ($SeedIso) {
-    & $vbm closemedium dvd $SeedIso 2>$null | Out-Null
+    Invoke-CchouseVBoxOptional -CcArgumentList @("closemedium", "dvd", $SeedIso) | Out-Null
     if (Test-Path -LiteralPath $SeedIso) { Remove-Item -LiteralPath $SeedIso -Force }
     if (Test-Path -LiteralPath $SeedIso) { throw "seed.iso still present" }
   }
@@ -374,19 +364,12 @@ function Invoke-CchouseVBoxBoot {
     if ($sleepFor -lt 1) { break }
     Start-Sleep -Seconds $sleepFor
     $info = @(Get-CchouseShowvminfoLines -Name $Name)
-    $listener = Get-CchouseLoopbackListenerCommand -Port $SshPort
-    $present = $null -ne $listener
-    $decision = Resolve-CchouseProbeDecision -Lines $info -Port $SshPort -ListenerCommand ([string]$listener) -ListenerPresent:$present
+    $decision = Resolve-CchouseProbeDecision -Name $Name -Lines $info -Port $SshPort -VBoxManage $vbm
     if ($decision -eq "reject") {
       throw "SSH forward 127.0.0.1:${SshPort} is not owned by $Name"
     }
     if ($decision -ne "probe") { continue }
     $pinned = [bool]$trust.Pinned
-    if (-not $pinned) {
-      if (-not (Test-CchouseOwnForward -Lines $info -Port $SshPort -ListenerCommand ([string]$listener))) {
-        throw "SSH forward 127.0.0.1:${SshPort} is not owned by $Name; refusing to record a host key"
-      }
-    }
     $timeout = $remaining
     if ($timeout -gt 5) { $timeout = 5 }
     $verify = @(Get-CchouseSshVerifyOptions -KnownHostsPath $KnownHostsPath -Pinned:$pinned -ConnectTimeout $timeout)
@@ -439,7 +422,7 @@ function Remove-CchouseVBoxVM {
 function New-CchouseVBoxSnapshot {
   param([string]$Name, [string]$SnapName)
   $vbm = Get-CchouseVBoxManage
-  & $vbm snapshot $Name delete $SnapName 2>$null | Out-Null
+  Invoke-CchouseVBoxOptional -CcArgumentList @("snapshot", $Name, "delete", $SnapName) | Out-Null
   & $vbm snapshot $Name take $SnapName --description "cchouse clean"
   if ($LASTEXITCODE -ne 0) { throw "VBoxManage snapshot take failed" }
   Write-Host "SNAPSHOT_OK=$SnapName"

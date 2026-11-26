@@ -53,7 +53,7 @@ python3 -I scripts/cchouse.py up --tag cc01
 
 Windows PowerShell 用 `py -3 -I scripts/cchouse.py up --tag cc01`。
 
-提示时粘贴节点链接，输入不会回显。安装器会显示探测到的出口时区和预期出口 IP，核对无误后分别按回车采用默认值；之后无需再操作，等待自动验收完成。安装器在后台通过宿主网络下载并校验镜像和官方 Claude Code 包，同时完成配置和自检。Apple Silicon Mac 和 Windows 会自动创建客机（导入镜像或克隆已有黄金镜像）、离线注入配置、清理明文配置文件、联网重启、运行 `verify-linux.sh --fail-closed` 并在通过后保存干净快照。[手动安装](docs/manual-install.md)
+提示时粘贴节点链接，输入不会回显。安装器会自动采用并显示出口时区和预期出口 IP，继续运行至自动验收。安装器在后台通过宿主网络下载并校验镜像和官方 Claude Code 包，同时完成配置和自检。Apple Silicon Mac 和 Windows 会自动创建客机（导入镜像或克隆已有黄金镜像）、离线注入配置、清理明文配置文件、联网重启、运行 `verify-linux.sh --fail-closed` 并在通过后保存干净快照。[手动安装](docs/manual-install.md)
 
 安装失败会停在出错的步骤。处理提示的原因后，从同一个目录重跑原命令，保留相同的 `--tag` 和自定义目录参数。安装器会续用已保存的步骤和校验过的下载文件。
 

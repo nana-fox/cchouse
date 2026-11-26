@@ -9,6 +9,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -53,21 +54,34 @@ class _Body:
 
 
 class TestVirtualBoxSelection(unittest.TestCase):
-    def test_windows_uses_vmware_when_present_else_virtualbox(self):
-        self.assertEqual(
-            cchouse_mod.detect_vm_backend("vmware-linux", system="Windows", vmware_installed=True),
-            "vmware",
-        )
-        self.assertEqual(
-            cchouse_mod.detect_vm_backend("vmware-linux", system="Windows", vmware_installed=False),
-            "virtualbox",
-        )
+    def test_windows_auto_uses_virtualbox_even_with_vmware_installed(self):
+        with mock.patch.object(cchouse_mod, "vmware_present", return_value=True) as vmware:
+            self.assertEqual(cchouse_mod.detect_vm_backend("vmware-linux", system="Windows"), "virtualbox")
+        vmware.assert_not_called()
+
+    def test_windows_auto_refuses_to_reuse_vmware_install_state(self):
+        with tempfile.TemporaryDirectory() as td:
+            private = Path(td) / "cc05"
+            private.mkdir()
+            state = private / "state.json"
+            original = json.dumps({"vm_created_by_up": True, "vm_backend": "vmware", "vm_name": "claude-cc05"})
+            state.write_text(original, encoding="utf-8")
+            args = types.SimpleNamespace(
+                tag="cc05", route="auto", private_dir=str(private), cache_dir=str(Path(td) / "cache"),
+                dry_run=False, vm_backend="auto",
+            )
+            with mock.patch.object(cchouse_mod.platform, "system", return_value="Windows"), \
+                    mock.patch.object(cchouse_mod, "run_pipeline") as pipeline, \
+                    self.assertRaisesRegex(SystemExit, "请使用新的 --tag"):
+                cchouse_mod.cmd_up(args)
+            pipeline.assert_not_called()
+            self.assertEqual(state.read_text(encoding="utf-8"), original)
 
     def test_other_hosts_stay_on_their_routes(self):
         self.assertEqual(cchouse_mod.detect_vm_backend("tart-linux", system="Darwin"), "tart")
-        self.assertEqual(cchouse_mod.detect_vm_backend("tart-linux", system="Windows", vmware_installed=False), "manual")
-        self.assertEqual(cchouse_mod.detect_vm_backend("vmware-linux", system="Darwin", vmware_installed=False), "manual")
-        self.assertEqual(cchouse_mod.detect_vm_backend("vmware-linux", system="Linux", vmware_installed=False), "manual")
+        self.assertEqual(cchouse_mod.detect_vm_backend("tart-linux", system="Windows"), "manual")
+        self.assertEqual(cchouse_mod.detect_vm_backend("vmware-linux", system="Darwin"), "manual")
+        self.assertEqual(cchouse_mod.detect_vm_backend("vmware-linux", system="Linux"), "manual")
 
     def test_explicit_backend_is_not_overridden(self):
         with tempfile.TemporaryDirectory() as td:
@@ -291,7 +305,8 @@ class TestVirtualBoxScript(unittest.TestCase):
         self.assertLess(boot.find("Resolve-CchouseHostKeyTrust"), boot.find("Start-CchouseVmDetached"))
         self.assertLess(boot.find("Write-CchouseHostKeyTrustMark"), boot.find("Start-CchouseVmDetached"))
         self.assertIn("未经串口核对主机密钥", boot)
-        self.assertLess(boot.rfind("Test-CchouseOwnForward"), boot.rfind("Get-CchouseSshVerifyOptions"))
+        self.assertIn("Resolve-CchouseProbeDecision", boot)
+        self.assertLess(boot.index("Resolve-CchouseProbeDecision"), boot.index("Get-CchouseSshVerifyOptions"))
         delete = src.split("function Remove-CchouseVBoxVM", 1)[1].split("function New-CchouseVBoxSnapshot", 1)[0]
         self.assertLess(delete.find("poweroff"), delete.find("unregistervm"))
         self.assertIn("--delete", delete)

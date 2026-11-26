@@ -1,5 +1,5 @@
 # Function tests for scripts/vm-virtualbox.ps1.
-# Dot-source only. Do not install VirtualBox or call VBoxManage, ssh, or the installer.
+# Dot-source only. The native stderr test uses a fake VBoxManage command.
 $ErrorActionPreference = "Stop"
 $scriptPath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\scripts\vm-virtualbox.ps1"))
 . $scriptPath
@@ -61,26 +61,52 @@ $forward = @('Forwarding(0)="ssh,tcp,127.0.0.1,2301,,22"')
 Assert-True "forward 2301" (Test-CchouseForwardRule -Lines $forward -Port 2301)
 Assert-False "forward not 2222" (Test-CchouseForwardRule -Lines $forward -Port 2222)
 
-$uuid = "vbox-vm-cc01"
 $vmLines = @(
-  "UUID=`"$uuid`"",
   'name="claude-cc01"',
+  'VMState="running"',
   'Forwarding(0)="ssh,tcp,127.0.0.1,2301,,22"'
 )
-$ownCmd = "C:\Program Files\Oracle\VirtualBox\VBoxHeadless.exe --comment claude-cc01 --startvm $uuid"
-$otherCmd = "C:\Program Files\Oracle\VirtualBox\VBoxHeadless.exe --comment claude-cc02 --startvm vbox-vm-cc02"
-$sshdCmd = "C:\Windows\System32\OpenSSH\sshd.exe -p 2301"
-Assert-True "own listener" (Test-CchouseListenerCommand -CommandLine $ownCmd -VmUuid $uuid -VmName "claude-cc01")
-Assert-False "other vm" (Test-CchouseListenerCommand -CommandLine $otherCmd -VmUuid $uuid -VmName "claude-cc01")
-Assert-False "sshd" (Test-CchouseListenerCommand -CommandLine $sshdCmd -VmUuid $uuid -VmName "claude-cc01")
-Assert-True "own forward" (Test-CchouseOwnForward -Lines $vmLines -Port 2301 -ListenerCommand $ownCmd)
-Assert-False "wrong port is not this vm" (Test-CchouseOwnForward -Lines $vmLines -Port 2222 -ListenerCommand $ownCmd)
-Assert-False "foreign listener" (Test-CchouseOwnForward -Lines $vmLines -Port 2301 -ListenerCommand $otherCmd)
-Assert-Equal "probe own" (Resolve-CchouseProbeDecision -Lines $vmLines -Port 2301 -ListenerCommand $ownCmd -ListenerPresent:$true) "probe"
-Assert-Equal "wait if silent" (Resolve-CchouseProbeDecision -Lines $vmLines -Port 2301 -ListenerPresent:$false) "wait"
-Assert-Equal "reject foreign" (Resolve-CchouseProbeDecision -Lines $vmLines -Port 2301 -ListenerCommand $sshdCmd -ListenerPresent:$true) "reject"
-Assert-Equal "reject unreadable" (Resolve-CchouseProbeDecision -Lines $vmLines -Port 2301 -ListenerCommand "" -ListenerPresent:$true) "reject"
-Assert-Equal "reject wrong rule" (Resolve-CchouseProbeDecision -Lines $vmLines -Port 2222 -ListenerCommand $ownCmd -ListenerPresent:$true) "reject"
+& {
+  $installDir = Join-Path ([System.IO.Path]::GetTempPath()) "VirtualBox"
+  $probeArgs = @{
+    Name = "claude-cc01"
+    Lines = $vmLines
+    Port = 2301
+    VBoxManage = Join-Path $installDir "VBoxManage.exe"
+  }
+  $connection = [pscustomobject]@{ OwningProcess = 1234 }
+  $process = [pscustomobject]@{ CommandLine = $null; Path = Join-Path $installDir "VBoxHeadless.exe" }
+  $log = [pscustomobject]@{ ExitCode = 0; Output = @("00:00:00.399544 Process ID: 1234") }
+  function Get-NetTCPConnection { if ($null -ne $connection) { return $connection } }
+  function Get-CimInstance { return $process }
+  function Get-Process { return $process }
+  function Invoke-CchouseVBoxOptional {
+    param([string[]]$CcArgumentList)
+    Assert-Equal "log for requested VM" ($CcArgumentList -join " ") "showvminfo claude-cc01 --log=0"
+    return $log
+  }
+
+  Assert-Equal "probe when CommandLine is empty and log PID matches" (Resolve-CchouseProbeDecision @probeArgs) "probe"
+  $connection.OwningProcess = 4321
+  Assert-Equal "reject mismatched PID even with a VirtualBox executable" (Resolve-CchouseProbeDecision @probeArgs) "reject"
+  $connection.OwningProcess = 1234
+  $probeArgs.Port = 2222
+  Assert-Equal "reject wrong forward rule despite matching PID" (Resolve-CchouseProbeDecision @probeArgs) "reject"
+  $probeArgs.Port = 2301
+  $probeArgs.Name = "claude-cc02"
+  Assert-Equal "reject wrong VM name" (Resolve-CchouseProbeDecision @probeArgs) "reject"
+  $probeArgs.Name = "claude-cc01"
+  $log.ExitCode = 1
+  Assert-Equal "probe installed VBoxHeadless when log is unavailable" (Resolve-CchouseProbeDecision @probeArgs) "probe"
+  $process.Path = Join-Path $installDir "VirtualBoxVM.exe"
+  Assert-Equal "probe installed VirtualBoxVM when log is unavailable" (Resolve-CchouseProbeDecision @probeArgs) "probe"
+  $process.Path = Join-Path ([System.IO.Path]::GetTempPath()) "VBoxHeadless.exe"
+  Assert-Equal "reject VBoxHeadless outside installation directory" (Resolve-CchouseProbeDecision @probeArgs) "reject"
+  $process.Path = $null
+  Assert-Equal "reject unreadable executable path" (Resolve-CchouseProbeDecision @probeArgs) "reject"
+  $connection = $null
+  Assert-Equal "wait for an unbound port" (Resolve-CchouseProbeDecision @probeArgs) "wait"
+}
 
 Assert-Throws "empty sha" { Install-CchouseVirtualBox -Installer "C:\no-such-vbox-installer.exe" -ExpectedSha "" } "CcSha256"
 Assert-Throws "short sha" { Install-CchouseVirtualBox -Installer "C:\no-such-vbox-installer.exe" -ExpectedSha "abcd" } "CcSha256"
@@ -119,7 +145,7 @@ Assert-False "no strict no" $src.Contains("StrictHostKeyChecking=no")
 Assert-True "deadline symbol" $src.Contains("CchouseSshWaitSeconds")
 Assert-True "loads hostkey helper" $src.Contains("windows-hostkey.ps1")
 $bootVb = $src.Split("function Invoke-CchouseVBoxBoot")[1].Split("function New-CchouseVBoxSnapshot")[0]
-$ownAt = $bootVb.LastIndexOf("Test-CchouseOwnForward")
+$ownAt = $bootVb.IndexOf("Resolve-CchouseProbeDecision")
 $verifyAt = $bootVb.LastIndexOf("Get-CchouseSshVerifyOptions")
 Assert-True "ownership before recording ssh" (($ownAt -ge 0) -and ($verifyAt -gt $ownAt))
 Assert-True "trust mark before start" ($bootVb.IndexOf("Write-CchouseHostKeyTrustMark") -lt $bootVb.IndexOf("Start-CchouseVmDetached"))
@@ -170,6 +196,25 @@ $tmp = Join-Path ([System.IO.Path]::GetTempPath()) "cchouse-hostkey-fn"
 if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force }
 New-Item -ItemType Directory -Path $tmp | Out-Null
 try {
+  if ($env:OS -eq "Windows_NT") {
+    $fakeVBox = Join-Path $tmp "VBoxManage.cmd"
+    [System.IO.File]::WriteAllLines($fakeVBox, @(
+      "@echo off",
+      'if "%2"=="test-registered" exit /b 0',
+      "echo VM not registered 1>&2",
+      "exit /b 1"
+    ), [System.Text.Encoding]::ASCII)
+    $oldVBox = $env:CCHOUSE_VBOXMANAGE
+    $env:CCHOUSE_VBOXMANAGE = $fakeVBox
+    try {
+      Assert-False "native stderr and exit 1 mean VM is unregistered" (Test-CchouseVmRegistered "test-unregistered")
+      Assert-True "native exit 0 means VM is registered" (Test-CchouseVmRegistered "test-registered")
+      Assert-Equal "optional VBoxManage calls preserve caller preference" $ErrorActionPreference "Stop"
+    } finally {
+      $env:CCHOUSE_VBOXMANAGE = $oldVBox
+    }
+  }
+
   $serial = Join-Path $tmp "logs\hostkey.serial"
   Initialize-CchouseHostKeyLog -Path $serial
   Assert-Equal "created empty" ([System.IO.File]::ReadAllText($serial)) ""

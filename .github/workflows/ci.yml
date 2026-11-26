@@ -43,6 +43,10 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: pwsh -NoProfile -File tests/vm-virtualbox.Tests.ps1
+      - name: VirtualBox Windows PowerShell 5.1 tests
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/vm-virtualbox.Tests.ps1
 
   lint:
     name: shell & powershell lint (ubuntu-latest)
