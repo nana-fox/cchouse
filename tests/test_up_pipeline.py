@@ -380,8 +380,9 @@ class TestUpPipeline(unittest.TestCase):
             self.assertFalse(ctx.rendered.exists())
             text = out.getvalue()
             self.assertIn("导入/克隆黄金镜像", text)
+            self.assertIn("原样重跑首页安装命令", text)
             self.assertIn("会从这一步继续", text)
-            self.assertIn("scripts/doctor.py", text)
+            self.assertIn(os.path.join("scripts", "doctor.py"), text)
             self.assertIn("耗时表", text)
             if os.name != "nt":
                 self.assertEqual(os.stat(ctx.state_path).st_mode & 0o777, 0o600)
@@ -489,6 +490,24 @@ class TestUpPipeline(unittest.TestCase):
             self.assertEqual(run.call_args.args[0][-2:], ["exists", ctx.vm_name])
             self.assertFalse(ctx.state.get("vm_created_by_up"))
             self.assertFalse(ctx.state_path.exists())
+
+    def test_tart_reimport_refuses_unverifiable_state_without_identity_or_mac(self):
+        with tempfile.TemporaryDirectory() as td:
+            ctx = _ctx(td)
+            pinned = str((Path(td) / "pinned-tart").resolve())
+            ctx.tart_bin = pinned
+            ctx.state["vm_created_by_up"] = True
+            ctx.state["tart_bin"] = pinned
+            with mock.patch.object(cchouse_mod.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run, \
+                    mock.patch.object(ctx, "tart") as tart_op:
+                with self.assertRaises(cchouse_mod.StepError) as cm:
+                    cchouse_mod.step_import(ctx)
+            msg = str(cm.exception)
+            self.assertIn("无法核验", msg)
+            self.assertIn(f'"{pinned}" list', msg)
+            self.assertIn(f'"{pinned}" delete "{ctx.vm_name}"', msg)
+            run.assert_called_once()
+            tart_op.assert_not_called()
 
     def test_failed_fresh_clone_leaves_no_ownership_marker(self):
         with tempfile.TemporaryDirectory() as td:

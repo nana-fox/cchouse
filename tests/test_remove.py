@@ -52,6 +52,7 @@ class TestRemove(unittest.TestCase):
             "tag": "cc01", "private_dir": str(self.private), "cache_dir": str(self.cache),
             "route": "tart-linux", "vm_backend": "tart", "vm_created_by_up": True,
             "vm_name": self.vm_name, "clean_snapshot": self.snapshot, "golden_name": self.golden,
+            "tart_vm_mac": "02:cc:00:00:00:01", "tart_snapshot_mac": "02:cc:00:00:00:02",
             "step": "up:done", "status": "DONE",
         }
         state.update(overrides)
@@ -61,6 +62,9 @@ class TestRemove(unittest.TestCase):
         if cmd[:2] == ["tart", "list"]:
             self.assertEqual(cmd, ["tart", "list", "--source", "local", "--format", "json"])
             return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(list(self.inventory.values())))
+        if len(cmd) >= 4 and cmd[1] == "get" and "--format" in cmd:
+            macs = {self.vm_name: "02:cc:00:00:00:01", self.snapshot: "02:cc:00:00:00:02"}
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"MAC": macs.get(cmd[2], "")}))
         if cmd[0] in ("tart", "bash"):
             self.assertEqual(cmd[-2], "delete")
             del self.inventory[cmd[-1]]
@@ -144,14 +148,31 @@ class TestRemove(unittest.TestCase):
                 self.assertIn(self.vm_name, self.inventory)
         self.mock_run.assert_not_called()
 
-    def test_legacy_tart_uses_recorded_clean_clone_name(self):
-        state = {"step": "up:done", "route": "tart-linux", "vm_created_by_up": True, "clean_snapshot": self.snapshot}
+    def test_legacy_tart_without_identity_or_mac_refuses_delete_and_prints_manual_cleanup(self):
+        pinned = str((self.root / "bootstrap" / "tools" / "tart-2.42.0" / "Contents" / "MacOS" / "tart").resolve())
+        state = {
+            "step": "up:done", "route": "tart-linux", "vm_created_by_up": True,
+            "clean_snapshot": self.snapshot, "tart_bin": pinned,
+        }
         (self.private / "state.json").write_text(json.dumps(state), encoding="utf-8")
+        deleted = []
+
+        def list_only(cmd, **kwargs):
+            if cmd[:2] == [pinned, "list"]:
+                return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(list(self.inventory.values())))
+            deleted.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0)
+
+        self.mock_run.side_effect = list_only
         rc, text = self.remove(yes=True)
-        self.assertEqual(rc, 0, text)
-        self.assertNotIn(self.vm_name, self.inventory)
-        self.assertNotIn(self.snapshot, self.inventory)
-        self.assertTrue(self.image.is_file())
+        self.assertNotEqual(rc, 0, text)
+        self.assertEqual(deleted, [])
+        self.assertIn(self.vm_name, self.inventory)
+        self.assertIn(self.snapshot, self.inventory)
+        self.assertTrue(self.private.exists())
+        self.assertIn("无法核验", text)
+        self.assertIn(f'"{pinned}" list', text)
+        self.assertIn(f'"{pinned}" delete "{self.vm_name}"', text)
 
     def test_without_ownership_does_not_remove_same_named_tart_vms(self):
         self.write_state(vm_created_by_up=False)
@@ -171,6 +192,7 @@ class TestRemove(unittest.TestCase):
         self.assertIn("unregistervm --delete", text)
         self.assertIn(self.vm_name, text)
         self.assertIn("先关机", text)
+        self.assertNotIn("Tart 黄金镜像", text)
         self.assertFalse(self.private.exists())
         self.assertEqual(self.mock_run.call_count, 1)
         cmd = self.mock_run.call_args.args[0]
@@ -276,6 +298,88 @@ class TestRemove(unittest.TestCase):
             self.assertNotEqual(rc, 0)
             self.assertTrue(self.private.exists())
         self.mock_run.assert_not_called()
+
+    def test_tart_remove_uses_pinned_tart_bin_and_prints_full_path_hint(self):
+        pinned = str((self.root / "bootstrap" / "tools" / "tart-2.42.0" / "Contents" / "MacOS" / "tart").resolve())
+        self.write_state(tart_bin=pinned)
+        seen_cmds = []
+        seen_envs = []
+
+        def pinned_backend(cmd, **kwargs):
+            seen_cmds.append(cmd)
+            if "env" in kwargs:
+                seen_envs.append(kwargs["env"])
+            if cmd[:2] == [pinned, "list"]:
+                return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(list(self.inventory.values())))
+            if len(cmd) >= 4 and cmd[:2] == [pinned, "get"] and "--format" in cmd:
+                macs = {self.vm_name: "02:cc:00:00:00:01", self.snapshot: "02:cc:00:00:00:02"}
+                return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"MAC": macs.get(cmd[2], "")}))
+            if cmd[0] == "bash" and cmd[-2] == "delete":
+                del self.inventory[cmd[-1]]
+                return subprocess.CompletedProcess(cmd, 0)
+            self.fail(f"意外命令 {cmd}")
+
+        self.mock_run.side_effect = pinned_backend
+        rc, text = self.remove(yes=True)
+        self.assertEqual(rc, 0, text)
+        self.assertEqual(seen_cmds[0][0], pinned)
+        self.assertTrue(all(e.get("CCHOUSE_TART_BIN") == pinned for e in seen_envs))
+        self.assertIn(f'"{pinned}" delete "{self.golden}"', text)
+        self.assertIn("--purge-cache", text)
+
+    def test_tart_remove_rejects_when_checked_dir_differs_from_tart_actual_dir(self):
+        """构造校验目录与 tart 实际目录不同（包装脚本重定向或 MAC 不一致），断言拒绝删除。"""
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td).resolve()
+            dir_a = base / "iso-tart"
+            dir_b = base / "host-tart"
+            vm_a = dir_a / "vms" / self.vm_name
+            vm_b = dir_b / "vms" / self.vm_name
+            vm_a.mkdir(parents=True)
+            vm_b.mkdir(parents=True)
+            (vm_a / "config.json").write_text(json.dumps({"macAddress": "02:cc:00:00:00:aa"}), encoding="utf-8")
+            (vm_b / "config.json").write_text(json.dumps({"macAddress": "02:cc:00:00:00:bb"}), encoding="utf-8")
+            stat_a = vm_a.lstat()
+            id_a = [stat_a.st_dev, stat_a.st_ino]
+
+            # 情形 1：tart 是把 TART_HOME 强制指到 dir_b 的包装脚本，环境变量 TART_HOME 指到 dir_a
+            wrapper_b = base / "wrapper-tart"
+            wrapper_b.write_text(f'#!/bin/sh\nexport TART_HOME="{dir_b}"\nexec /bin/true "$@"\n', encoding="utf-8")
+            wrapper_b.chmod(0o700)
+
+            deleted = []
+
+            def fake_tart_b(cmd, **kwargs):
+                if len(cmd) >= 2 and cmd[1] == "list":
+                    return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps([
+                        {"Name": self.vm_name, "Size": 3, "Running": False},
+                    ]))
+                if len(cmd) >= 3 and cmd[1] == "get" and "--format" in cmd:
+                    return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"MAC": "02:cc:00:00:00:bb"}))
+                if "delete" in cmd:
+                    deleted.append(cmd)
+                return subprocess.CompletedProcess(cmd, 0)
+
+            self.mock_run.side_effect = fake_tart_b
+            with mock.patch.dict(os.environ, {"TART_HOME": str(dir_a)}):
+                self.write_state(tart_bin=str(wrapper_b), tart_vm_identity=id_a)
+                rc, text = self.remove(yes=True)
+                self.assertEqual(rc, 1, text)
+                self.assertIn("无法确认归属", text)
+                self.assertEqual(deleted, [])
+
+                # 情形 2：不透明二进制（无法从脚本解析 TART_HOME，tart_home_dir 仍看 dir_a），但 tart get 返回 dir_b 的 MAC
+                opaque_tart = base / "opaque-tart"
+                opaque_tart.write_bytes(b"\x00\x01\x02opaque-binary")
+                opaque_tart.chmod(0o700)
+                for extra in ({"tart_vm_mac": "02:cc:00:00:00:aa"}, {}):
+                    with self.subTest(extra=extra):
+                        self.write_state(tart_bin=str(opaque_tart), tart_vm_identity=id_a, **extra)
+                        rc2, text2 = self.remove(yes=True)
+                        self.assertEqual(rc2, 1, text2)
+                        self.assertIn("无法确认归属", text2)
+                        self.assertEqual(deleted, [])
+                        self.assertTrue(self.private.exists())
 
 
 @unittest.skipIf(os.name == "nt", "requires Bash wrapper")

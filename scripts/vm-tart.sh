@@ -21,33 +21,51 @@
 #   delete    <VM>
 
 CCHOUSE_TART_PID=""
+CCHOUSE_TART_CMD=""
 
-cchouse_ensure_tart_in_path() {
+cchouse_resolve_tart() {
+  if [ -n "${CCHOUSE_TART_BIN:-}" ]; then
+    if [ ! -x "$CCHOUSE_TART_BIN" ]; then
+      echo "Pinned tart binary not found or not executable: $CCHOUSE_TART_BIN" >&2
+      return 1
+    fi
+    CCHOUSE_TART_CMD="$CCHOUSE_TART_BIN"
+    return 0
+  fi
   if command -v tart >/dev/null 2>&1; then
+    CCHOUSE_TART_CMD="$(command -v tart)"
     return 0
   fi
   local cand
   for cand in "$HOME/.local/bin/tart" "/opt/homebrew/bin/tart"; do
     if [ -x "$cand" ]; then
-      PATH="$(dirname "$cand"):$PATH"
-      export PATH
+      CCHOUSE_TART_CMD="$cand"
       return 0
     fi
   done
   for cand in "$HOME/Library/Application Support/cchouse/bootstrap/tools"/tart-*/Contents/MacOS/tart; do
     if [ -x "$cand" ]; then
-      PATH="$(dirname "$cand"):$PATH"
-      export PATH
+      CCHOUSE_TART_CMD="$cand"
       return 0
     fi
   done
+  CCHOUSE_TART_CMD="tart"
   return 0
 }
 
-cchouse_ensure_tart_in_path
+cchouse_ensure_tart_in_path() {
+  cchouse_resolve_tart
+}
+
+cchouse_tart() {
+  if [ -z "$CCHOUSE_TART_CMD" ]; then
+    cchouse_resolve_tart || return 1
+  fi
+  "$CCHOUSE_TART_CMD" "$@"
+}
 
 cchouse_tart_ip() {
-  tart ip "$1" --wait 2 2>/dev/null || tart ip --resolver=arp "$1" --wait 2 2>/dev/null || true
+  cchouse_tart ip "$1" --wait 2 2>/dev/null || cchouse_tart ip --resolver=arp "$1" --wait 2 2>/dev/null || true
 }
 
 # cchouse_tart_ssh <SSH_KEY> <IP> <CMD> — 首启/开机探测用，不信任主机公钥（尚未写 known_hosts）
@@ -58,7 +76,7 @@ cchouse_tart_ssh() {
 }
 
 cchouse_tart_exists() {
-  tart get "$1" >/dev/null 2>&1
+  cchouse_tart get "$1" >/dev/null 2>&1
 }
 
 cchouse_tart_import() {
@@ -69,24 +87,25 @@ cchouse_tart_import() {
   fi
   [ -f "$tvm" ] || { echo "TVM not found: $tvm"; return 1; }
   echo "Importing $tvm -> $vm..."
-  tart import "$tvm" "$vm"  # tart import <path> <name>
+  cchouse_tart import "$tvm" "$vm"  # tart import <path> <name>
 }
 
 cchouse_tart_clone() {
   local src="$1" dst="$2"
   if cchouse_tart_exists "$dst"; then
-    tart stop "$dst" >/dev/null 2>&1 || true
-    tart delete "$dst" || return 1
+    cchouse_tart stop "$dst" >/dev/null 2>&1 || true
+    cchouse_tart delete "$dst" || return 1
   fi
   echo "Cloning $src -> $dst..."
-  tart clone "$src" "$dst"
+  cchouse_tart clone "$src" "$dst"
 }
 
 cchouse_tart_firstboot() {
   local vm="$1" iso="$2" key="$3" runlog="${4:-/dev/null}" tries="${CCHOUSE_FIRSTBOOT_TRIES:-30}"
   local ip="" done_ok=0 i
   [ -f "$iso" ] || { echo "seed.iso not found: $iso"; return 1; }
-  tart run --no-graphics --disk "$iso:ro" "$vm" >"$runlog" 2>&1 &
+  cchouse_resolve_tart || return 1
+  cchouse_tart run --no-graphics --disk "$iso:ro" "$vm" >"$runlog" 2>&1 &
   CCHOUSE_TART_PID=$!
   echo "Started firstboot VM (pid=$CCHOUSE_TART_PID), waiting for injection..."
   for i in $(seq 1 "$tries"); do
@@ -102,7 +121,7 @@ cchouse_tart_firstboot() {
       break
     fi
   done
-  tart stop "$vm" || true
+  cchouse_tart stop "$vm" || true
   wait "$CCHOUSE_TART_PID" 2>/dev/null || true
   CCHOUSE_TART_PID=""
   if [ "$done_ok" = "0" ]; then
@@ -114,7 +133,8 @@ cchouse_tart_firstboot() {
 cchouse_tart_boot() {
   local vm="$1" key="$2" kh="$3" ip_file="$4" runlog="${5:-/dev/null}" tries="${CCHOUSE_BOOT_TRIES:-40}"
   local ip="" ssh_ok=0 i w
-  nohup tart run --no-graphics "$vm" >"$runlog" 2>&1 &
+  cchouse_resolve_tart || return 1
+  nohup "$CCHOUSE_TART_CMD" run --no-graphics "$vm" >"$runlog" 2>&1 &
   CCHOUSE_TART_PID=$!
   echo "Started networked VM (pid=$CCHOUSE_TART_PID), waiting for IP + SSH..."
   for i in $(seq 1 "$tries"); do
@@ -153,16 +173,17 @@ cchouse_tart_boot() {
 
 cchouse_tart_gui() {
   local vm="$1" runlog="${2:-/dev/null}"
-  nohup tart run "$vm" >"$runlog" 2>&1 &
+  cchouse_resolve_tart || return 1
+  nohup "$CCHOUSE_TART_CMD" run "$vm" >"$runlog" 2>&1 &
   CCHOUSE_TART_PID=$!
   echo "Started $vm with graphics (pid=$CCHOUSE_TART_PID)."
 }
 
 cchouse_tart_stop() {
   local vm="$1" local_vms i
-  tart stop "$vm" >/dev/null 2>&1 || true
+  cchouse_tart stop "$vm" >/dev/null 2>&1 || true
   for i in $(seq 1 15); do
-    local_vms="$(tart list --source local)" || return 1
+    local_vms="$(cchouse_tart list --source local)" || return 1
     printf '%s\n' "$local_vms" | awk -v n="$vm" '$2 == n && $NF == "running" {f=1} END {exit !f}' || return 0
     sleep 2
   done
@@ -174,10 +195,10 @@ cchouse_tart_snapshot() {
   local vm="$1" snap="$2"
   cchouse_tart_stop "$vm" || return 1
   if cchouse_tart_exists "$snap"; then
-    tart delete "$snap" || return 1
+    cchouse_tart delete "$snap" || return 1
   fi
   echo "Saving clean snapshot $vm -> $snap..."
-  tart clone "$vm" "$snap"
+  cchouse_tart clone "$vm" "$snap"
 }
 
 cchouse_tart_status() {
@@ -186,7 +207,7 @@ cchouse_tart_status() {
     echo "missing"
     return 0
   fi
-  local_vms="$(tart list --source local 2>/dev/null || true)"
+  local_vms="$(cchouse_tart list --source local 2>/dev/null || true)"
   state="$(printf '%s\n' "$local_vms" | awk -v n="$vm" '$2 == n {print $NF; exit}')"
   if [ "$state" = "running" ]; then
     echo "running"
@@ -217,23 +238,24 @@ cchouse_tart_restore() {
   fi
   if cchouse_tart_exists "$vm"; then
     cchouse_tart_stop "$vm" || return 1
-    tart delete "$vm" || return 1
+    cchouse_tart delete "$vm" || return 1
   fi
   echo "Restoring $vm from clean snapshot $snap..."
-  tart clone "$snap" "$vm"
+  cchouse_tart clone "$snap" "$vm"
 }
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
   set -uo pipefail
   op="${1:-}"
   [ $# -gt 0 ] && shift
+  cchouse_resolve_tart || exit 1
   case "$op" in
     exists) cchouse_tart_exists "$@" ;;
     status) cchouse_tart_status "$@" ;;
     import) cchouse_tart_import "$@" ;;
-    import-new) tart import "$2" "$1" ;;
+    import-new) cchouse_tart import "$2" "$1" ;;
     clone) cchouse_tart_clone "$@" ;;
-    clone-new) tart clone "$1" "$2" ;;
+    clone-new) cchouse_tart clone "$1" "$2" ;;
     firstboot) cchouse_tart_firstboot "$@" ;;
     boot) cchouse_tart_boot "$@" ;;
     gui) cchouse_tart_gui "$@" ;;
@@ -241,8 +263,8 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     stop) cchouse_tart_stop "$@" ;;
     restore) cchouse_tart_restore "$@" ;;
     snapshot) cchouse_tart_snapshot "$@" ;;
-    snapshot-new) cchouse_tart_stop "$1" && tart clone "$1" "$2" ;;
-    delete) cchouse_tart_stop "$1" && tart delete "$1" ;;
+    snapshot-new) cchouse_tart_stop "$1" && cchouse_tart clone "$1" "$2" ;;
+    delete) cchouse_tart_stop "$1" && cchouse_tart delete "$1" ;;
     *) echo "Usage: $0 exists|status|import|import-new|clone|clone-new|firstboot|boot|gui|open|stop|restore|snapshot|snapshot-new|delete ..." >&2; exit 2 ;;
   esac
 fi

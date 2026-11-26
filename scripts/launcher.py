@@ -82,7 +82,7 @@ def install_cli_entry(python_exe=None, repo_root=None, home=None, platform_name=
     tart_dir = _private_tart_bin_dir(base)
     tart_line = ""
     if tart_dir is not None:
-        tart_line = f'command -v tart >/dev/null 2>&1 || export PATH={shlex.quote(str(tart_dir))}:"$PATH"\n'
+        tart_line = f'export PATH={shlex.quote(str(tart_dir))}:"$PATH"\n'
     script = (
         "#!/bin/bash\n"
         "# Managed by cchouse\n"
