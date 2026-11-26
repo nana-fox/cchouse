@@ -1,24 +1,22 @@
 param(
-  [Parameter(Mandatory=$true)][ValidateSet("clone","firstboot","reboot","verify","desktop","cleanup")] [string]$Action,
+  [Parameter(Mandatory=$true)][ValidateSet("import","firstboot","reboot","verify","desktop","cleanup")] [string]$Action,
   [Parameter(Mandatory=$true)][string]$RunDir,
   [Parameter(Mandatory=$true)][string]$VmName,
-  [string]$Mode = "fast",
   [string]$OvaPath = "",
-  [string]$BaseVmx = "",
+  [int]$SshPort = 0,
   [string]$Tag = "e2egtr",
   [string]$StripeMode = "front"
 )
 
 $ErrorActionPreference = "Stop"
-# VM lifecycle helpers shared with scripts/cchouse.py up (uploaded next to this script by run-gtr.sh)
-. (Join-Path $PSScriptRoot "vm-vmware.ps1")
-$vmr = Get-CchouseVmrun
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+. (Join-Path $PSScriptRoot "vm-virtualbox.ps1")
 $vmDir = Join-Path $RunDir "vm"
-$vmx = Join-Path $vmDir "$VmName\$VmName.vmx"
 $keyPath = Join-Path $RunDir "id_ed25519"
 $khPath = Join-Path $RunDir "known_hosts"
+$hostKeyLog = Join-Path $RunDir "logs\hostkey.serial"
 $ipFile = Join-Path $RunDir "guest_ip.txt"
-$hostKeyLog = Join-Path $RunDir "hostkey.serial"
+$seedIso = Join-Path $RunDir "seed.iso"
 
 function Find-GitBash {
   foreach ($p in @(
@@ -33,86 +31,62 @@ function Find-GitBash {
   throw "Git Bash not found on GTR"
 }
 
+if ($VmName -notmatch '^claude-gtr-[0-9]{10}$') { throw "Invalid GTR test VM name" }
 switch ($Action) {
-  "clone" {
-    Fix-KeyAcl $keyPath
-    New-Item -ItemType Directory -Force -Path $vmDir | Out-Null
-    if ($Mode -eq "release") {
-      Import-CchouseOva $OvaPath $VmName $vmDir
-    } else {
-      $needBase = $true
-      if (Test-Path $BaseVmx) {
-        if ((Test-Path $OvaPath) -and ((Get-Item $OvaPath).LastWriteTimeUtc -gt (Get-Item $BaseVmx).LastWriteTimeUtc)) {
-          Write-Host "OVA is newer than cached base VM; re-importing base VM..."
-          $baseParent = Split-Path (Split-Path $BaseVmx -Parent) -Parent
-          Remove-Item -Recurse -Force $baseParent -ErrorAction SilentlyContinue
-        } else {
-          $needBase = $false
-        }
-      }
-      if ($needBase) {
-        $baseName = [System.IO.Path]::GetFileNameWithoutExtension($BaseVmx)
-        $baseParent = Split-Path (Split-Path $BaseVmx -Parent) -Parent
-        Import-CchouseOva $OvaPath $baseName $baseParent
-        # Create a snapshot on base VM for fast linked clones
-        & $vmr -T ws snapshot $BaseVmx "golden-base"
-        if ($LASTEXITCODE -ne 0) { throw "vmrun base snapshot failed" }
-      }
-      Write-Host "Creating linked clone: $BaseVmx -> $vmx..."
-      & $vmr -T ws clone $BaseVmx $vmx linked -snapshot="golden-base" -cloneName=$VmName
-      if ($LASTEXITCODE -ne 0) {
-        # Fallback without explicit snapshot name
-        & $vmr -T ws clone $BaseVmx $vmx linked -cloneName=$VmName
-        if ($LASTEXITCODE -ne 0) { throw "vmrun linked clone failed" }
-      }
-    }
-    if (-not (Test-Path $vmx)) { throw "Expected VMX not found: $vmx" }
-    Write-Host "VMX_READY=$vmx"
+  "import" {
+    if (Test-CchouseVmRegistered $VmName) { throw "GTR test VM already exists" }
+    Import-CchouseVBoxOva -OvaPath $OvaPath -Name $VmName -DestDir $vmDir -SshPort $SshPort -HostKeyLog $hostKeyLog
   }
 
   "firstboot" {
-    Invoke-CchouseFirstboot $vmx (Join-Path $RunDir "seed.iso") 55 $hostKeyLog
+    Invoke-CchouseVBoxFirstboot -Name $VmName -SeedIso $seedIso -Seconds 56 -HostKeyLog $hostKeyLog
   }
 
   "reboot" {
-    $ip = Invoke-CchouseBoot $vmx (Join-Path $RunDir "seed.iso") $keyPath $khPath $ipFile $hostKeyLog
-    $envFile = Join-Path $RunDir "gtr-verify.env"
-    Add-Content -Path $envFile -Value "`nGUEST_IP=$ip" -Encoding UTF8
+    Invoke-CchouseVBoxBoot -Name $VmName -SeedIso $seedIso -KeyPath $keyPath -KnownHostsPath $khPath `
+      -IpFile $ipFile -SshPort $SshPort -HostKeyLog $hostKeyLog
   }
 
   "verify" {
     $bash = Find-GitBash
     $verifySh = (Join-Path $RunDir "verify-linux.sh") -replace '\\', '/'
     $envPath = (Join-Path $RunDir "gtr-verify.env") -replace '\\', '/'
-    # Prefer Windows OpenSSH (same client verified in reboot step) over MSYS ssh
     $env:PATH = "C:\Windows\System32\OpenSSH;$env:PATH"
     & $bash "$verifySh" "$envPath" --fail-closed
     exit $LASTEXITCODE
   }
 
   "desktop" {
-    $ip = (Get-Content $ipFile -Raw).Trim()
-    Fix-KeyAcl $keyPath
-    $sshOpts = @("-F","none","-i",$keyPath,"-o","StrictHostKeyChecking=yes","-o","UserKnownHostsFile=$khPath","-o","BatchMode=yes","-o","ConnectTimeout=10")
+    $verify = @(Get-CchouseSshVerifyOptions -KnownHostsPath $khPath -Pinned:$true)
+    $sshOpts = @("-F", "none", "-p", "$SshPort", "-i", $keyPath) + $verify
+    $scpOpts = @("-F", "none", "-P", "$SshPort", "-i", $keyPath) + $verify
+    $target = "claude@127.0.0.1"
+    $scp = Join-Path (Split-Path $script:CchouseSystem32Ssh -Parent) "scp.exe"
     $localCheck = Join-Path $RunDir "guest-checks.sh"
     $raw = (Get-Content $localCheck -Raw) -replace "`r`n", "`n"
     [System.IO.File]::WriteAllText($localCheck, $raw, [System.Text.UTF8Encoding]::new($false))
-    & scp.exe @sshOpts $localCheck "claude@${ip}:/tmp/guest-checks.sh"
-    if ($LASTEXITCODE -ne 0) { throw "scp guest-checks.sh failed" }
-    & ssh.exe @sshOpts "claude@$ip" "bash /tmp/guest-checks.sh '$Tag' '$StripeMode'"
-    $rc = $LASTEXITCODE
-    & scp.exe @sshOpts "claude@${ip}:/tmp/cchouse-desktop.xwd.gz" (Join-Path $RunDir "desktop.xwd.gz")
-    if ($LASTEXITCODE -ne 0) { $rc = 1 }
-    exit $rc
+    Invoke-CchouseNativeChecked -FilePath $scp -ArgumentList ($scpOpts + @($localCheck, "${target}:/tmp/guest-checks.sh")) `
+      -FailureMessage "scp guest-checks.sh failed"
+    $check = Invoke-CchouseNative -FilePath $script:CchouseSystem32Ssh `
+      -ArgumentList ($sshOpts + @($target, "bash /tmp/guest-checks.sh '$Tag' '$StripeMode'")) -ShowStderr
+    $check.Output
+    Invoke-CchouseNativeChecked -FilePath $scp `
+      -ArgumentList ($scpOpts + @("${target}:/tmp/cchouse-desktop.xwd.gz", (Join-Path $RunDir "desktop.xwd.gz"))) `
+      -FailureMessage "scp desktop screenshot failed"
+    exit $check.ExitCode
   }
 
   "cleanup" {
-    if (Test-Path $vmx) {
-      & $vmr -T ws stop $vmx hard 2>$null | Out-Null
-      Start-Sleep 2
-      & $vmr -T ws deleteVM $vmx 2>$null | Out-Null
+    if (Test-CchouseVmRegistered $VmName) {
+      $info = @(Get-CchouseShowvminfoLines -Name $VmName)
+      $configs = @($info | Where-Object { $_ -like 'CfgFile=*' })
+      $expected = [IO.Path]::GetFullPath((Join-Path $vmDir "$VmName\$VmName.vbox"))
+      if ($configs.Count -ne 1 -or $configs[0].Substring(8).Trim('"').Replace('\\','\') -ine $expected) {
+        throw "Test VM configuration is outside the E2E run directory"
+      }
+      Remove-CchouseVBoxVM -Name $VmName
     }
-    Remove-Item -Recurse -Force $RunDir -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $RunDir -Recurse -Force
     Write-Host "CLEANUP_OK"
   }
 }

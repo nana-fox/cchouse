@@ -5,7 +5,7 @@
   "artifacts": [
     {
       "arch": "amd64",
-      "route": "vmware-linux",
+      "route": "virtualbox-linux",
       "format": "ova",
       "filename": "cchouse-debian13-amd64.ova",
       "size_bytes": 1584588800,

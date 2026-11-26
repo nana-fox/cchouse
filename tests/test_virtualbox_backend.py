@@ -54,10 +54,11 @@ class _Body:
 
 
 class TestVirtualBoxSelection(unittest.TestCase):
-    def test_windows_auto_uses_virtualbox_even_with_vmware_installed(self):
-        with mock.patch.object(cchouse_mod, "vmware_present", return_value=True) as vmware:
-            self.assertEqual(cchouse_mod.detect_vm_backend("vmware-linux", system="Windows"), "virtualbox")
-        vmware.assert_not_called()
+    def test_windows_auto_selects_virtualbox_route(self):
+        with mock.patch.object(cchouse_mod.platform, "system", return_value="Windows"):
+            route = cchouse_mod.detect_route()
+            self.assertEqual(route, "virtualbox-linux")
+            self.assertEqual(cchouse_mod.detect_vm_backend(route), "virtualbox")
 
     def test_windows_auto_refuses_to_reuse_vmware_install_state(self):
         with tempfile.TemporaryDirectory() as td:
@@ -77,39 +78,56 @@ class TestVirtualBoxSelection(unittest.TestCase):
             pipeline.assert_not_called()
             self.assertEqual(state.read_text(encoding="utf-8"), original)
 
+    def test_windows_auto_leaves_legacy_instance_with_only_saved_vm_path(self):
+        with tempfile.TemporaryDirectory() as td:
+            private = Path(td) / "cc05"
+            private.mkdir()
+            env = private / "instance.env"
+            original = 'VMX_PATH="C:/old/claude-cc05.vmx"\n'
+            env.write_text(original, encoding="utf-8")
+            args = types.SimpleNamespace(
+                tag="cc05", route="auto", private_dir=str(private), cache_dir=str(Path(td) / "cache"),
+                dry_run=False, vm_backend="auto",
+            )
+            with mock.patch.object(cchouse_mod.platform, "system", return_value="Windows"), \
+                    mock.patch.object(cchouse_mod, "run_pipeline") as pipeline, \
+                    self.assertRaisesRegex(SystemExit, "请使用新的 --tag"):
+                cchouse_mod.cmd_up(args)
+            pipeline.assert_not_called()
+            self.assertEqual(env.read_text(encoding="utf-8"), original)
+
     def test_other_hosts_stay_on_their_routes(self):
         self.assertEqual(cchouse_mod.detect_vm_backend("tart-linux", system="Darwin"), "tart")
         self.assertEqual(cchouse_mod.detect_vm_backend("tart-linux", system="Windows"), "manual")
-        self.assertEqual(cchouse_mod.detect_vm_backend("vmware-linux", system="Darwin"), "manual")
-        self.assertEqual(cchouse_mod.detect_vm_backend("vmware-linux", system="Linux"), "manual")
+        self.assertEqual(cchouse_mod.detect_vm_backend("virtualbox-linux", system="Darwin"), "manual")
+        self.assertEqual(cchouse_mod.detect_vm_backend("virtualbox-linux", system="Linux"), "manual")
 
     def test_explicit_backend_is_not_overridden(self):
         with tempfile.TemporaryDirectory() as td:
             private = Path(td) / "cc05"
             args = types.SimpleNamespace(
-                tag="cc05", route="vmware-linux", private_dir=str(private), cache_dir=str(Path(td) / "cache"),
+                tag="cc05", route="virtualbox-linux", private_dir=str(private), cache_dir=str(Path(td) / "cache"),
                 dry_run=True, config_only=False, reconfigure=False, no_probe=True, link_stdin=True,
                 non_interactive=True, timezone=None, expected_ip=None, image_mirror=None, npm_mirror=None,
-                vm_backend="vmware",
+                vm_backend="manual",
             )
-            ctx = cchouse_mod.UpContext(args, "cc05", "vmware-linux", private)
-            self.assertEqual(ctx.backend, "vmware")
+            ctx = cchouse_mod.UpContext(args, "cc05", "virtualbox-linux", private)
+            self.assertEqual(ctx.backend, "manual")
             self.assertIsNone(ctx.vbox_manifest)
 
-    def test_virtualbox_steps_do_not_call_vmware(self):
+    def test_virtualbox_steps_use_the_virtualbox_lifecycle(self):
         with tempfile.TemporaryDirectory() as td:
             private = Path(td) / "cc05"
             args = types.SimpleNamespace(
-                tag="cc05", route="vmware-linux", private_dir=str(private), cache_dir=str(Path(td) / "cache"),
+                tag="cc05", route="virtualbox-linux", private_dir=str(private), cache_dir=str(Path(td) / "cache"),
                 dry_run=True, config_only=False, reconfigure=False, no_probe=True, link_stdin=True,
                 non_interactive=True, timezone=None, expected_ip=None, image_mirror=None, npm_mirror=None,
                 vm_backend="virtualbox",
             )
-            ctx = cchouse_mod.UpContext(args, "cc05", "vmware-linux", private)
+            ctx = cchouse_mod.UpContext(args, "cc05", "virtualbox-linux", private)
             ctx.vbox_port_is_free = lambda _port: True
             calls = []
             ctx.virtualbox = lambda op, **kw: calls.append(("virtualbox", op, kw))
-            ctx.vmware = lambda op, **kw: calls.append(("vmware", op, kw))
             ctx.tart = lambda *a: calls.append(("tart", a))
             cchouse_mod.step_import(ctx)
             cchouse_mod.step_firstboot(ctx)
@@ -117,7 +135,6 @@ class TestVirtualBoxSelection(unittest.TestCase):
             cchouse_mod.step_snapshot(ctx)
             ops = [item[1] for item in calls if item[0] == "virtualbox"]
             self.assertEqual(ops, ["install", "import", "firstboot", "boot", "snapshot"])
-            self.assertFalse(any(item[0] == "vmware" for item in calls))
             imported = next(item for item in calls if item[1] == "import")
             booted = next(item for item in calls if item[1] == "boot")
             expected = str(cchouse_mod.vbox_preferred_ssh_port("cc05"))
@@ -197,19 +214,19 @@ class TestVirtualBoxSelection(unittest.TestCase):
         fields = _single_fields()
         with self.assertRaises(RuntimeError):
             cchouse_mod.format_instance_env(
-                "cc01", "vmware-linux", "/tmp/cc", "/tmp/k", "ssh-ed25519 AAAA x", fields, net, egress, backend="virtualbox",
+                "cc01", "virtualbox-linux", "/tmp/cc", "/tmp/k", "ssh-ed25519 AAAA x", fields, net, egress, backend="virtualbox",
             )
         vbox = cchouse_mod.format_instance_env(
-            "cc01", "vmware-linux", "/tmp/cc", "/tmp/k", "ssh-ed25519 AAAA x", fields, net, egress,
+            "cc01", "virtualbox-linux", "/tmp/cc", "/tmp/k", "ssh-ed25519 AAAA x", fields, net, egress,
             backend="virtualbox", ssh_port=2301,
         )
-        vmware = cchouse_mod.format_instance_env(
-            "cc01", "vmware-linux", "/tmp/cc", "/tmp/k", "ssh-ed25519 AAAA x", fields, net, egress, backend="vmware",
+        tart = cchouse_mod.format_instance_env(
+            "cc01", "tart-linux", "/tmp/cc", "/tmp/k", "ssh-ed25519 AAAA x", fields, net, egress, backend="tart",
         )
         self.assertIn("SSH_PORT=2301\n", vbox)
         self.assertIn("GUEST_IF=enp0s3\n", vbox)
-        self.assertNotIn("SSH_PORT=", vmware)
-        self.assertIn("GUEST_IF=ens33\n", vmware)
+        self.assertNotIn("SSH_PORT=", tart)
+        self.assertIn("GUEST_IF=enp0s1\n", tart)
         self.assertIn("ROUTER_IP=192.168.100.1\n", vbox)
 
 
@@ -318,26 +335,23 @@ class TestVirtualBoxScript(unittest.TestCase):
         self.assertLess(src.find("HARD_POWEROFF=1"), src.find("FIRSTBOOT_STOPPED=OK"))
         self.assertNotIn("Wait-CchousePowerOff $Name 20 | Out-Null", src)
 
-    def test_preflight_virtualbox_skips_missing_vmware(self):
-        self.assertEqual(preflight_mod.vmware_linux_host_errors(None, "virtualbox"), [])
-        self.assertTrue(any("MISSING_VMWARE" in err for err in preflight_mod.vmware_linux_host_errors(None, None)))
-        self.assertEqual(preflight_mod.vmware_linux_host_errors(r"C:\VMware\vmrun.exe", "vmware"), [])
-        self.assertFalse(preflight_mod.vmnet_mismatch_applies("virtualbox"))
-        self.assertTrue(preflight_mod.vmnet_mismatch_applies(None))
+    def test_preflight_reports_virtualbox_route_and_amd64_image(self):
         proc = subprocess.run(
-            [sys.executable, "-I", str(ROOT / "scripts" / "preflight.py"), "--route", "vmware-linux", "--vm-backend", "virtualbox"],
+            [sys.executable, "-I", str(ROOT / "scripts" / "preflight.py"), "--route", "virtualbox-linux"],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", timeout=60,
         )
-        self.assertNotIn("MISSING_VMWARE", proc.stdout)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
         payload = json.loads(proc.stdout)
-        self.assertNotIn("MISSING_VMWARE", " ".join(payload.get("errors") or []))
+        self.assertEqual(payload["route"], "virtualbox-linux")
+        self.assertIn("vboxmanage_found", payload["host"])
+        self.assertEqual(payload["host"]["expected_image"]["filename"], "cchouse-debian13-amd64.ova")
 
     def test_windows_hostkey_comes_from_serial_not_keyscan(self):
         helper = (ROOT / "scripts" / "windows-hostkey.ps1").read_text(encoding="utf-8")
-        vmware = (ROOT / "scripts" / "vm-vmware.ps1").read_text(encoding="utf-8")
+        vbox = (ROOT / "scripts" / "vm-virtualbox.ps1").read_text(encoding="utf-8")
         firstboot = (ROOT / "guest-linux" / "firstboot.sh").read_text(encoding="utf-8")
         uploader = (ROOT / "tools" / "e2e" / "run-gtr.sh").read_text(encoding="utf-8")
-        for name, src in (("helper", helper), ("vmware", vmware), ("firstboot", firstboot)):
+        for name, src in (("helper", helper), ("virtualbox", vbox), ("firstboot", firstboot)):
             self.assertNotIn("ssh-keyscan", src, name)
         self.assertIn(r"C:\Windows\System32\OpenSSH\ssh.exe", helper)
         self.assertIn("$script:CchouseSshWaitSeconds = 180", helper)
@@ -349,16 +363,6 @@ class TestVirtualBoxScript(unittest.TestCase):
         self.assertNotIn("StrictHostKeyChecking=no", helper)
         ssh_fn = helper.split("function Invoke-CchouseSshTrue", 1)[1].split("function ", 1)[0]
         self.assertLess(ssh_fn.find("Test-CchouseHostKeyMismatch"), ssh_fn.find("return"))
-        self.assertNotIn("ssh-keyscan", vmware)
-        self.assertNotIn("StrictHostKeyChecking=no", vmware)
-        self.assertNotIn("& ssh.exe", vmware)
-        self.assertIn("windows-hostkey.ps1", vmware)
-        self.assertIn("CchouseSystem32Ssh", vmware)
-        boot = vmware.split("function Invoke-CchouseBoot", 1)[1].split("function New-CchouseSnapshot", 1)[0]
-        self.assertLess(boot.find("Get-CchouseHostKeyFromSerialText"), boot.find("Start-VmDetached"))
-        self.assertLess(boot.find("Write-CchouseHostKeyTrustMark"), boot.find("Start-VmDetached"))
-        self.assertIn("未经串口核对主机密钥", boot)
-        self.assertLess(boot.find("getGuestIPAddress"), boot.find("Get-CchouseSshVerifyOptions"))
         verify = (ROOT / "scripts" / "verify-linux.sh").read_text(encoding="utf-8")
         self.assertIn('warn "未经串口核对主机密钥"', verify)
         self.assertIn("hostkey.trust", verify)

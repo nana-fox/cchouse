@@ -1,4 +1,4 @@
-# Shared Windows host-key helpers for vm-virtualbox.ps1 and vm-vmware.ps1.
+# Shared Windows host-key helpers for vm-virtualbox.ps1.
 # Dot-source only. The guest prints one public CCHOUSE_HOSTKEY line on the
 # serial log during firstboot. The host writes known_hosts from that line.
 # Do not print the serial log or any private key.

@@ -288,15 +288,6 @@ try {
   if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force }
 }
 
-$vmwarePath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\scripts\vm-vmware.ps1"))
-$vmware = [System.IO.File]::ReadAllText($vmwarePath)
-Assert-False "vmware has no keyscan" $vmware.Contains("ssh-keyscan")
-Assert-False "vmware has no strict no" $vmware.Contains("StrictHostKeyChecking=no")
-Assert-True "vmware uses helper" $vmware.Contains("windows-hostkey.ps1")
-Assert-True "vmware uses deadline" $vmware.Contains("CchouseSshWaitSeconds")
-$bootVm = (($vmware -csplit "function Invoke-CchouseBoot", 2)[1] -csplit "function New-CchouseSnapshot", 2)[0]
-Assert-True "vmware ip before verify" (($bootVm.IndexOf("getGuestIPAddress") -ge 0) -and ($bootVm.IndexOf("getGuestIPAddress") -lt $bootVm.IndexOf("Get-CchouseSshVerifyOptions")))
-Assert-True "vmware parse before start" ($bootVm.IndexOf("Get-CchouseHostKeyFromSerialText") -lt $bootVm.IndexOf("Start-VmDetached"))
 Assert-False "hard poweroff wait is not ignored" $src.Contains('Wait-CchousePowerOff $Name 20 | Out-Null')
 Assert-True "single IDE regex" $src.Contains('^storagecontrollername\d+="([^"]*IDE[^"]*)"')
 Assert-False "second match does not clobber the capture" $src.Contains('$Matches[1] -match')

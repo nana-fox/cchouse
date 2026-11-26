@@ -310,14 +310,14 @@ def detect_tool_version(cmd, timeout=5):
 
 
 def collect_host_info():
-    """收集宿主机系统版本、CPU 架构、tart/vmrun/ssh 版本与仓库 commit。"""
+    """收集宿主机系统版本、CPU 架构、Tart/VBoxManage/SSH 版本与仓库 commit。"""
     sys_name = platform.system()
     tart_bin = preflight_mod.find_tart()
-    vmrun_bin = preflight_mod.find_vmrun()
+    vboxmanage_bin = preflight_mod.find_vboxmanage()
     ssh_bin = shutil.which("ssh")
 
     tart_ver = detect_tool_version([tart_bin, "--version"]) if tart_bin else None
-    vmrun_ver = detect_tool_version([vmrun_bin]) if vmrun_bin else None
+    vboxmanage_ver = detect_tool_version([vboxmanage_bin, "--version"]) if vboxmanage_bin else None
     ssh_ver = detect_tool_version([ssh_bin, "-V"]) if ssh_bin else None
 
     git_commit = None
@@ -339,9 +339,9 @@ def collect_host_info():
             "found": bool(tart_bin),
             "version": tart_ver,
         },
-        "vmrun": {
-            "found": bool(vmrun_bin),
-            "version": vmrun_ver,
+        "vboxmanage": {
+            "found": bool(vboxmanage_bin),
+            "version": vboxmanage_ver,
         },
         "ssh_client": {
             "found": bool(ssh_bin),
@@ -677,7 +677,7 @@ def main():
     parser.add_argument("--env", dest="env_path", default=None, help="instance.env 路径（仅用于自检、脱敏规则与可选 SSH 连接，绝不打包原文）")
     parser.add_argument("--vm-ssh", action="store_true", help="尝试通过 SSH 拉取客机诊断日志（不可达时仍正常出包并标明缺失项）")
     parser.add_argument("--out", dest="out_path", default=None, help="输出 zip 文件路径（默认输出到当前目录）")
-    parser.add_argument("--route", choices=("auto", "macos-tart", "tart-linux", "vmware-linux"), default="auto")
+    parser.add_argument("--route", choices=("auto", "macos-tart", "tart-linux", "virtualbox-linux"), default="auto")
     parser.add_argument("--ssh-timeout", type=int, default=8, help="SSH 连接超时秒数（默认 8）")
     args = parser.parse_args()
 

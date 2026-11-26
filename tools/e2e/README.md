@@ -1,11 +1,11 @@
 # cchouse E2E 一键真机验证工具 (`tools/e2e/`)
 
-一条命令完成 Mac（Tart / arm64）与 GTR（Windows VMware / amd64）的真机端到端验证，输出实时刷新的 HTML 报告、JSON 状态文件与客机桌面 PNG 截图，测完自动清理测试机与临时明文。
+一条命令完成 Mac（Tart / arm64）与 GTR（Windows VirtualBox / amd64）的真机端到端验证，输出实时刷新的 HTML 报告、JSON 状态文件与客机桌面 PNG 截图，测完自动清理测试机与临时明文。
 
 ## 快速用法
 
 ```bash
-# 快速模式（克隆黄金镜像 + 覆盖当前工作区 guest-linux 脚本）
+# 快速模式（Mac 克隆黄金镜像，GTR 从配置中的 OVA 导入。两边均使用当前 guest-linux 脚本）
 tools/e2e/run.sh --target mac --mode fast
 tools/e2e/run.sh --target gtr --mode fast
 tools/e2e/run.sh --target both --mode fast
@@ -27,11 +27,10 @@ GTR_SSH_HOST="<GTR_IP>"
 GTR_SSH_USER="<WIN_USER>"
 GTR_SSH_KEY="$HOME/.ssh/<GTR_SSH_KEY>"
 GTR_GOLDEN_OVA="C:\\Users\\<WIN_USER>\\cchouse-ova-build\\cchouse-debian13-amd64.ova"
-GTR_GOLDEN_VMX="C:\\Users\\<WIN_USER>\\cchouse-e2e-base\\cchouse-debian13-amd64\\cchouse-debian13-amd64.vmx"
 GTR_WORK_DIR="C:\\Users\\<WIN_USER>\\AppData\\Local\\cchouse\\e2e"
 ```
 
-> 客机导入、首启注入、联网重启的实现与 `scripts/cchouse.py up` 共用：Tart 见 `scripts/vm-tart.sh`（`run-mac.sh` source 复用），VMware 见 `scripts/vm-vmware.ps1` 与 `scripts/windows-hostkey.ps1`（`run-gtr.sh` 随 `gtr-remote.ps1` 一并上传并点源复用）。
+> 客机导入、首启注入、联网重启的实现与 `scripts/cchouse.py up` 共用：Tart 见 `scripts/vm-tart.sh`（`run-mac.sh` source 复用），VirtualBox 见 `scripts/vm-virtualbox.ps1` 与 `scripts/windows-hostkey.ps1`（`run-gtr.sh` 随 `gtr-remote.ps1` 一并上传并点源复用）。
 
 ## 验证覆盖项
 

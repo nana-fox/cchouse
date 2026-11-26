@@ -1,5 +1,5 @@
 #!/bin/bash
-# GTR (Windows + VMware Workstation) E2E runner, driven from Mac over SSH/SCP.
+# GTR (Windows + VirtualBox) E2E runner, driven from Mac over SSH/SCP.
 # Called by tools/e2e/run.sh <run_dir>
 set -uo pipefail
 
@@ -16,11 +16,10 @@ GTR_USER="${GTR_SSH_USER:?GTR_SSH_USER not set in e2e.conf}"
 GTR_KEY="${GTR_SSH_KEY:?GTR_SSH_KEY not set in e2e.conf}"
 GTR_WORK="${GTR_WORK_DIR:-C:\\Users\\${GTR_USER}\\AppData\\Local\\cchouse\\e2e}"
 GTR_OVA="${E2E_OVA_PATH:-${GTR_GOLDEN_OVA:?GTR_GOLDEN_OVA not set in e2e.conf}}"
-GTR_BASE_VMX="${GTR_GOLDEN_VMX:-C:\\Users\\${GTR_USER}\\cchouse-e2e-base\\cchouse-debian13-amd64\\cchouse-debian13-amd64.vmx}"
 
 COMMIT="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 RUN_ID="e2e-gtr-$(date +%H%M%S)-$$"
-VM_NAME="cchouse-${RUN_ID}"
+VM_NAME="claude-gtr-$(date +%H%M%S)$(printf '%04d' "$(( $$ % 10000 ))")"
 REMOTE_RUN_DIR="${GTR_WORK}\\runs\\${RUN_ID}"
 REMOTE_RUN_SCP="$(printf '%s' "$REMOTE_RUN_DIR" | tr '\\' '/')"
 TMP_DIR="$(mktemp -d)"
@@ -28,13 +27,15 @@ chmod 700 "$TMP_DIR"
 FAILED=0
 FAIL_STEP=""
 FAIL_REASON=""
+REMOTE_DIR_CREATED=0
+REMOTE_READY=0
 
 GTR_SSH_OPTS=(-F none -i "$GTR_KEY" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o LogLevel=ERROR)
 gtr_ssh() { ssh "${GTR_SSH_OPTS[@]}" "${GTR_USER}@${GTR_HOST}" "$@"; }
 gtr_scp() { scp "${GTR_SSH_OPTS[@]}" "$@"; }
 gtr_ps() {
   local action="$1"; shift
-  gtr_ssh "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"${REMOTE_RUN_DIR}\\gtr-remote.ps1\" -Action ${action} -RunDir \"${REMOTE_RUN_DIR}\" -VmName \"${VM_NAME}\" -Mode \"${MODE}\" -OvaPath \"${GTR_OVA}\" -BaseVmx \"${GTR_BASE_VMX}\" $*"
+  gtr_ssh "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"${REMOTE_RUN_DIR}\\gtr-remote.ps1\" -Action ${action} -RunDir \"${REMOTE_RUN_DIR}\" -VmName \"${VM_NAME}\" -OvaPath \"${GTR_OVA}\" -SshPort ${SSH_PORT_VAL:-0} $*"
 }
 
 report() { python3 "$SCRIPT_DIR/report.py" "$@"; }
@@ -56,17 +57,31 @@ fail_step() {
 
 cleanup() {
   report step-start "$RUN_DIR" cleanup "清理 GTR 测试机与临时文件" >/dev/null 2>&1 || true
-  if [ "$KEEP_VM" = "0" ]; then
-    gtr_ps cleanup >/dev/null 2>&1 || true
-    report step-end "$RUN_DIR" cleanup --status PASS --detail "已删除 GTR 测试机 $VM_NAME 与临时文件" >/dev/null 2>&1 || true
+  if [ "$REMOTE_READY" = "1" ] && [ "$KEEP_VM" = "1" ] && [ "$FAILED" = "0" ]; then
+    report step-end "$RUN_DIR" cleanup --status SKIP --detail "--keep-vm 已启用，保留 $VM_NAME"
   else
-    report step-end "$RUN_DIR" cleanup --status SKIP --detail "--keep-vm 已启用，保留 $VM_NAME" >/dev/null 2>&1 || true
+    local cleanup_rc=0
+    local cleanup_log="$TMP_DIR/cleanup.log"
+    if [ "$REMOTE_READY" = "1" ]; then
+      gtr_ps cleanup >"$cleanup_log" 2>&1 || cleanup_rc=$?
+    elif [ "$REMOTE_DIR_CREATED" = "1" ]; then
+      gtr_ssh "powershell.exe -NoProfile -Command \"Remove-Item -LiteralPath '${REMOTE_RUN_DIR}' -Recurse -Force -ErrorAction Stop\"" \
+        >"$cleanup_log" 2>&1 || cleanup_rc=$?
+    fi
+    if [ "$cleanup_rc" = "0" ]; then
+      report step-end "$RUN_DIR" cleanup --status PASS --detail "已清理测试虚拟机与临时文件"
+    elif [ "$FAILED" = "0" ]; then
+      fail_step cleanup "清理测试虚拟机与临时文件" "GTR 清理失败" "$cleanup_log"
+    else
+      report step-end "$RUN_DIR" cleanup --status FAIL --detail "GTR 清理失败" --log-file "$cleanup_log"
+    fi
   fi
   rm -rf "$TMP_DIR"
   if [ "$FAILED" = "0" ]; then
     report finish "$RUN_DIR" --status PASS >/dev/null 2>&1 || true
   else
     report finish "$RUN_DIR" --status FAIL --failure-step "$FAIL_STEP" --failure-reason "$FAIL_REASON" >/dev/null 2>&1 || true
+    exit 1
   fi
 }
 trap cleanup EXIT
@@ -74,25 +89,48 @@ trap cleanup EXIT
 # ---- Step 1: Check GTR SSH + prepare ephemeral key, env & Claude Code linux-x64 tarball on Mac ----
 report step-start "$RUN_DIR" prepare "检查 GTR SSH、准备密钥/配置与 Mac 侧拉取 Claude Code (x64)"
 LOG1="$TMP_DIR/step1.log"
-{
-  [ -f "$ENV_SRC" ] || { echo "Missing GTR_ENV_FILE: $ENV_SRC"; exit 1; }
+prepare() {
+  [ -f "$ENV_SRC" ] || { echo "Missing GTR_ENV_FILE: $ENV_SRC"; return 1; }
   echo "Checking GTR SSH connectivity..."
-  GTR_HN="$(gtr_ssh hostname | tr -d '\r\n')"
+  GTR_HN="$(gtr_ssh hostname | tr -d '\r\n')" || return 1
   echo "GTR hostname: $GTR_HN"
 
-  ssh-keygen -q -t ed25519 -N "" -f "$TMP_DIR/id_ed25519"
-  chmod 600 "$TMP_DIR/id_ed25519"
-  PUB_KEY="$(cat "$TMP_DIR/id_ed25519.pub")"
+  # Pick a free host port on GTR before rendering the guest NAT configuration.
+  PORT_PROBE='
+    for ($i = 0; $i -lt 200; $i++) {
+      $port = 2222 + (($offset + $i) % 200)
+      $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, $port)
+      try { $listener.Start(); $port; exit 0 }
+      catch [Net.Sockets.SocketException] {}
+      finally { $listener.Stop() }
+    }
+    exit 1
+  '
+  PORT_COMMAND="$(printf '$offset = %s; %s' "$(( RANDOM % 200 ))" "$PORT_PROBE" |
+    python3 -c 'import base64, sys; print(base64.b64encode(sys.stdin.read().encode("utf-16le")).decode())')"
+  SSH_PORT_VAL="$(gtr_ssh "powershell.exe -NoProfile -EncodedCommand $PORT_COMMAND" | tr -d '\r\n')" || return 1
+  if [[ ! "$SSH_PORT_VAL" =~ ^[0-9]+$ ]] || [ "$SSH_PORT_VAL" -lt 2222 ] || [ "$SSH_PORT_VAL" -gt 2421 ]; then
+    echo "No free loopback SSH port on GTR"
+    return 1
+  fi
+
+  ssh-keygen -q -t ed25519 -N "" -f "$TMP_DIR/id_ed25519" || return 1
+  chmod 600 "$TMP_DIR/id_ed25519" || return 1
+  PUB_KEY="$(cat "$TMP_DIR/id_ed25519.pub")" || return 1
 
   # Ephemeral env for Mac-side render (uses current workspace guest-linux/)
-  cp "$ENV_SRC" "$TMP_DIR/instance.env"
-  chmod 600 "$TMP_DIR/instance.env"
+  cp "$ENV_SRC" "$TMP_DIR/instance.env" || return 1
+  chmod 600 "$TMP_DIR/instance.env" || return 1
   {
     echo ""
     echo "# E2E ephemeral overrides"
     echo "VM_NAME=$VM_NAME"
+    echo "VMNET_CIDR=10.0.2.0/24"
+    echo "GUEST_IF=enp0s3"
+    echo "GUEST_IP=127.0.0.1"
+    echo "SSH_PORT=$SSH_PORT_VAL"
     echo "SSH_PUBKEY='$PUB_KEY'"
-  } >> "$TMP_DIR/instance.env"
+  } >> "$TMP_DIR/instance.env" || return 1
 
   # Fetch & SHA-512 verify linux-x64 tarball on Mac (avoids GTR proxy SSL issues)
   CLAUDE_TGZ="$CACHE_DIR/claude-code-linux-x64.tgz"
@@ -103,8 +141,8 @@ LOG1="$TMP_DIR/step1.log"
   else
     echo "Using cached linux-x64 tarball: $CLAUDE_TGZ ($(wc -c < "$CLAUDE_TGZ" | tr -d ' ') bytes)"
   fi
-} >"$LOG1" 2>&1
-if [ $? -ne 0 ]; then
+}
+if ! prepare >"$LOG1" 2>&1; then
   fail_step prepare "检查 GTR SSH、准备密钥/配置与 Mac 侧拉取 Claude Code (x64)" "GTR SSH 不通或准备配置/拉取 Claude Code 失败" "$LOG1"
   exit 1
 fi
@@ -116,64 +154,67 @@ report step-end "$RUN_DIR" prepare --status PASS --detail "TAG=$TAG_VAL, STRIPE_
 # ---- Step 2: Render on Mac (current workspace guest-linux) + build seed.iso + upload to GTR ----
 report step-start "$RUN_DIR" render "渲染当前工作区 guest-linux、打包 seed.iso 并上传到 GTR"
 LOG2="$TMP_DIR/step2.log"
-{
-  python3 -I "$REPO_ROOT/scripts/render.py" "$TMP_DIR/instance.env" "$TMP_DIR/rendered"
+render_and_upload() {
+  python3 -I "$REPO_ROOT/scripts/render.py" "$TMP_DIR/instance.env" "$TMP_DIR/rendered" || return 1
   if [ "${STRIPE_MODE_VAL:-front}" != "off" ]; then
     grep -q "DOMAIN-SUFFIX,stripe.com," "$TMP_DIR/rendered/config.yaml" \
-      || { echo "Rendered config.yaml missing stripe.com split rule"; exit 1; }
+      || { echo "Rendered config.yaml missing stripe.com split rule"; return 1; }
     echo "Verified rendered config.yaml contains Stripe split routing rule."
   fi
   python3 -I "$REPO_ROOT/scripts/make-seed-iso.py" "$TMP_DIR/rendered" "$TMP_DIR/seed.iso" \
-    --claude-tarball "$CLAUDE_TGZ"
+    --claude-tarball "$CLAUDE_TGZ" || return 1
 
   # Build GTR-side instance.env for verify-linux.sh (Windows forward-slash paths work for both Git Bash & Windows OpenSSH)
   REMOTE_RUN_WIN_FWD="$(printf '%s' "$REMOTE_RUN_DIR" | tr '\\' '/')"
-  cp "$TMP_DIR/instance.env" "$TMP_DIR/gtr-verify.env"
-  chmod 600 "$TMP_DIR/gtr-verify.env"
+  cp "$TMP_DIR/instance.env" "$TMP_DIR/gtr-verify.env" || return 1
+  chmod 600 "$TMP_DIR/gtr-verify.env" || return 1
   {
     echo "SSH_KEY=\"${REMOTE_RUN_WIN_FWD}/id_ed25519\""
+    echo "PRIVATE_DIR=\"${REMOTE_RUN_WIN_FWD}\""
     echo "SSH_KNOWN_HOSTS=\"${REMOTE_RUN_WIN_FWD}/known_hosts\""
-  } >> "$TMP_DIR/gtr-verify.env"
+  } >> "$TMP_DIR/gtr-verify.env" || return 1
 
-  gtr_ssh "powershell.exe -NoProfile -Command \"New-Item -ItemType Directory -Force -Path '${REMOTE_RUN_DIR}' | Out-Null\""
+  gtr_ssh "powershell.exe -NoProfile -Command \"New-Item -ItemType Directory -Path '${REMOTE_RUN_DIR}' -ErrorAction Stop | Out-Null\"" || return 1
+  REMOTE_DIR_CREATED=1
   gtr_scp \
     "$TMP_DIR/seed.iso" \
     "$TMP_DIR/id_ed25519" \
     "$TMP_DIR/gtr-verify.env" \
     "$REPO_ROOT/scripts/verify-linux.sh" \
     "$SCRIPT_DIR/gtr-remote.ps1" \
-    "$REPO_ROOT/scripts/vm-vmware.ps1" \
+    "$REPO_ROOT/scripts/vm-virtualbox.ps1" \
     "$REPO_ROOT/scripts/windows-hostkey.ps1" \
     "$REPO_ROOT/scripts/windows-native.ps1" \
     "$SCRIPT_DIR/guest-checks.sh" \
-    "${GTR_USER}@${GTR_HOST}:${REMOTE_RUN_SCP}/"
+    "${GTR_USER}@${GTR_HOST}:${REMOTE_RUN_SCP}/" || return 1
+  REMOTE_READY=1
 
   # Delete local plaintext seed.iso and rendered/ immediately
   rm -rf "$TMP_DIR/seed.iso" "$TMP_DIR/rendered"
   echo "Uploaded seed.iso and runner scripts to GTR, cleaned local plaintext."
-} >"$LOG2" 2>&1
-if [ $? -ne 0 ]; then
+}
+if ! render_and_upload >"$LOG2" 2>&1; then
   fail_step render "渲染当前工作区 guest-linux、打包 seed.iso 并上传到 GTR" "render / make-seed-iso / scp 上传失败" "$LOG2"
   exit 1
 fi
 report step-end "$RUN_DIR" render --status PASS --detail "已渲染当前工作区并上传 seed.iso 到 GTR" --log-file "$LOG2"
 
-# ---- Step 3: Clone linked VM (fast) or import .ova (release) on GTR ----
-report step-start "$RUN_DIR" clone "GTR 准备测试虚拟机 ($MODE)"
+# ---- Step 3: Import a fresh VM from the specified OVA on GTR ----
+report step-start "$RUN_DIR" import "GTR 准备测试虚拟机 ($MODE)"
 LOG3="$TMP_DIR/step3.log"
-gtr_ps clone >"$LOG3" 2>&1
+gtr_ps import >"$LOG3" 2>&1
 if [ $? -ne 0 ]; then
-  fail_step clone "GTR 准备测试虚拟机 ($MODE)" "VMware 克隆或导入 OVA 失败" "$LOG3"
+  fail_step import "GTR 准备测试虚拟机 ($MODE)" "VirtualBox 导入 OVA 失败" "$LOG3"
   exit 1
 fi
-report step-end "$RUN_DIR" clone --status PASS --detail "VM=$VM_NAME ($MODE)" --log-file "$LOG3"
+report step-end "$RUN_DIR" import --status PASS --detail "VM=$VM_NAME ($MODE)" --log-file "$LOG3"
 
 # ---- Step 4: Offline firstboot injection on GTR ----
 report step-start "$RUN_DIR" firstboot "GTR 首次开机离线注入（断网 + seed.iso）"
 LOG4="$TMP_DIR/step4.log"
 gtr_ps firstboot >"$LOG4" 2>&1
 if [ $? -ne 0 ]; then
-  fail_step firstboot "GTR 首次开机离线注入（断网 + seed.iso）" "VMware 首启注入失败" "$LOG4"
+  fail_step firstboot "GTR 首次开机离线注入（断网 + seed.iso）" "VirtualBox 首启注入失败" "$LOG4"
   exit 1
 fi
 report step-end "$RUN_DIR" firstboot --status PASS --detail "首启注入完成并已关机" --log-file "$LOG4"

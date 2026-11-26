@@ -66,12 +66,8 @@ class TestRemove(unittest.TestCase):
             del self.inventory[cmd[-1]]
             return subprocess.CompletedProcess(cmd, 0)
         if cmd[0] == "powershell":
-            if cmd[-2] == "-CcVmName":
-                self.assertEqual(cmd[-4:-1], ["-CcOp", "delete", "-CcVmName"])
-                self.assertEqual(cmd[-1], self.vm_name)
-                return subprocess.CompletedProcess(cmd, 0)
-            self.assertEqual(cmd[-4:-1], ["-CcOp", "delete", "-CcVmx"])
-            Path(cmd[-1]).unlink()
+            self.assertEqual(cmd[-4:-1], ["-CcOp", "delete", "-CcVmName"])
+            self.assertEqual(cmd[-1], self.vm_name)
             return subprocess.CompletedProcess(cmd, 0)
         self.fail(f"意外的后端命令 {cmd}")
 
@@ -121,26 +117,23 @@ class TestRemove(unittest.TestCase):
         self.assertFalse(self.part.exists())
         self.assertTrue(self.other_file.exists())
 
-    def test_vmware_uses_exact_vmx_and_reports_embedded_snapshot(self):
+    def test_old_windows_backend_leaves_vm_and_private_data_intact(self):
         self.write_state(vm_backend="vmware", route="vmware-linux", clean_snapshot="cchouse-clean")
-        vmx = self.private / "vm" / self.vm_name / f"{self.vm_name}.vmx"
-        vmx.parent.mkdir(parents=True)
-        vmx.touch()
-        rc, text = self.remove(yes=True)
-        self.assertEqual(rc, 0, text)
-        self.assertIn("干净快照 cchouse-clean", text)
-        self.assertIn(str(vmx), text)
-        self.assertEqual(self.mock_run.call_count, 1)
-        self.assertEqual(self.mock_run.call_args.args[0][-1], str(vmx))
-        self.assertFalse(self.private.exists())
+        disk = self.private / "vm" / self.vm_name / "guest-disk.vmdk"
+        disk.parent.mkdir(parents=True)
+        disk.write_bytes(b"existing guest")
+        rc, text = self.remove(yes=True, purge=True)
+        self.assertEqual(rc, 1, text)
+        self.assertEqual(disk.read_bytes(), b"existing guest")
         self.assertTrue(self.image.is_file())
+        self.mock_run.assert_not_called()
 
     def test_mismatched_and_unsupported_owners_leave_instance_untouched(self):
         for overrides in (
             {"vm_name": "claude-other1"}, {"clean_snapshot": "claude-other2-clean-old"},
             {"vm_backend": "virtualbox", "vm_name": "claude-other1", "clean_snapshot": "cchouse-clean"},
             {"tag": "other2"}, {"private_dir": str(self.root)},
-            {"vm_backend": None, "vm_name": None, "route": "vmware-linux"},
+            {"vm_backend": None, "vm_name": None, "route": "virtualbox-linux"},
         ):
             with self.subTest(overrides=overrides):
                 self.write_state(**overrides)
@@ -169,7 +162,7 @@ class TestRemove(unittest.TestCase):
         self.assertFalse(self.private.exists())
 
     def test_virtualbox_deletes_the_exact_recorded_name(self):
-        self.write_state(vm_backend="virtualbox", route="vmware-linux", clean_snapshot="cchouse-clean")
+        self.write_state(vm_backend="virtualbox", route="virtualbox-linux", clean_snapshot="cchouse-clean")
         vm_dir = self.private / "vm" / self.vm_name
         vm_dir.mkdir(parents=True)
         (vm_dir / f"{self.vm_name}.vbox").touch()
@@ -186,23 +179,13 @@ class TestRemove(unittest.TestCase):
         self.assertTrue(self.image.is_file())
 
     def test_unrelated_virtualbox_directory_blocks_uninstall(self):
-        self.write_state(vm_backend="virtualbox", route="vmware-linux", clean_snapshot="cchouse-clean")
+        self.write_state(vm_backend="virtualbox", route="virtualbox-linux", clean_snapshot="cchouse-clean")
         other = self.private / "vm" / "claude-other2"
         other.mkdir(parents=True)
         rc, text = self.remove(yes=True)
         self.assertEqual(rc, 1, text)
         self.assertIn("无法确认归属", text)
         self.assertTrue(other.is_dir())
-        self.mock_run.assert_not_called()
-
-    def test_unrelated_vmware_directory_blocks_uninstall(self):
-        self.write_state(vm_backend="vmware", route="vmware-linux", clean_snapshot="cchouse-clean")
-        other = self.private / "vm" / "claude-other2" / "claude-other2.vmx"
-        other.parent.mkdir(parents=True)
-        other.touch()
-        rc, text = self.remove(yes=True)
-        self.assertEqual(rc, 1, text)
-        self.assertTrue(other.is_file())
         self.mock_run.assert_not_called()
 
     def test_state_change_after_preview_blocks_uninstall(self):
@@ -290,48 +273,3 @@ esac
                     expected.append(f"delete {name}")
                 self.assertEqual(log.read_text(encoding="utf-8").splitlines(), expected)
                 self.assertEqual(result.returncode, int(list_fails), result.stderr)
-
-
-@unittest.skipUnless(os.name == "nt", "requires Windows PowerShell")
-class TestVmwareDeleteScript(unittest.TestCase):
-    def test_stops_and_deletes_only_the_exact_vmx(self):
-        script = r"""
-. $env:VMWARE_SCRIPT
-$ErrorActionPreference = 'Stop'
-$expectedVmx = (Get-Item -LiteralPath $env:TEST_VMX).FullName
-function Get-CchouseVmrun { return 'Invoke-FakeVmrun' }
-function Invoke-FakeVmrun {
-  $global:LASTEXITCODE = 0
-  if ($args[2] -eq 'list') {
-    'Total running VMs: 2'
-    $env:OTHER_VMX
-    $testPath = Split-Path -Parent $expectedVmx
-    $testName = Split-Path -Leaf $expectedVmx
-    '  ' + $testPath.ToUpperInvariant() + '/unused/../' + $testName.ToUpperInvariant() + '  '
-    return
-  }
-  if ($args[3] -ine $expectedVmx) { throw "Unexpected VMX" }
-  switch ($args[2]) {
-    'stop' { 'STOPPED TARGET' }
-    'deleteVM' { Remove-Item -LiteralPath $args[3]; 'DELETED TARGET' }
-    default { throw "Unexpected vmrun command" }
-  }
-}
-Remove-CchouseVM $env:TEST_VMX
-"""
-        with tempfile.TemporaryDirectory() as tmp:
-            vmx = Path(tmp) / "target VM.vmx"
-            other = vmx.with_name("another VM.vmx")
-            vmx.touch()
-            other.touch()
-            encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
-            result = subprocess.run(
-                ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded],
-                env=dict(os.environ, VMWARE_SCRIPT=str(ROOT / "scripts" / "vm-vmware.ps1"),
-                         TEST_VMX=str(vmx), OTHER_VMX=str(other)),
-                capture_output=True, text=True, errors="replace", timeout=15,
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(result.stdout.splitlines(), ["STOPPED TARGET", "DELETED TARGET"])
-            self.assertFalse(vmx.exists())
-            self.assertTrue(other.exists())

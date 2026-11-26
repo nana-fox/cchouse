@@ -114,7 +114,7 @@ EOF
   chmod 644 /home/claude/.config/fcitx5/profile
 fi
 
-# 5. 锁定静态 resolv.conf，防止 VMware NAT DHCP 下发 vmnet .2 绕过 TUN dns-hijack
+# 5. 锁定静态 resolv.conf，防止 NAT DHCP 下发的 DNS 绕过 TUN dns-hijack
 cat >/etc/NetworkManager/conf.d/98-cchouse-static-dns.conf <<'EOF'
 [main]
 dns=none
