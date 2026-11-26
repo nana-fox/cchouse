@@ -2,8 +2,8 @@
 """cchouse 安装与卸载向导。
 
 用法：
-  python3 -I scripts/cchouse.py up [--tag cc01] [--route auto|tart-linux|vmware-linux]
-      [--vm-backend auto|tart|vmware|virtualbox|manual] [--dry-run] [--config-only]
+  python3 -I scripts/cchouse.py up [--tag cc01] [--route auto|tart-linux|virtualbox-linux]
+      [--vm-backend auto|tart|virtualbox|manual] [--dry-run] [--config-only]
   python3 -I scripts/cchouse.py remove --tag cc01 [--yes] [--purge-cache]
 
 流程（耗时的先下载，配置并行准备，下完一键装好）：
@@ -22,7 +22,6 @@ import base64
 import datetime
 import getpass
 import hashlib
-import ipaddress
 import json
 import os
 import platform
@@ -286,7 +285,7 @@ def detect_route():
     arch = preflight_mod.detect_arch()
     if sys_name == "Darwin" and arch == "arm64":
         return "tart-linux"
-    return "vmware-linux"
+    return "virtualbox-linux"
 
 
 def default_private_root():
@@ -444,7 +443,7 @@ def format_instance_env(tag, route, private_dir, ssh_key, ssh_pubkey, single_fie
     if backend == "virtualbox":
         guest_if = VBOX_GUEST_IF
     else:
-        guest_if = "enp0s1" if route == "tart-linux" else "ens33"
+        guest_if = "enp0s1" if route == "tart-linux" else VBOX_GUEST_IF
     known_hosts = Path(private_dir) / "known_hosts"
     net_lines = [
         f"VMNET_CIDR={net_cfg['vmnet_cidr']}",
@@ -485,7 +484,6 @@ def format_instance_env(tag, route, private_dir, ssh_key, ssh_pubkey, single_fie
         "MIHOMO_USER=mihomo",
         "",
         f"PRIVATE_DIR={_env_quote_double(private_dir)}",
-        'VMX_PATH=""',
         f"SSH_KEY={_env_quote_double(ssh_key)}",
         f"SSH_KNOWN_HOSTS={_env_quote_double(known_hosts)}",
         f"SSH_PUBKEY={_env_quote_single(ssh_pubkey)}",
@@ -527,10 +525,8 @@ def write_env_secure(env_path, content):
         env_path.write_bytes(content.replace("\r\n", "\n").encode("utf-8"))
 
 
-def run_preflight_check(env_path, route, check_stripe=True, vm_backend=None):
+def run_preflight_check(env_path, route, check_stripe=True):
     cmd = [sys.executable, "-I", str(ROOT / "scripts" / "preflight.py"), "--route", route, "--env", str(env_path)]
-    if vm_backend == "virtualbox":
-        cmd += ["--vm-backend", "virtualbox"]
     if check_stripe:
         cmd.append("--check-stripe")
     child_env = os.environ.copy()
@@ -554,13 +550,11 @@ def run_preflight_check(env_path, route, check_stripe=True, vm_backend=None):
     return proc.returncode, parsed, proc.stderr.strip()
 
 
-def _print_next_steps(env_path, private_dir, route, backend=None):
+def _print_next_steps(env_path, private_dir, route):
     if route == "tart-linux":
         doc = "docs/install-tart-linux.md"
-    elif backend == "virtualbox":
-        doc = "docs/install-virtualbox-linux.md"
     else:
-        doc = "docs/install-vmware-linux.md"
+        doc = "docs/install-virtualbox-linux.md"
     py = "python -I" if platform.system() == "Windows" else "python3 -I"
     rendered_dir = Path(private_dir) / "rendered"
     seed_iso = Path(private_dir) / "seed.iso"
@@ -601,44 +595,18 @@ VBOX_GUEST_IP = "127.0.0.1"
 VBOX_GUEST_IF = "enp0s3"
 VBOX_SSH_PORT_BASE = 2222
 VBOX_SSH_PORT_SPAN = 200  # 2222..2421 inclusive
-_VMRUN_CANDIDATES = (
-    r"C:\Program Files\VMware\VMware Workstation\vmrun.exe",
-    r"C:\Program Files (x86)\VMware\VMware Workstation\vmrun.exe",
-)
-
-
-def vmware_present():
-    """Windows 上是否已有 VMware Workstation 的 vmrun。"""
-    override = os.environ.get("CCHOUSE_VMRUN")
-    if override and os.path.isfile(override):
-        return True
-    for path in _VMRUN_CANDIDATES:
-        if os.path.isfile(path):
-            return True
-    return bool(shutil.which("vmrun") or shutil.which("vmrun.exe"))
 
 
 def vboxmanage_present():
-    """已安装的 VirtualBox。只认 CCHOUSE_VBOXMANAGE 或 Oracle 默认目录。"""
-    override = os.environ.get("CCHOUSE_VBOXMANAGE")
-    if override and os.path.isfile(override):
-        return True
-    for key in ("ProgramFiles", "ProgramFiles(x86)"):
-        base = os.environ.get(key)
-        if base and os.path.isfile(os.path.join(base, "Oracle", "VirtualBox", "VBoxManage.exe")):
-            return True
-    return False
+    return preflight_mod.find_vboxmanage() is not None
 
 
 def detect_vm_backend(route, system=None):
-    """Apple Silicon 用 Tart，Windows 的 amd64 OVA 用 VirtualBox。
-
-    共享的 amd64 OVA 在镜像清单中的路线名仍为 vmware-linux。
-    """
+    """Apple Silicon 用 Tart，Windows 用 VirtualBox。"""
     sys_name = platform.system() if system is None else system
     if route == "tart-linux":
         return "tart" if sys_name == "Darwin" else "manual"
-    if route != "vmware-linux" or sys_name != "Windows":
+    if route != "virtualbox-linux" or sys_name != "Windows":
         return "manual"
     return "virtualbox"
 
@@ -762,7 +730,7 @@ def find_bash():
 
 
 def update_env_value(env_path, key, value):
-    """改写 instance.env 中单个非敏感键（GUEST_IP / VMX_PATH），保持 600 权限。"""
+    """改写 instance.env 中单个非敏感键（如 GUEST_IP），保持 600 权限。"""
     text = Path(env_path).read_text(encoding="utf-8")
     line = f"{key}={value}"
     pattern = re.compile(rf"^{re.escape(key)}=.*$", re.M)
@@ -879,7 +847,6 @@ class UpContext:
             self.vbox_manifest = downloads.load_virtualbox_installer(ROOT / "guest-linux" / "virtualbox-manifest.json")
             self.vbox_installer = self.cache_dir / "virtualbox" / self.vbox_manifest["filename"]
         self.vm_name = f"claude-{tag}"
-        self.vmx = private_dir / "vm" / self.vm_name / f"{self.vm_name}.vmx"
         self.artifact = downloads.load_image_artifact(ROOT / "guest-linux" / "image-manifest.json", route)
         self.image_path = self.cache_dir / "images" / self.artifact["filename"]
         self.golden_name = f"cchouse-debian13-arm64-{self.artifact['image_version']}"
@@ -946,12 +913,6 @@ class UpContext:
 
     def tart(self, *op):
         return self.run(["bash", ROOT / "scripts" / "vm-tart.sh", *op])
-
-    def vmware(self, op, **kw):
-        cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ROOT / "scripts" / "vm-vmware.ps1", "-CcOp", op]
-        for k, v in kw.items():
-            cmd += [f"-Cc{k}", v]
-        return self.run(cmd)
 
     def virtualbox(self, op, **kw):
         cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ROOT / "scripts" / "vm-virtualbox.ps1", "-CcOp", op]
@@ -1095,19 +1056,12 @@ def do_config(ctx):
     except RuntimeError as exc:
         raise StepError(str(exc)) from None
 
-    if ctx.backend == "virtualbox":
-        vmnet_cidr = VBOX_NAT_CIDR
-        guest_ip = VBOX_GUEST_IP
-    elif route == "tart-linux":
+    if route == "tart-linux":
         vmnet_cidr = "192.168.64.0/24"
         guest_ip = "192.168.64.2"
     else:
-        vmnet_cidr = preflight_mod.detect_vmnet8_cidr() or "192.168.180.0/24"
-        try:
-            net = ipaddress.ip_network(vmnet_cidr, strict=False)
-            guest_ip = str(net.network_address + 128)
-        except ValueError:
-            guest_ip = "192.168.180.128"
+        vmnet_cidr = VBOX_NAT_CIDR
+        guest_ip = VBOX_GUEST_IP
 
     net_cfg = {
         "vmnet_cidr": vmnet_cidr,
@@ -1146,7 +1100,7 @@ def step_config(ctx):
 def step_preflight(ctx):
     apply_virtualbox_guest_net(ctx)
     rc, pf_json, pf_stderr = run_preflight_check(
-        ctx.env_path, ctx.route, check_stripe=(not ctx.args.no_probe), vm_backend=ctx.backend,
+        ctx.env_path, ctx.route, check_stripe=(not ctx.args.no_probe),
     )
     if not pf_json:
         msg = f"preflight 无法运行（退出码 {rc}）：{pf_stderr[-300:]}"
@@ -1202,7 +1156,7 @@ def vm_exists(ctx):
         except OSError:
             return False
         return proc.returncode == 0
-    return ctx.vmx.is_file()
+    return False
 
 
 def _ensure_virtualbox_installed(ctx):
@@ -1256,13 +1210,7 @@ def step_import(ctx):
             HostKeyLog=str(ctx.hostkey_log),
         )
         return False
-    ctx.vmware("import", Vmx=ctx.vmx, Ova=ctx.image_path, VmName=ctx.vm_name, VmDir=ctx.private_dir / "vm",
-               ReplaceExisting="yes" if owned else "no")
-    ctx.state.update(vm_created_by_up=True, vm_name=ctx.vm_name, vm_backend=ctx.backend)
-    ctx.save_state()
-    if not ctx.dry_run:
-        update_env_value(ctx.env_path, "VMX_PATH", _env_quote_double(ctx.vmx))
-    return False
+    raise StepError("当前后端不支持自动导入")
 
 
 def step_firstboot(ctx):
@@ -1281,7 +1229,7 @@ def step_firstboot(ctx):
             HostKeyLog=str(ctx.hostkey_log),
         )
     else:
-        ctx.vmware("firstboot", Vmx=ctx.vmx, SeedIso=ctx.seed_iso, HostKeyLog=str(ctx.hostkey_log))
+        raise StepError("当前后端不支持自动首启")
     return False
 
 
@@ -1305,16 +1253,7 @@ def step_boot(ctx):
         )
         ctx.delete_plaintext()
     else:
-        ctx.vmware(
-            "boot",
-            Vmx=ctx.vmx,
-            SeedIso=ctx.seed_iso,
-            Key=ctx.ssh_key,
-            KnownHosts=ctx.known_hosts,
-            IpFile=ctx.ip_file,
-            HostKeyLog=str(ctx.hostkey_log),
-        )
-        ctx.delete_plaintext()
+        raise StepError("当前后端不支持自动联网重启")
     if ctx.dry_run:
         return False
     ip = ctx.ip_file.read_text(encoding="utf-8").strip()
@@ -1350,8 +1289,7 @@ def step_snapshot(ctx):
         snap = CLEAN_SNAPSHOT
         ctx.virtualbox("snapshot", VmName=ctx.vm_name, Snapshot=snap)
     else:
-        snap = CLEAN_SNAPSHOT
-        ctx.vmware("snapshot", Vmx=ctx.vmx, Snapshot=snap)
+        raise StepError("当前后端不支持自动保存快照")
     ctx.state["clean_snapshot"] = snap
     return False
 
@@ -1460,7 +1398,7 @@ def run_pipeline(ctx):
         ctx.state.update(status="CONFIG_READY", ok=True, next_action="run_cchouse_up")
         ctx.save_state()
         print_timing_table(ctx, steps)
-        _print_next_steps(ctx.env_path, ctx.private_dir, ctx.route, ctx.backend)
+        _print_next_steps(ctx.env_path, ctx.private_dir, ctx.route)
         return 0
     ctx.state.update(step="up:done", status="DONE", ok=True, next_action="human_check_and_login")
     print_timing_table(ctx, steps)
@@ -1494,10 +1432,8 @@ def finish_manual(ctx, steps):
     ctx.save_state()
     if ctx.route == "tart-linux":
         doc = "docs/install-tart-linux.md"
-    elif ctx.backend == "virtualbox":
-        doc = "docs/install-virtualbox-linux.md"
     else:
-        doc = "docs/install-vmware-linux.md"
+        doc = "docs/install-virtualbox-linux.md"
     print("\n== 当前宿主暂不支持自动导入（默认自动化：Apple Silicon + Tart、Windows + VirtualBox） ==")
     print(f"- 已下载并校验的镜像：{ctx.image_path}")
     print(f"- 首启注入光盘（含明文凭据，首启完成后立即删除）：{ctx.seed_iso}")
@@ -1517,8 +1453,12 @@ def cmd_up(args):
         sys.exit("错误：私有目录/缓存目录不能放在 cchouse 仓库内，请改用用户私有目录")
 
     ctx = UpContext(args, tag, route, private_dir)
-    if ctx.backend == "virtualbox" and ctx.state.get("vm_backend") == "vmware":
-        sys.exit("错误：该实例的安装记录属于 VMware，请使用新的 --tag 创建 VirtualBox 实例")
+    previous_backend = ctx.state.get("vm_backend")
+    if previous_backend and previous_backend != ctx.backend:
+        sys.exit("错误：该实例的安装记录属于另一个后端，请使用新的 --tag 创建实例")
+    # 早期安装记录没有 vm_backend，但会在私有配置记录旧版虚拟机路径。
+    if ctx.route == "virtualbox-linux" and ctx.env_path.is_file() and _env_raw_value(ctx.env_path, "VMX_PATH"):
+        sys.exit("错误：该实例包含旧版虚拟机路径，请使用新的 --tag 创建 VirtualBox 实例")
     return run_pipeline(ctx)
 
 
@@ -1554,25 +1494,9 @@ def _virtualbox_remove_plan(vm_name, snapshot, private_dir, inventory):
     ])]
 
 
-def _vmware_remove_plan(vm_name, snapshot, private_dir, inventory):
-    vmx = private_dir / "vm" / vm_name / f"{vm_name}.vmx"
-    if vmx.resolve() != vmx:
-        raise StepError("VMware VMX 或其上级目录为链接，需手动核对")
-    if not vmx.is_file():
-        return []
-    label = f"虚拟机 {vm_name}（含所有 VMware 内置快照"
-    if snapshot:
-        label += f"：干净快照 {snapshot}"
-    return [(f"{label}） {vmx}", [
-        "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-        str(ROOT / "scripts" / "vm-vmware.ps1"), "-CcOp", "delete", "-CcVmx", str(vmx),
-    ])]
-
-
 # 新后端在这里注册。未注册的后端保留原实例，以便在对应软件中手动处理。
 REMOVE_BACKENDS = {
     "tart": _tart_remove_plan,
-    "vmware": _vmware_remove_plan,
     "virtualbox": _virtualbox_remove_plan,
 }
 
@@ -1654,7 +1578,7 @@ def cmd_remove(args):
             raise StepError("state.json 的干净快照名不匹配")
 
         vm_dir = private_dir / "vm"
-        allowed_vm_dirs = {vm_name} if owned and backend in ("vmware", "virtualbox") else set()
+        allowed_vm_dirs = {vm_name} if owned and backend == "virtualbox" else set()
         if vm_dir.resolve() != vm_dir or (vm_dir.exists() and {p.name for p in vm_dir.iterdir()} - allowed_vm_dirs):
             raise StepError("私有目录的 vm/ 下有无法确认归属的项目")
 
@@ -1758,7 +1682,7 @@ def main():
 
     p_up = sub.add_parser("up", help="一条命令：后台下载镜像，同时配置节点，下载完自动导入、首启注入、验收并打干净快照")
     p_up.add_argument("--tag", default="cc01", help="实例短名（默认 cc01）")
-    p_up.add_argument("--route", choices=("auto", "tart-linux", "vmware-linux"), default="auto")
+    p_up.add_argument("--route", choices=("auto", "tart-linux", "virtualbox-linux"), default="auto")
     p_up.add_argument("--private-dir", default=None, help="覆盖私有目录路径（不能位于仓库内）")
     p_up.add_argument("--cache-dir", default=None, help="镜像与 Claude Code 包缓存目录（默认 <私有根目录>/cache，多实例共用）")
     p_up.add_argument("--image-mirror", default=None, help=f"黄金镜像镜像源目录 URL（也可用环境变量 {downloads.IMAGE_MIRROR_ENV}），SHA-256 仍按 manifest 校验")
@@ -1768,7 +1692,7 @@ def main():
     p_up.add_argument("--link-stdin", action="store_true", help="从标准输入读取一行节点链接（不回显，适合脚本/测试）")
     p_up.add_argument("--non-interactive", action="store_true", help=argparse.SUPPRESS)
     p_up.add_argument("--no-probe", action="store_true", help="跳过宿主机代理出口与 Stripe 探测")
-    p_up.add_argument("--vm-backend", choices=("auto", "tart", "vmware", "virtualbox", "manual"), default="auto",
+    p_up.add_argument("--vm-backend", choices=("auto", "tart", "virtualbox", "manual"), default="auto",
                       help="虚拟机自动化后端（默认：Apple Silicon→tart；Windows→virtualbox；其余→manual）")
     p_up.add_argument("--reconfigure", action="store_true", help="忽略已有 instance.env，重新输入节点链接")
     p_up.add_argument("--config-only", action="store_true", help="只生成 instance.env 并跑 preflight（第一轮行为），不下载不建虚拟机")

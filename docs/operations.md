@@ -104,7 +104,7 @@ python -I scripts/doctor.py --env "$env:LOCALAPPDATA\cchouse\<TAG>\instance.env"
 
 **包内内容与安全说明**：
 
-- 诊断包默认包含 `manifest.json`（采集清单与缺失原因）、`host-info.json`（系统版本、CPU 架构、`tart`/`vmrun`/SSH 版本）、`preflight.json` 与仅含非敏感结构字段的 `env-summary.json`。
+- 诊断包默认包含 `manifest.json`（采集清单与缺失原因）、`host-info.json`（系统版本、CPU 架构、`tart`/`VBoxManage`/SSH 版本）、`preflight.json` 与仅含非敏感结构字段的 `env-summary.json`。
 - 加 `--vm-ssh` 时会额外尝试采集 `guest/firstboot.log`、`guest/verify-linux.json`、`guest/mihomo-status.txt` 与 `guest/nft-ruleset.txt`；若客机不可达或某项无权限读取，脚本依然正常生成 zip，并在 `manifest.json` 的 `missing` 字段写明缺哪一项及原因。
 - **不会打包 `instance.env` 原文或私钥文件**：所有写入 zip 的文本与 JSON 都会经过统一脱敏，自动抹除 `instance.env` 中的密码、UUID、密钥、节点地址、用户名/密码 URL、Authorization 头与 PEM 私钥块。即便如此，发给外部前仍建议先粗略扫一眼包内文件确认无额外个人备注。
 

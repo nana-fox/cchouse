@@ -512,7 +512,7 @@ def render_linux(env, out, exit_mode, stripe_mode, allow_resolve):
     else:
         sys.exit("EXIT_MODE 必须为 single 或 chain")
 
-    # 宿主侧网段（VMware NAT / 家庭局域网 / Tart）必须绕过 TUN，否则 mihomo 启动后宿主 SSH 回包被劫持
+    # 宿主侧网段（客机 NAT / 家庭局域网）必须绕过 TUN，否则 mihomo 启动后宿主 SSH 回包被劫持
     config_text = set_route_exclude(config_text, collapsed)
     env["NFT_EGRESS_RULES"] = format_nft_egress_rules(env["MIHOMO_USER"], targets)
 

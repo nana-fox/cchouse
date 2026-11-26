@@ -3,7 +3,7 @@
   Windows 宿主机 preflight 入口（避开微软商店 python3 占位程序，强制 UTF-8，检测 Win11 VBS）。
 #>
 param(
-  [string]$Route = "vmware-linux",
+  [string]$Route = "virtualbox-linux",
   [string]$EnvPath = "",
   [string]$StatePath = ""
 )
@@ -18,7 +18,7 @@ function Get-VbsNote {
   try {
     $dg = Get-CimInstance -ClassName Win32_DeviceGuard -Namespace root\Microsoft\Windows\DeviceGuard -ErrorAction SilentlyContinue
     if ($dg -and $dg.VirtualizationBasedSecurityStatus -eq 2) {
-      return "VBS_RUNNING: 检测到 Win11 已启用 VBS/内存完整性，VMware 将自动运行于 WHP 模式（性能略降但可用，请勿关闭 VBS）"
+      return "VBS_RUNNING: 检测到 Win11 已启用 VBS/内存完整性，VirtualBox 可能通过 Windows Hypervisor Platform 运行（性能可能降低，请勿关闭 VBS）"
     }
   } catch {}
   return ""
@@ -64,16 +64,9 @@ if ($found) {
   exit $rc
 }
 
-$vmrunFound = (Test-Path "C:\Program Files (x86)\VMware\VMware Workstation\vmrun.exe") -or `
-              (Test-Path "C:\Program Files\VMware\VMware Workstation\vmrun.exe")
 $warnings = @()
 if ($vbsNote) { $warnings += $vbsNote }
 $errors = @("MISSING_PYTHON: Windows 未检测到真实 Python 3（已排除 WindowsApps 商店占位）或 uv，请先安装后重跑 preflight")
-if (-not $vmrunFound) {
-  $errors += "MISSING_VMWARE: 未检测到 VMware Workstation Pro (vmrun.exe)"
-}
-
-$nextAction = if ($vmrunFound) { "install_python_or_uv" } else { "install_python_or_uv_and_vmware" }
 $payload = [ordered]@{
   ok = $false
   status = "HUMAN_WAIT"
@@ -81,12 +74,11 @@ $payload = [ordered]@{
     os = "Windows"
     arch = $env:PROCESSOR_ARCHITECTURE
     python = $null
-    vmrun_found = $vmrunFound
   }
   route = $Route
   errors = $errors
   warnings = $warnings
-  next_action = $nextAction
+  next_action = "install_python_or_uv"
 }
 $payload | ConvertTo-Json -Depth 6
 exit 1

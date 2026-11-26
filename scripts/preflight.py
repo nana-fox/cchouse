@@ -2,7 +2,7 @@
 """cchouse 跨平台环境与配置自检（面向用户与外部 AI Agent，输出脱敏 JSON）。
 
 用法：
-  python3 -I scripts/preflight.py [--route auto|macos-tart|tart-linux|vmware-linux] [--vm-backend virtualbox] [--env <instance.env>] [--state <state.json>]
+  python3 -I scripts/preflight.py [--route auto|macos-tart|tart-linux|virtualbox-linux] [--env <instance.env>] [--state <state.json>]
 """
 import argparse
 import base64
@@ -24,14 +24,6 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import render as render_mod  # noqa: E402
 
-VMRUN_CANDIDATES = [
-    r"C:\Program Files\VMware\VMware Workstation\vmrun.exe",
-    r"C:\Program Files (x86)\VMware\VMware Workstation\vmrun.exe",
-    "/Applications/VMware Fusion.app/Contents/Library/vmrun",
-    "/usr/bin/vmrun",
-]
-
-
 def detect_arch():
     m = platform.machine().lower()
     if m in ("arm64", "aarch64"):
@@ -41,56 +33,17 @@ def detect_arch():
     return m
 
 
-def find_vmrun():
-    found = shutil.which("vmrun") or shutil.which("vmrun.exe")
-    if found:
-        return found
-    for p in VMRUN_CANDIDATES:
-        if os.path.isfile(p):
-            return p
-    return None
-
-
-def vmware_linux_host_errors(vmrun_path, vm_backend=None):
-    """vmware-linux 的宿主错误。cchouse up 选定 virtualbox 时不要求本机已有 vmrun。"""
-    if vm_backend == "virtualbox":
-        return []
-    if not vmrun_path:
-        return ["MISSING_VMWARE: 未检测到 vmrun，请人工安装免费版 VMware Workstation/Fusion Pro"]
-    return []
-
-
-def vmnet_mismatch_applies(vm_backend=None):
-    """VirtualBox NAT 固定 10.0.2.0/24，不跟本机 VMnet8 比较。"""
-    return vm_backend != "virtualbox"
-
-
-def detect_vmnet8_cidr():
-    """在 Windows (Workstation) 或 macOS (Fusion) 上尽力探测 VMware NAT (vmnet8) 网段。"""
-    sys_name = platform.system()
-    try:
-        if sys_name == "Windows":
-            ps = (
-                "Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue "
-                "| Where-Object { $_.InterfaceAlias -like '*VMnet8*' } "
-                "| Select-Object -First 1 "
-                "| ForEach-Object { \"$($_.IPAddress)/$($_.PrefixLength)\" }"
-            )
-            out = subprocess.check_output(
-                ["powershell", "-NoProfile", "-Command", ps], text=True, timeout=15
-            ).strip()
-            if out and "/" in out:
-                return str(ipaddress.ip_network(out, strict=False))
-        elif sys_name == "Darwin":
-            net_cfg = Path("/Library/Preferences/VMware Fusion/networking")
-            if net_cfg.is_file():
-                text = net_cfg.read_text(encoding="utf-8", errors="ignore")
-                m_sub = re.search(r"VNET_8_HOSTONLY_SUBNET\s+(\d+\.\d+\.\d+\.\d+)", text)
-                m_mask = re.search(r"VNET_8_HOSTONLY_NETMASK\s+(\d+\.\d+\.\d+\.\d+)", text)
-                if m_sub and m_mask:
-                    return str(ipaddress.ip_network(f"{m_sub.group(1)}/{m_mask.group(1)}", strict=False))
-    except Exception:
-        return None
+def find_vboxmanage():
+    override = os.environ.get("CCHOUSE_VBOXMANAGE")
+    if override and os.path.isfile(override):
+        return override
+    if platform.system() == "Windows":
+        for key in ("ProgramFiles", "ProgramFiles(x86)"):
+            base = os.environ.get(key)
+            if base:
+                path = os.path.join(base, "Oracle", "VirtualBox", "VBoxManage.exe")
+                if os.path.isfile(path):
+                    return path
     return None
 
 
@@ -203,7 +156,7 @@ def find_tart_linux_golden_images(th=None):
 
 def expected_image_for_route(route, manifest_path=None):
     """从 guest-linux/image-manifest.json (schema 2) 解析当前路线期望的黄金镜像元数据。"""
-    if route not in ("vmware-linux", "tart-linux"):
+    if route not in ("virtualbox-linux", "tart-linux"):
         return None
     mpath = Path(manifest_path) if manifest_path is not None else (ROOT / "guest-linux" / "image-manifest.json")
     if not mpath.is_file():
@@ -389,7 +342,7 @@ def validate_env_file(env_path, route):
     exit_mode = env.get("EXIT_MODE", "chain").strip().lower()
     stripe_mode = render_mod.effective_stripe_mode(env, guest_os, exit_mode)
 
-    if route in ("vmware-linux", "tart-linux") and guest_os != "linux":
+    if route in ("virtualbox-linux", "tart-linux") and guest_os != "linux":
         errors.append(f"ROUTE_OS_MISMATCH: {route} 路线要求 GUEST_OS=linux，当前为 {guest_os}")
     if route == "macos-tart" and guest_os != "macos":
         errors.append(f"ROUTE_OS_MISMATCH: macos-tart 路线要求 GUEST_OS=macos，当前为 {guest_os}")
@@ -445,13 +398,7 @@ def main():
     if hasattr(sys.stderr, "reconfigure"):
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(description="cchouse preflight checker")
-    parser.add_argument("--route", choices=("auto", "macos-tart", "tart-linux", "vmware-linux"), default="auto")
-    parser.add_argument(
-        "--vm-backend",
-        choices=("auto", "tart", "vmware", "virtualbox", "manual"),
-        default=None,
-        help="cchouse up 传入。virtualbox 时不要求 vmrun，也不把 VMNET_CIDR 跟 VMnet8 比较",
-    )
+    parser.add_argument("--route", choices=("auto", "macos-tart", "tart-linux", "virtualbox-linux"), default="auto")
     parser.add_argument("--env", dest="env_path", default=None)
     parser.add_argument("--state", dest="state_path", default=None)
     parser.add_argument("--set-step", dest="set_step", default=None)
@@ -464,7 +411,6 @@ def main():
     arch = detect_arch()
     ram_gb = detect_ram_gb()
     tart_path = find_tart()
-    vmrun_path = find_vmrun()
 
     if args.route == "auto":
         if sys_name == "Darwin" and arch == "arm64":
@@ -476,7 +422,7 @@ def main():
                     env_guest_os = ""
             route = "tart-linux" if env_guest_os == "linux" else "macos-tart"
         else:
-            route = "vmware-linux"
+            route = "virtualbox-linux"
     else:
         route = args.route
 
@@ -525,36 +471,13 @@ def main():
             next_action = "install_tart"
         if disk_gb < 15:
             warnings.append(f"LOW_DISK: Tart 目标卷剩余 {disk_gb} GB，Debian 13 arm64 客机建议 ≥ 15 GB")
-    elif route == "vmware-linux":
-        if sys_name == "Darwin" and arch == "arm64":
-            warnings.append(
-                "ARM64_VMWARE_NOTE: vmware-linux 黄金镜像为 amd64（Windows/Intel Mac）；"
-                "Apple Silicon Mac 建议使用 tart-linux（轻量）或 macos-tart（高拟真）路线"
-            )
-        for err in vmware_linux_host_errors(vmrun_path, args.vm_backend):
-            status = "HUMAN_WAIT"
-            errors.append(err)
-            next_action = "install_vmware_human_wait"
+    elif route == "virtualbox-linux":
         if disk_gb < 25:
             warnings.append(f"LOW_DISK: 当前可用磁盘 {disk_gb} GB，Debian 13 客机建议 ≥ 25 GB")
 
-    check_vmnet = route == "vmware-linux" and vmnet_mismatch_applies(args.vm_backend)
-    detected_vmnet = detect_vmnet8_cidr() if check_vmnet else None
     stripe_check = None
     if args.env_path:
         env_errors, env_warnings = validate_env_file(args.env_path, route)
-        if route == "vmware-linux" and detected_vmnet:
-            try:
-                env_vmnet = render_mod.load_env(args.env_path).get("VMNET_CIDR", "").strip()
-                if env_vmnet:
-                    env_net = str(ipaddress.ip_network(env_vmnet, strict=False))
-                    if env_net != detected_vmnet:
-                        env_errors.append(
-                            f"VMNET_MISMATCH: instance.env 中 VMNET_CIDR={env_net} 与本机 VMnet8 实际网段 {detected_vmnet} 不一致，"
-                            "请修改后再渲染，否则 firstboot 会锁死宿主 SSH"
-                        )
-            except Exception:
-                pass
         if args.check_stripe and not env_errors:
             stripe_check = check_stripe_reachability(args.env_path)
             if stripe_check and not stripe_check.get("skipped") and not stripe_check.get("reachable"):
@@ -604,8 +527,7 @@ def main():
             "python": platform.python_version(),
             "tart_found": bool(tart_path),
             "tart_home": str(resolved_tart_home) if resolved_tart_home is not None else None,
-            "vmrun_found": bool(vmrun_path),
-            "detected_vmnet_cidr": detected_vmnet,
+            "vboxmanage_found": bool(find_vboxmanage()),
             "tart_linux_golden_images": tart_linux_golden,
             "expected_image": expected_image,
         },

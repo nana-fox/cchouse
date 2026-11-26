@@ -147,7 +147,7 @@ class TestDoctorBundle(unittest.TestCase):
                 "os": "Linux",
                 "arch": "amd64",
                 "tart": {"found": False, "version": None},
-                "vmrun": {"found": True, "version": "vmrun version 1.17.0"},
+                "vboxmanage": {"found": True, "version": "7.2.22r175245"},
                 "debug_leak": f"{pem_block}\n{all_secrets_blob}",
             }
             fake_firstboot = f"[firstboot] started\n{all_secrets_blob}\n{pem_block}\n"
@@ -328,7 +328,7 @@ class TestDoctorBundle(unittest.TestCase):
                 self.assertIn("os", host_info)
                 self.assertIn("arch", host_info)
                 self.assertIn("tart", host_info)
-                self.assertIn("vmrun", host_info)
+                self.assertIn("vboxmanage", host_info)
                 for name in names:
                     raw = zf.read(name).decode("utf-8")
                     self.assertNotIn("S!ngleP@ss#9988", raw)

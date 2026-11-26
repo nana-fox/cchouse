@@ -200,7 +200,7 @@ class TestCchouseV2(unittest.TestCase):
             data["SINGLE_PASS"] = "SUPER_SECRET_NEVER_PRINT_999"
             write_env(env_f, data)
             cp = subprocess.run(
-                [sys.executable, "-I", str(PREFLIGHT), "--route", "vmware-linux", "--env", str(env_f), "--state", str(state_f)],
+                [sys.executable, "-I", str(PREFLIGHT), "--route", "virtualbox-linux", "--env", str(env_f), "--state", str(state_f)],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
@@ -211,11 +211,11 @@ class TestCchouseV2(unittest.TestCase):
             self.assertIn("next_action", payload)
             self.assertTrue(state_f.is_file())
             state = json.loads(state_f.read_text(encoding="utf-8"))
-            self.assertEqual(state["route"], "vmware-linux")
+            self.assertEqual(state["route"], "virtualbox-linux")
             self.assertIn("ram_gb", payload["host"])
             # 验证 --set-step / --set-status 可推进 state.json
             cp2 = subprocess.run(
-                [sys.executable, "-I", str(PREFLIGHT), "--route", "vmware-linux", "--state", str(state_f),
+                [sys.executable, "-I", str(PREFLIGHT), "--route", "virtualbox-linux", "--state", str(state_f),
                  "--set-step", "step1_route", "--set-status", "HUMAN_WAIT", "--next-action", "wait_user_proxy"],
                 capture_output=True,
                 text=True,
@@ -470,7 +470,7 @@ class TestCchouseV2(unittest.TestCase):
             self.assertIn("systemd-networkd.service", aes)
 
     def test_tun_route_exclude_covers_vmnet_in_both_modes(self):
-        # VMware NAT 网段与家庭局域网不同（如 GTR 192.168.140.0/24），必须绕过 TUN，否则宿主 SSH 被劫持
+        # 客机 NAT 网段与家庭局域网分别绕过 TUN，避免宿主 SSH 回包被劫持
         import re as _re
         cases = [("single", base_single_linux_env()), ("chain", base_chain_env())]
         for mode, env in cases:
@@ -798,7 +798,7 @@ async function check(fixtures) {
         artifacts = manifest.get("artifacts")
         self.assertIsInstance(artifacts, list)
         routes = [a.get("route") for a in artifacts]
-        self.assertEqual(sorted(routes), ["tart-linux", "vmware-linux"])
+        self.assertEqual(sorted(routes), ["tart-linux", "virtualbox-linux"])
 
         required_fields = (
             "arch",
@@ -883,7 +883,7 @@ async function check(fixtures) {
                     self.assertNotEqual(r.stdout.strip(), "ok")
 
     def test_docs_keyboard_and_version_consistency(self):
-        for doc_name in ("install-tart-linux.md", "install-vmware-linux.md", "install-virtualbox-linux.md"):
+        for doc_name in ("install-tart-linux.md", "install-virtualbox-linux.md"):
             text = (ROOT / "docs" / doc_name).read_text(encoding="utf-8")
             self.assertNotIn("按出口地区配置键盘布局", text, doc_name)
             self.assertIn("GUEST_KEYBOARD", text, doc_name)

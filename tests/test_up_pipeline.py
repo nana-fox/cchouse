@@ -367,7 +367,7 @@ class TestUpPipeline(unittest.TestCase):
     def test_manual_backend_stops_after_download_with_human_wait(self):
         with tempfile.TemporaryDirectory() as td:
             calls = []
-            ctx = _ctx(td, route="vmware-linux")
+            ctx = _ctx(td, route="virtualbox-linux")
             ctx.backend = "manual"
             out = io.StringIO()
             with mock.patch.dict(cchouse_mod.STEP_FUNCS, self._stub_steps(calls)), mock.patch("sys.stdout", out):
@@ -391,31 +391,6 @@ class TestUpPipeline(unittest.TestCase):
             with mock.patch("sys.stdout", io.StringIO()):
                 cchouse_mod.print_timing_table(ctx, cchouse_mod.UP_STEPS)
             self.assertEqual(ctx.state["run_kind"], "warm")
-
-    def test_import_refuses_to_overwrite_foreign_vm(self):
-        with tempfile.TemporaryDirectory() as td:
-            ctx = _ctx(td, route="vmware-linux")
-            ctx.backend = "vmware"
-            ctx.vmx.parent.mkdir(parents=True)
-            ctx.vmx.write_text("logged-in vm")
-            ran = []
-            ctx.run = lambda cmd, env=None: ran.append(cmd)
-            with self.assertRaises(cchouse_mod.StepError) as cm:
-                cchouse_mod.step_import(ctx)
-            self.assertIn("不会删除", str(cm.exception))
-            self.assertFalse(ctx.state.get("vm_created_by_up"))
-            self.assertEqual(ran, [])
-            self.assertEqual(ctx.vmx.read_text(), "logged-in vm")
-            # up 自己建的（首启失败后重来）允许重建
-            ctx.state["vm_created_by_up"] = True
-            ctx.env_path.parent.mkdir(parents=True, exist_ok=True)
-            cchouse_mod.write_env_secure(ctx.env_path, "TAG=cc05\n")
-            cchouse_mod.step_import(ctx)
-            self.assertTrue(any("-CcOp" in c and "import" in c for c in ran))
-            state = json.loads(ctx.state_path.read_text(encoding="utf-8"))
-            self.assertEqual(state["vm_name"], "claude-cc05")
-            self.assertEqual(state["vm_backend"], "vmware")
-            self.assertEqual(state["private_dir"], str(ctx.private_dir.resolve()))
 
     def test_tart_import_refuses_existing_guest_without_claiming_it(self):
         with tempfile.TemporaryDirectory() as td:
@@ -446,12 +421,12 @@ class TestUpPipeline(unittest.TestCase):
             env = Path(td) / "instance.env"
             cchouse_mod.write_env_secure(env, "TAG=cc05\nGUEST_IP=192.168.64.2\nSINGLE_PASS='s3cr3t'\n")
             cchouse_mod.update_env_value(env, "GUEST_IP", "192.168.64.7")
-            cchouse_mod.update_env_value(env, "VMX_PATH", '"C:/x y/a.vmx"')
+            cchouse_mod.update_env_value(env, "SSH_PORT", "2223")
             text = env.read_text(encoding="utf-8")
             self.assertIn("GUEST_IP=192.168.64.7\n", text)
             self.assertNotIn("192.168.64.2", text)
             self.assertIn("SINGLE_PASS='s3cr3t'", text)
-            self.assertIn('VMX_PATH="C:/x y/a.vmx"', text)
+            self.assertIn("SSH_PORT=2223", text)
             if os.name != "nt":
                 self.assertEqual(os.stat(env).st_mode & 0o777, 0o600)
 
@@ -461,8 +436,7 @@ class TestUpPipeline(unittest.TestCase):
             priv = Path(td) / "cc06"
             cases = (
                 ("tart-linux", "tart", "vm-tart.sh"),
-                ("vmware-linux", "vmware", "vm-vmware.ps1"),
-                ("vmware-linux", "virtualbox", "vm-virtualbox.ps1"),
+                ("virtualbox-linux", "virtualbox", "vm-virtualbox.ps1"),
             )
             for route, backend, marker in cases:
                 proc = subprocess.run(
@@ -496,8 +470,6 @@ class TestUpPipeline(unittest.TestCase):
                 if backend == "virtualbox":
                     self.assertIn("download.virtualbox.org", out)
                     self.assertNotIn("Extension_Pack", out)
-                    self.assertNotIn("MISSING_VMWARE", out)
-                    self.assertNotIn("vm-vmware.ps1", out)
                     self.assertIn("VMNET_CIDR=10.0.2.0/24", env_text)
                     self.assertIn("GUEST_IP=127.0.0.1\n", env_text)
                     self.assertIn("GUEST_IF=enp0s3", env_text)

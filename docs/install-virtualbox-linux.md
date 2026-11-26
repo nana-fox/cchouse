@@ -1,6 +1,6 @@
 # Windows 安装手册（VirtualBox + Debian 13）
 
-本手册覆盖 **Windows（x64）** 上 `cchouse up` 的默认 VirtualBox 路线。已有 VMware 实例时，使用新的 tag 创建 VirtualBox 实例。Apple Silicon 走 [install-tart-linux.md](install-tart-linux.md)。
+本手册覆盖 **Windows（x64）** 上 `cchouse up` 的 VirtualBox 路线。已有旧版虚拟机实例时，为 VirtualBox 使用新的 tag。Apple Silicon 走 [install-tart-linux.md](install-tart-linux.md)。
 
 客机仍是同一份 Debian 13 amd64 黄金镜像。VirtualBox 只提供 NAT，不替换客机系统。
 
@@ -14,11 +14,11 @@
 py -3 -I scripts/cchouse.py up --tag cc01
 ```
 
-安装器默认使用 VirtualBox。粘贴节点链接后，安装器会自动采用并显示出口时区和预期出口 IP，然后继续安装。
+Windows 安装器使用 VirtualBox。单独自检可运行 `py -3 -I scripts/preflight.py --route virtualbox-linux`。粘贴节点链接后，安装器会自动采用并显示出口时区和预期出口 IP，然后继续安装。
 
 VirtualBox 基础包装从 Oracle 官网下载，版本和 SHA-256 写在 `guest-linux/virtualbox-manifest.json`。下载后校验，再静默安装（`ADDLOCAL=VBoxApplication`，不要桌面快捷方式、不要注册文件关联、不要装完自启）。`--msiparams` 放在参数最后，后面每一项单独是一个 `NAME=VALUE`（Oracle 手册 *Installing VirtualBox*：`VirtualBox.exe -msiparams NAME=VALUE [...]`）。静默安装仍会弹出 Windows 的 UAC 提权确认；进程已经具备提升权限时可能不再点击。不要为了免确认而关闭 UAC。仓库**不分发**这个安装包，也**不安装** Oracle 的附加包（无 USB 2/3、无主机共享目录）。已有 `VBoxManage.exe` 时跳过下载。清单里的 SHA-256 为空或格式不对时拒绝安装。NAT-only 安装失败不会改走完整安装。
 
-随后的步骤与 VMware 后端对齐，仍是 9 步：导入 OVA → 挂 `seed.iso` 离线首启 → 卸盘并删除明文 → 接通网卡重启 → `verify-linux.sh --fail-closed` → 快照 `cchouse-clean`。
+安装器随后执行：导入 OVA → 挂 `seed.iso` 离线首启 → 卸盘并删除明文 → 接通网卡重启 → `verify-linux.sh --fail-closed` → 快照 `cchouse-clean`。
 
 网络只做 NAT：
 
@@ -32,7 +32,7 @@ VirtualBox 基础包装从 Oracle 官网下载，版本和 SHA-256 写在 `guest
 
 Windows 上 SSH 使用 `C:\Windows\System32\OpenSSH\ssh.exe`。`C:\Program Files\OpenSSH\ssh.exe` 会忽略 `ConnectTimeout`。`ssh-keyscan.exe` 在开启 HVCI 时会卡住，这条路径不再调用它。首启时客机把 ed25519 主机公钥写到串口日志 `logs/hostkey.serial`，宿主用这一行写入 `known_hosts`。日志里没有这一行时，先确认 `127.0.0.1:<SSH_PORT>` 的 NAT 转发规则和监听进程都属于这台虚拟机，再用 `ssh.exe -o StrictHostKeyChecking=accept-new` 做第一次连接。这种兜底会在 `verify-linux.sh` 里记一条 WARN：未经串口核对主机密钥。等待上限 180 秒，主机密钥对不上就停止。
 
-开启 BIOS 虚拟化。Windows 11 开着 VBS 时 VirtualBox 可能更慢，**不要为了提速关闭 VBS**。缺 VMware 本身不是 `cchouse up` 的 `HUMAN_WAIT`。单独运行 `preflight.py` 且不传 `--vm-backend virtualbox` 时，没有 `vmrun` 仍会报告 `MISSING_VMWARE`。
+开启 BIOS 虚拟化。Windows 11 开着 VBS 时 VirtualBox 可能更慢，**不要为了提速关闭 VBS**。
 
 ---
 
