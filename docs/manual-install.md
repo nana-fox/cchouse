@@ -18,7 +18,7 @@
    - **单节点模式（`EXIT_MODE=single`，默认推荐）**：1 个固定出口节点（SOCKS5 / HTTP / VLESS / Trojan / Shadowsocks / SSH；不支持 Hysteria2 / TUIC 等纯 UDP 协议）。仅 v2 Linux 客机支持。若该节点拦截 Stripe（如 Webshare），只影响在 claude.ai 网页上付款，安装验收会给出提示但不拦截；需要时可加一个 Stripe 备用节点。
    - **链式模式（`EXIT_MODE=chain`，进阶）**：前置节点（自建 VPS / CF 前置 / 机场）→ 固定 ISP 出口（v1 macOS Tart 与 v2 Linux 均支持）；若所用 ISP 屏蔽 Stripe，可额外开启 `STRIPE_EXIT_MODE`（v1 macOS 必须为 `front` 或 `tmh-chain`）。
    - 详细配置见 [proxy-modes.md](proxy-modes.md)，自建前置见 [front.md](front.md)。
-2. **本机硬件建议**：内存 ≥ 16 GB；磁盘剩余空间（VMware / Tart Debian 13 客机 ≥ 25 GB，v1 Tart macOS 客机 ≥ 50 GB）。
+2. **本机硬件建议**：内存 ≥ 16 GB。硬盘：Apple Silicon 至少 9 GB、建议 12 GB；Windows 至少 7 GB、建议 10 GB（一次完整安装，含下载的镜像）。v1 Tart macOS 客机建议 ≥ 50 GB。
 
 ---
 
@@ -27,7 +27,7 @@
 | 你的电脑 | 路线 | 客机环境 | 入口文档 |
 |---|---|---|---|
 | Apple Silicon Mac | Tart（`tart-linux`） | Debian 13 arm64 + Chromium + Claude Code CLI | [install-tart-linux.md](install-tart-linux.md) |
-| Windows x64 | VMware Workstation Pro（`vmware-linux`） | Debian 13 amd64 + Chromium + Claude Code CLI | [install-vmware-linux.md](install-vmware-linux.md) |
+| Windows x64 | VirtualBox | Debian 13 amd64 + Chromium + Claude Code CLI | [README 快速开始](../README.md#快速开始) |
 | Intel Mac | 暂不支持 | — | — |
 | Apple Silicon Mac（v1，已冻结） | Tart（`macos-tart`） | macOS + Safari + Claude Code CLI | [build.md](build.md) |
 
@@ -53,7 +53,6 @@ cp instance.env.linux.example "$D/instance.env"; chmod 600 "$D/instance.env"
 #    a) 生成专用 SSH 密钥，把 .pub 单行内容填入 SSH_PUBKEY
 ssh-keygen -t ed25519 -f "$D/id_ed25519" -N ""
 #    b) 填节点协议/地址/认证参数（SINGLE_*）与预期出口 EXPECTED_EGRESS_IP/LOC/ASN、TIMEZONE
-#    c) VMware 路线把 VMNET_CIDR 改成自检探测到的实际 NAT 网段
 python3 -I scripts/preflight.py --env "$D/instance.env"
 
 # 4. 渲染客机文件（输出含明文凭据，注入后立即删除）
@@ -69,7 +68,7 @@ python3 -I scripts/render.py "$D/instance.env" "$D/rendered"
 ## 目录结构
 
 ```text
-guest-linux/           v2 Debian 13 客机模板（VMware / Tart）
+guest-linux/           v2 Debian 13 客机模板（Tart / VirtualBox）
 guest/                 v1 macOS 客机模板（Tart，已冻结）
 host/                  v1 Apple Silicon 宿主机启停与巡检脚本
 scripts/               preflight.py(.ps1) 环境自检 / render.py 渲染 / verify.sh & verify-linux.sh 验收 / doctor.py 诊断包

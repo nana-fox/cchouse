@@ -2,8 +2,8 @@
 
 ## v2.0-preview
 
-- `scripts/preflight.py` 与 `scripts/preflight.ps1` 检查安装目录所在卷的剩余空间。Apple Silicon 的 Tart 路线按实测占用：低于 9 GB 直接失败并写明需要多少，低于 12 GB 只警告。Windows 按路线分开：VirtualBox 默认路线低于 7 GB 失败、低于 10 GB 只警告（缓存 + 客机 + 干净快照 5924945920 字节，安装前后该卷减少 6196707328 字节，约 5.8 GiB）；手动 `--route vmware-linux` 保留 9/12（卷减少 9418551296 字节，约 8.8 GiB）。#39 合并前还没有 VirtualBox 路线，常量和测试已写好，当前 `vmware-linux` 仍返回 9/12，路线判断留给 #39。
-- README 快速开始说明从 main 运行当前安装器、使用 `v2.0.0-preview.2` 镜像。硬盘一行只写至少和建议多少 GB：Apple Silicon 9/12，Windows 7/10（一次完整安装，含下载的镜像）。镜像缓存、黄金镜像、客机和快照的组成写在 preflight 注释里。第 3 步写明 Mac 验收通过后自动打开客机窗口；Windows 不自动打开窗口，在 VirtualBox 里打开 claude-cc01。两边都在客机 Chromium 里看 Network Check。Windows 主流程不再写 VMware。
+- `scripts/preflight.py` 与 `scripts/preflight.ps1` 检查安装目录所在卷的剩余空间。Apple Silicon 的 Tart 路线按实测占用：低于 9 GB 直接失败并写明需要多少，低于 12 GB 只警告。Windows 只按 VirtualBox 实测（缓存 + 客机 + 干净快照 5924945920 字节，安装前后该卷减少 6196707328 字节，约 5.8 GiB）：低于 7 GB 失败，低于 10 GB 只警告。
+- README 快速开始说明从 main 运行当前安装器、使用 `v2.0.0-preview.2` 镜像。硬盘一行只写至少和建议多少 GB：Apple Silicon 9/12，Windows 7/10（一次完整安装，含下载的镜像）。镜像缓存、黄金镜像、客机和快照的组成写在 preflight 注释里。第 3 步写明 Mac 验收通过后自动打开客机窗口；Windows 不自动打开窗口，在 VirtualBox 里打开 claude-cc01。两边都在客机 Chromium 里看 Network Check。README、产品原则和手动安装路线表里的 Windows 写 VirtualBox。
 - 新增 `cchouse.py remove --tag`。根据安装记录精确清理 Tart 或 VMware 实例，先列清单再确认。默认保留共享黄金镜像和下载缓存，可用 `--purge-cache` 同时清理。
 - 安装器遇到输入结束（EOF）时，有默认值就采用并说明。没有默认值时给出中文提示，清理临时明文后退出。
 - 重写 README 面向首次使用者（大白话价值、三个痛点、原理图、3 步快速开始、支持矩阵、FAQ、安全设计、免责声明），新增英文版 `README.en.md` 与脱敏检查页截图 `docs/assets/check-all-green.png`；原 README 中的出口模式、目录结构、手动安装步骤移至新增的 `docs/manual-install.md`。
