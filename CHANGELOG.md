@@ -24,4 +24,5 @@
 - 修复云构建的 amd64 OVA 被 VMware OVF Tool 拒绝导入的问题。VMDK 转换使用包含压缩数据块对齐与结束标记修复的 QEMU，上载前重新读取归档，检查 OVF 的磁盘引用和 SHA-256 清单。
 - 修复 Tart 联网重启后的 mihomo 预热探针未引用 `known_hosts` 路径的问题。macOS 默认私有目录含空格，旧写法导致 SSH 主机密钥校验失败。
 - Tart 黄金镜像构建的 USTC apt 镜像仅在构建期间生效。关机前恢复 Debian 官方普通源和安全源，并在空状态断言中拒绝交付 `/etc/apt` 仍含 USTC 的镜像。
+- Linux 桌面网络检查页在客机代理启动或查询服务暂不可用时进行限时重试，等待期间显示黄色状态。出口元数据优先查询 IPQuery，备用 IPinfo，仍用 ipify 独立核对 IP。全部尝试结束后仍无法完成核对时提示刷新或运行自动验收。
 - 新增手动 workflow `.github/workflows/attach-release-assets.yml`：在 GitHub 托管 runner 上从 `build-ova` 产物取出 amd64 `.ova`，并从 GHCR 导出 arm64 `.tvm`，再挂到已有 Release（含 draft）。只允许 `workflow_dispatch`，权限仅 `contents: write`、`packages: read`、`actions: read`。当前提交的 manifest 不是该 tag 时，必须另传 `ova_sha256`，并与产物自带的 `.sha256` 一致才上传。

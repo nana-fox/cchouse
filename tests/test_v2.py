@@ -598,6 +598,79 @@ class TestCchouseV2(unittest.TestCase):
         self.assertIn("sudo -n -l", vl_sh)
         self.assertIn("cchouse-verify/cchouse-power", vl_sh)
 
+    def test_check_page_retries_and_preserves_mismatches(self):
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("Node.js unavailable for check.html regression test")
+        script = r"""
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const vm = require("node:vm");
+const ip = "203.0.113.10", timezone = "America/Los_Angeles", asn = "AS64500";
+const primary = {ip, timezone, org: asn + " Example"};
+const fallback = {ip, location: {timezone}, isp: {asn, org: "Example"}};
+const html = fs.readFileSync("guest-linux/check.html", "utf8");
+assert.match(html, /id="verdict" class="pending" role="status">正在检查网络…</);
+const template = html.match(/<script>([\s\S]*?)<\/script>/)[1]
+  .replaceAll("<EXPECTED_EGRESS_IP>", ip)
+  .replaceAll("<TIMEZONE>", timezone)
+  .replaceAll("<EXPECTED_EGRESS_ASN>", asn);
+
+async function check(fixtures) {
+  const verdict = {className: "pending"};
+  const calls = {ipinfo: 0, ipquery: 0, ipify: 0}, order = [], waits = [];
+  const rows = {insertRow: () => ({insertCell: () => ({appendChild() {}})})};
+  await vm.runInNewContext(template, {
+    AbortSignal, performance,
+    document: {
+      getElementById: id => id === "rows" ? rows : verdict,
+      createElement: () => ({}),
+    },
+    fetch: async (url, options) => {
+      const key = Object.keys(calls).find(name => url.includes(name));
+      assert.ok(options.signal);
+      order.push(key);
+      const value = fixtures[key][calls[key]++];
+      if (value instanceof Error) throw value;
+      return {ok: value !== undefined, json: async () => value};
+    },
+    setTimeout: (action, delay) => {
+      assert.equal(verdict.className, "pending");
+      waits.push(delay);
+      action();
+    },
+    navigator: {language: "en-US", languages: ["en-US"]},
+    Intl: {DateTimeFormat: () => ({resolvedOptions: () => ({timeZone: timezone})})},
+  });
+  return {status: verdict.className, text: verdict.textContent, order, waits};
+}
+
+(async () => {
+  const offline = new TypeError("network unavailable");
+  const fallbackSuccess = await check({ipquery: [offline], ipinfo: [primary], ipify: [{ip}]});
+  assert.equal(fallbackSuccess.status, "ok");
+  assert.deepEqual(fallbackSuccess.order, ["ipquery", "ipinfo", "ipify"]);
+  const retried = await check({ipquery: [offline, fallback], ipinfo: [], ipify: [offline, {ip}]});
+  assert.equal(retried.status, "ok");
+  assert.deepEqual(retried.order, ["ipquery", "ipinfo", "ipify", "ipquery", "ipify"]);
+  assert.deepEqual(retried.waits, [2000]);
+  for (const wrong of [{...fallback, ip: "203.0.113.11"}, {...fallback, location: {timezone: "UTC"}}]) {
+    const mismatch = await check({ipquery: [wrong], ipinfo: [primary], ipify: [{ip}]});
+    assert.equal(mismatch.status, "bad");
+    assert.deepEqual(mismatch.order, ["ipquery", "ipify"]);
+  }
+  const ipOnly = await check({ipquery: [], ipinfo: [], ipify: [{ip}]});
+  assert.equal(ipOnly.status, "bad");
+  assert.match(ipOnly.text, /稍后刷新或运行 verify/);
+  assert.deepEqual(ipOnly.waits, [2000, 4000, 8000]);
+  assert.equal(ipOnly.order.filter(name => name === "ipify").length, 1);
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+        result = subprocess.run(
+            [node, "-"], input=script, cwd=ROOT, capture_output=True, encoding="utf-8", timeout=15,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_ustc_mirror_is_removed_before_golden_image_assertions(self):
         import re
 
