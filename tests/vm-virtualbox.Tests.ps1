@@ -356,6 +356,61 @@ try {
   Assert-Equal "serial mark" ([System.IO.File]::ReadAllText($trustPath)) "serial`n"
 
   & {
+    $startCalls = [System.Collections.Generic.List[string]]::new()
+    $responses = [System.Collections.Generic.Queue[object]]::new()
+    function Invoke-CchouseVBoxOptional {
+      param([string[]]$CcArgumentList)
+      $startCalls.Add($CcArgumentList -join " ")
+      return $responses.Dequeue()
+    }
+    function Start-Sleep {}
+
+    # 1. Synchronous startvm succeeds cleanly on first try
+    $responses.Enqueue([pscustomobject]@{ ExitCode = 0; Output = @('VM "claude-cc01" has been successfully started.'); Stderr = "" })
+    Start-CchouseVmDetached -Name "claude-cc01"
+    Assert-Equal "startvm headless called synchronously" ($startCalls -join "|") "startvm claude-cc01 --type headless"
+
+    # 2. Transient VBOX_E_INVALID_OBJECT_STATE session lock is retried and succeeds
+    $startCalls.Clear()
+    $responses.Enqueue([pscustomobject]@{
+      ExitCode = 1
+      Output = @()
+      Stderr = "VBoxManage.exe: error: The machine 'claude-cc01' is already locked by a session (or being locked or unlocked)`nDetails: code VBOX_E_INVALID_OBJECT_STATE (0x80bb0007)"
+    })
+    $responses.Enqueue([pscustomobject]@{ ExitCode = 0; Output = @('VM "claude-cc01" has been successfully started.'); Stderr = "" })
+    Start-CchouseVmDetached -Name "claude-cc01"
+    Assert-Equal "transient session lock retried once" $startCalls.Count 2
+
+    # 3. Non-lock launch failure fails fast without retrying and includes stderr
+    $startCalls.Clear()
+    $responses.Enqueue([pscustomobject]@{
+      ExitCode = 1
+      Output = @()
+      Stderr = "VBoxManage.exe: error: VT-x is not available (VERR_VMX_NO_VMX)"
+    })
+    Assert-Throws "non-lock startvm error fails fast with stderr" {
+      Start-CchouseVmDetached -Name "claude-cc01"
+    } "VERR_VMX_NO_VMX"
+    Assert-Equal "non-lock error is not retried" $startCalls.Count 1
+
+    # 4. Persistent session lock throws after exhausting retries
+    $startCalls.Clear()
+    for ($i = 0; $i -lt 5; $i++) {
+      $responses.Enqueue([pscustomobject]@{
+        ExitCode = 1
+        Output = @()
+        Stderr = "VBoxManage.exe: error: The machine 'claude-cc01' is already locked by a session"
+      })
+    }
+    Assert-Throws "persistent session lock throws after 5 attempts" {
+      Start-CchouseVmDetached -Name "claude-cc01"
+    } "already locked by a session"
+    Assert-Equal "persistent session lock retried 5 times" $startCalls.Count 5
+  }
+  $startFn = (($src -csplit "function Start-CchouseVmDetached", 2)[1] -csplit "function Wait-CchousePowerOff", 2)[0]
+  Assert-False "startvm does not use fire-and-forget Win32_Process" $startFn.Contains("Win32_Process")
+
+  & {
     $states = [System.Collections.Generic.Queue[string]]::new()
     function Invoke-CchouseVBoxOptional { return @{ ExitCode = 0; Output = @($states.Dequeue()) } }
     function Start-Sleep {}
