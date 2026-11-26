@@ -35,9 +35,9 @@ try {
   }
   $root = Join-Path $env:LOCALAPPDATA 'cchouse\bootstrap'
   Write-Host "cchouse $version 将校验并准备私有 Python 和源码，写入 $root。"
-  Write-Host '随后启动 cchouse up。Windows 固定使用 VirtualBox，缺少时由安装器获取，按系统提示授权。'
+  Write-Host '随后启动 cchouse up，按提示输入节点链接。'
   $openSsh = Join-Path $env:WINDIR 'System32\OpenSSH'
-  foreach ($tool in @('ssh.exe', 'ssh-keygen.exe', 'ssh-keyscan.exe')) {
+  foreach ($tool in @('ssh.exe', 'ssh-keygen.exe')) {
     if (-not (Test-Path -LiteralPath (Join-Path $openSsh $tool) -PathType Leaf)) {
       throw '缺少 OpenSSH 客户端。请到 Windows 设置 → 可选功能 → 添加功能，安装 OpenSSH 客户端后重试。'
     }

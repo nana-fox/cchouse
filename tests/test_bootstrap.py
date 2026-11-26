@@ -199,7 +199,7 @@ exit $LASTEXITCODE
             bootstrap = root / "cchouse" / "bootstrap"
             for openssh_available in (False, True):
                 if openssh_available:
-                    for name in ("ssh.exe", "ssh-keygen.exe", "ssh-keyscan.exe"):
+                    for name in ("ssh.exe", "ssh-keygen.exe"):
                         (system32 / name).touch()
                 run = subprocess.run(
                     ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded],
@@ -262,7 +262,7 @@ exit $LASTEXITCODE
             script.write_text(script_text, encoding="utf-8-sig")
             ssh = root / "System32/OpenSSH"
             ssh.mkdir(parents=True)
-            for name in ("ssh.exe", "ssh-keygen.exe", "ssh-keyscan.exe"):
+            for name in ("ssh.exe", "ssh-keygen.exe"):
                 (ssh / name).touch()
             for _ in range(2):
                 run = run_ps(driver, env)
