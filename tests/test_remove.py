@@ -52,6 +52,7 @@ class TestRemove(unittest.TestCase):
             "tag": "cc01", "private_dir": str(self.private), "cache_dir": str(self.cache),
             "route": "tart-linux", "vm_backend": "tart", "vm_created_by_up": True,
             "vm_name": self.vm_name, "clean_snapshot": self.snapshot, "golden_name": self.golden,
+            "tart_vm_mac": "02:cc:00:00:00:01", "tart_snapshot_mac": "02:cc:00:00:00:02",
             "step": "up:done", "status": "DONE",
         }
         state.update(overrides)
@@ -61,6 +62,9 @@ class TestRemove(unittest.TestCase):
         if cmd[:2] == ["tart", "list"]:
             self.assertEqual(cmd, ["tart", "list", "--source", "local", "--format", "json"])
             return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(list(self.inventory.values())))
+        if len(cmd) >= 4 and cmd[1] == "get" and "--format" in cmd:
+            macs = {self.vm_name: "02:cc:00:00:00:01", self.snapshot: "02:cc:00:00:00:02"}
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"MAC": macs.get(cmd[2], "")}))
         if cmd[0] in ("tart", "bash"):
             self.assertEqual(cmd[-2], "delete")
             del self.inventory[cmd[-1]]
@@ -144,14 +148,31 @@ class TestRemove(unittest.TestCase):
                 self.assertIn(self.vm_name, self.inventory)
         self.mock_run.assert_not_called()
 
-    def test_legacy_tart_uses_recorded_clean_clone_name(self):
-        state = {"step": "up:done", "route": "tart-linux", "vm_created_by_up": True, "clean_snapshot": self.snapshot}
+    def test_legacy_tart_without_identity_or_mac_refuses_delete_and_prints_manual_cleanup(self):
+        pinned = str((self.root / "bootstrap" / "tools" / "tart-2.42.0" / "Contents" / "MacOS" / "tart").resolve())
+        state = {
+            "step": "up:done", "route": "tart-linux", "vm_created_by_up": True,
+            "clean_snapshot": self.snapshot, "tart_bin": pinned,
+        }
         (self.private / "state.json").write_text(json.dumps(state), encoding="utf-8")
+        deleted = []
+
+        def list_only(cmd, **kwargs):
+            if cmd[:2] == [pinned, "list"]:
+                return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(list(self.inventory.values())))
+            deleted.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0)
+
+        self.mock_run.side_effect = list_only
         rc, text = self.remove(yes=True)
-        self.assertEqual(rc, 0, text)
-        self.assertNotIn(self.vm_name, self.inventory)
-        self.assertNotIn(self.snapshot, self.inventory)
-        self.assertTrue(self.image.is_file())
+        self.assertNotEqual(rc, 0, text)
+        self.assertEqual(deleted, [])
+        self.assertIn(self.vm_name, self.inventory)
+        self.assertIn(self.snapshot, self.inventory)
+        self.assertTrue(self.private.exists())
+        self.assertIn("无法核验", text)
+        self.assertIn(f'"{pinned}" list', text)
+        self.assertIn(f'"{pinned}" delete "{self.vm_name}"', text)
 
     def test_without_ownership_does_not_remove_same_named_tart_vms(self):
         self.write_state(vm_created_by_up=False)
@@ -290,6 +311,9 @@ class TestRemove(unittest.TestCase):
                 seen_envs.append(kwargs["env"])
             if cmd[:2] == [pinned, "list"]:
                 return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(list(self.inventory.values())))
+            if len(cmd) >= 4 and cmd[:2] == [pinned, "get"] and "--format" in cmd:
+                macs = {self.vm_name: "02:cc:00:00:00:01", self.snapshot: "02:cc:00:00:00:02"}
+                return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"MAC": macs.get(cmd[2], "")}))
             if cmd[0] == "bash" and cmd[-2] == "delete":
                 del self.inventory[cmd[-1]]
                 return subprocess.CompletedProcess(cmd, 0)

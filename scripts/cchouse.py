@@ -1243,12 +1243,32 @@ def _tart_vm_mac(name, tart_bin=None):
     return None
 
 
+def _tart_display_cmd(tart_bin=None):
+    exe = tart_bin or _tart_bin()
+    if exe == "tart":
+        resolved = shutil.which("tart") or preflight_mod.find_tart()
+        if resolved:
+            exe = os.path.abspath(resolved)
+    if exe and (os.path.isabs(str(exe)) or os.sep in str(exe)):
+        return f'"{exe}"'
+    return str(exe or "tart")
+
+
+def _tart_unverifiable_ownership_msg(name, tart_bin=None):
+    tcmd = _tart_display_cmd(tart_bin)
+    return (
+        f"无法核验 Tart 虚拟机或快照 {name} 的归属（state.json 缺少目录身份和 MAC 记录），"
+        f"已拒绝自动操作。请先运行 {tcmd} list 核对，确认归属无误后再手动清理："
+        f'{tcmd} stop "{name}" && {tcmd} delete "{name}"。'
+    )
+
+
 def _verify_tart_ownership(name, state, identity_key, mac_key, tart_bin=None):
-    """用同一个 tart 与目录身份双重校验目标虚拟机/快照归属；对不上立即报错，绝不操作。"""
+    """用同一个 tart 与目录身份双重校验目标虚拟机/快照归属；缺少记录或对不上立即报错，绝不操作。"""
     has_id = identity_key in state and state.get(identity_key) is not None
     has_mac = mac_key in state and bool(state.get(mac_key))
     if not has_id and not has_mac:
-        return
+        raise StepError(_tart_unverifiable_ownership_msg(name, tart_bin))
     if has_id:
         cur_id = tart_vm_identity(name, tart_bin)
         if cur_id is None or cur_id != state[identity_key]:
@@ -1301,8 +1321,6 @@ def step_import(ctx):
         raise StepError(vm_name_conflict(ctx.vm_name))
     if ctx.backend == "tart":
         if exists:
-            if not ctx.state.get("tart_vm_identity") and not ctx.state.get("tart_vm_mac"):
-                raise StepError(vm_name_conflict(ctx.vm_name))
             _verify_tart_ownership(ctx.vm_name, ctx.state, "tart_vm_identity", "tart_vm_mac", ctx.tart_bin)
         existed = (not ctx.dry_run) and subprocess.run(
             ["bash", str(ROOT / "scripts" / "vm-tart.sh"), "exists", ctx.golden_name],
@@ -1687,10 +1705,10 @@ def cmd_up(args):
             if identity is not None or has_mac:
                 try:
                     _verify_tart_ownership(ctx.vm_name, ctx.state, "tart_vm_identity", "tart_vm_mac", ctx.tart_bin)
-                except StepError:
-                    owned = False
-            else:
-                owned = ctx.done("snapshot")
+                except StepError as exc:
+                    sys.exit(str(exc))
+            elif not ctx.done("snapshot"):
+                sys.exit(_tart_unverifiable_ownership_msg(ctx.vm_name, ctx.tart_bin))
         if not owned:
             sys.exit(vm_name_conflict(ctx.vm_name))
         print(f"检测到 {ctx.vm_name} 的安装记录，将沿用已完成步骤。")
@@ -1910,12 +1928,13 @@ def cmd_remove(args):
             if not isinstance(golden_name, str) or not re.fullmatch(r"cchouse-debian13-arm64-[a-zA-Z0-9._-]+", golden_name):
                 raise StepError("state.json 的 Tart 黄金镜像名无效")
             inventory = _tart_inventory(tart_bin)
-            for name, id_key, mac_key in (
-                (vm_name, "tart_vm_identity", "tart_vm_mac"),
-                (snapshot, "tart_snapshot_identity", "tart_snapshot_mac"),
-            ):
-                if name in inventory:
-                    _verify_tart_ownership(name, state, id_key, mac_key, tart_bin)
+            if owned:
+                for name, id_key, mac_key in (
+                    (vm_name, "tart_vm_identity", "tart_vm_mac"),
+                    (snapshot, "tart_snapshot_identity", "tart_snapshot_mac"),
+                ):
+                    if name in inventory:
+                        _verify_tart_ownership(name, state, id_key, mac_key, tart_bin)
         else:
             inventory = {}
 

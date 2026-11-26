@@ -166,13 +166,21 @@ class TestDailyCliDispatch(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "privroot"
             pdir = root / "cc01"
-            _make_state(pdir, backend="tart")
+            state = _make_state(pdir, backend="tart")
+            state["tart_vm_mac"] = "02:cc:00:00:00:11"
+            state["tart_snapshot_mac"] = "02:cc:00:00:00:22"
+            (pdir / "state.json").write_text(json.dumps(state, indent=2), encoding="utf-8")
             env_before = (pdir / "instance.env").read_text(encoding="utf-8")
             key_before = (pdir / "id_ed25519").read_text(encoding="utf-8")
+            macs = {"claude-cc01": ["02:cc:00:00:00:11", "02:cc:00:00:00:11", "02:cc:00:00:00:99"], "claude-cc01-clean": ["02:cc:00:00:00:22", "02:cc:00:00:00:22"]}
+
+            def fake_mac(name, _tart_bin=None):
+                return macs[name].pop(0)
+
             with mock.patch.object(cchouse, "default_private_root", return_value=root), \
                  mock.patch.object(cchouse, "_backend_status", return_value=("stopped", True)), \
                  mock.patch.object(cchouse, "tart_vm_identity", return_value=[123, 456]), \
-                 mock.patch.object(cchouse, "_tart_vm_mac", return_value="02:cc:00:00:00:99"), \
+                 mock.patch.object(cchouse, "_tart_vm_mac", side_effect=fake_mac), \
                  mock.patch.object(cchouse.subprocess, "run") as m_run:
                 with redirect_stdout(io.StringIO()):
                     rc = cchouse.cmd_restore(argparse.Namespace(tag="cc01", private_dir=None, yes=True))
@@ -184,6 +192,26 @@ class TestDailyCliDispatch(unittest.TestCase):
             self.assertEqual(updated["tart_vm_mac"], "02:cc:00:00:00:99")
             self.assertEqual((pdir / "instance.env").read_text(encoding="utf-8"), env_before)
             self.assertEqual((pdir / "id_ed25519").read_text(encoding="utf-8"), key_before)
+
+    def test_restore_refuses_unverifiable_tart_state_without_identity_or_mac(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "privroot"
+            pdir = root / "cc01"
+            pinned = str((Path(tmp) / "private-tart").resolve())
+            state = _make_state(pdir, backend="tart")
+            state["tart_bin"] = pinned
+            (pdir / "state.json").write_text(json.dumps(state, indent=2), encoding="utf-8")
+            with mock.patch.object(cchouse, "default_private_root", return_value=root), \
+                 mock.patch.object(cchouse, "_backend_status", return_value=("stopped", True)), \
+                 mock.patch.object(cchouse.subprocess, "run") as m_run:
+                err = io.StringIO()
+                with redirect_stderr(err):
+                    rc = cchouse.cmd_restore(argparse.Namespace(tag="cc01", private_dir=None, yes=True))
+                self.assertNotEqual(rc, 0)
+                self.assertIn("无法核验", err.getvalue())
+                self.assertIn(f'"{pinned}" list', err.getvalue())
+                self.assertIn(f'"{pinned}" delete "claude-cc01"', err.getvalue())
+                m_run.assert_not_called()
 
     def test_restore_virtualbox_dispatch(self):
         with tempfile.TemporaryDirectory() as tmp:
