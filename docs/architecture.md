@@ -1,14 +1,25 @@
 # 架构
 
-## 产品原则：每平台一条默认路线
+## 现在的做法
 
-每个平台一条默认路线。发版真机测试只覆盖默认路线。其余路线放在进阶文档里。
+cchouse 在你的电脑里开一台隔离的 Debian 13 虚拟机。网页版 Claude 和 Claude Code 都在这台客机里用。你的电脑本身照常上网。
 
-- **Mac**：Apple Silicon + Tart。安装见 [install-tart-linux.md](install-tart-linux.md)（Debian 13 arm64）。
-- **Windows**：已经安装 VMware 的用 VMware，安装见 [install-vmware-linux.md](install-vmware-linux.md)。尚未安装虚拟机软件的用 VirtualBox。VirtualBox 待 HVCI 与 Guest Additions 验证；验证通过后，Windows 默认路线可能统一为 VirtualBox。
-- **Intel Mac**：暂不支持。相关代码保留。
+- **Mac**：Apple Silicon 用 Tart。客机是 Debian 13 arm64。安装见 [install-tart-linux.md](install-tart-linux.md)。
+- **Windows**：只用 VirtualBox。客机是 Debian 13 amd64。
+- **Intel Mac**：暂不支持。
+- 不支持把 Linux 电脑当作宿主。
 
-进阶路线单独成文。需要 macOS 桌面或 Safari 高拟真时用 [build.md](build.md)（Tart + macOS）。下面的架构图属于这条进阶路线。
+客机只走你配置的那一个节点。节点一断，客机就断网，不会自动换路，也不会改走本机网络。
+
+客机不挂载本机目录。宿主上的文件不会出现在客机里。
+
+客机里的浏览器打开网络检查页（Network Check）。这一页只检查网络。命令行验收通过就可以登录。
+
+两跳链式代理是进阶选项，见 [proxy-modes.md](proxy-modes.md)。
+
+## 历史：v1 macOS 高拟真
+
+这一节只留给已经装过的 v1 客机。当时用 Tart 跑 macOS，出口在前置和机场之间自动切换。维护旧客机见 [build.md](build.md)。
 
 ```
 宿主 Mac（Apple Silicon）
