@@ -87,7 +87,7 @@ Mac 上，安装器验收通过后会自动打开客机窗口。在客机的 Chr
 ## 你需要准备什么
 
 - **一个节点**（cchouse 不提供节点）。支持 SOCKS5、HTTP(S)、VLESS、Trojan、Shadowsocks；不支持 Hysteria2、TUIC、WireGuard 这类走 UDP 的协议。最好是固定 IP、地区稳定的节点。
-- **电脑配置**：建议内存 16 GB 以上。硬盘按一次完整安装计算。Apple Silicon 至少 9 GB，建议 12 GB，覆盖镜像缓存、黄金镜像、客机和干净快照（本机实测）。Windows 至少 5 GB，建议 8 GB，覆盖镜像缓存里的 OVA 和导入后的客机磁盘（估算）。Windows 不另外保留一份黄金镜像；干净快照是增量，不按再占一整块磁盘计算。
+- **电脑配置**：建议内存 16 GB 以上。硬盘：Apple Silicon 至少 9 GB、建议 12 GB；Windows 至少 9 GB、建议 12 GB（一次完整安装，含下载的镜像）。
 
 > **关于 Stripe**：有些节点会拦截付款服务 Stripe。这只影响在 claude.ai 网页上付款，不影响登录和日常使用；安装时会提示你，但不会拦着你装。这只检查能否连通，不代表付款一定成功。需要的话可以加一个付款专用节点，见 [docs/proxy-modes.md](docs/proxy-modes.md)。
 

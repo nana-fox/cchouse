@@ -196,11 +196,15 @@ def find_tart_linux_golden_images(th=None):
 # 默认 ~/.tart 与缓存目录在同一卷。TART_HOME 在另一卷时，仍按这一合计检查该卷。
 TART_LINUX_DISK_MIN_GB = 9
 TART_LINUX_DISK_RECOMMENDED_GB = 12
-# Windows 未在本机实测。OVA 1584588800 字节（约 1.58 GB）留在缓存。
-# ovftool 导入稀疏 VMDK（虚拟容量 24 GiB，不是厚置备）；包内 VMDK 1584573440 字节。
-# 导入后磁盘按 3 GB 估算（高于 Mac 黄金镜像实测的 2.112 GiB）。1.58 + 3 ≈ 4.5，至少 5 GB；建议再加 3 GB。
-VMWARE_LINUX_DISK_MIN_GB = 5
-VMWARE_LINUX_DISK_RECOMMENDED_GB = 8
+# 2026-11-26 GTR 实测（HVCI 开，同一份正式 OVA，NTFS 分配字节）。
+# 门槛取 VMware 与 VirtualBox 里较大的占用，VMware 更大：
+#   缓存 1770708992 + 快照后客机目录 6934653192 = 8705362184（8.108 GiB）。
+#   安装前后该卷可用空间减少 9418551296（8.772 GiB，含安装过程里的临时文件）。
+# VirtualBox 较小：缓存 + 快照后客机 5924945920（5.518 GiB），卷可用空间减少 6196707328（5.771 GiB）。
+# Windows 不另存黄金镜像。快照增量已含在快照后的客机目录里。
+# 至少 9 GB 向上取整，盖住较大的那次体积减少。建议 12 GB，与 Mac 一样再留约 3 GB 给客机磁盘增长。
+VMWARE_LINUX_DISK_MIN_GB = 9
+VMWARE_LINUX_DISK_RECOMMENDED_GB = 12
 
 
 def default_install_dir():
@@ -236,39 +240,41 @@ def install_disk_probe_path(route, tart_home=None):
 
 
 def disk_requirement_gb(route):
-    """返回 (最低 GB, 建议 GB, 是否为估算)。macos-tart 沿用单独的 30/50 GB 规则。"""
+    """返回 (最低 GB, 建议 GB, 是否为估算)。两条路线都是实测。macos-tart 沿用单独的 30/50 GB 规则。"""
     if route == "tart-linux":
         return TART_LINUX_DISK_MIN_GB, TART_LINUX_DISK_RECOMMENDED_GB, False
     if route == "vmware-linux":
-        return VMWARE_LINUX_DISK_MIN_GB, VMWARE_LINUX_DISK_RECOMMENDED_GB, True
+        return VMWARE_LINUX_DISK_MIN_GB, VMWARE_LINUX_DISK_RECOMMENDED_GB, False
     return None, None, False
 
 
 def assess_install_disk(free_gb, route):
-    """低于实测/估算最低值返回错误，低于建议值只返回警告。"""
-    minimum, recommended, estimate = disk_requirement_gb(route)
+    """低于实测最低值返回错误，低于建议值只返回警告。"""
+    minimum, recommended, _estimate = disk_requirement_gb(route)
     if minimum is None:
         return [], []
     if free_gb < minimum:
-        if estimate:
-            return [ (
-                f"INSUFFICIENT_DISK: 安装目录所在卷剩余 {free_gb} GB，"
-                f"按 OVA 1.58 GB 加导入后 VMDK 估算至少需要 {minimum} GB（估算，不是 Windows 实测）。"
+        if route == "tart-linux":
+            need = (
+                f"完整安装至少需要 {minimum} GB（镜像缓存、黄金镜像、客机和干净快照）。"
+                "请清理空间或把 TART_HOME 指到更大的卷。"
+            )
+        else:
+            need = (
+                f"完整安装至少需要 {minimum} GB（含下载的镜像）。"
                 "请清理该卷空间后再安装。"
-            ) ], []
-        return [ (
-            f"INSUFFICIENT_DISK: 安装目录所在卷剩余 {free_gb} GB，"
-            f"完整安装至少需要 {minimum} GB（镜像缓存、黄金镜像、客机和干净快照）。"
-            "请清理空间或把 TART_HOME 指到更大的卷。"
-        ) ], []
+            )
+        return [(
+            f"INSUFFICIENT_DISK: 安装目录所在卷剩余 {free_gb} GB，{need}"
+        )], []
     if free_gb < recommended:
-        if estimate:
-            return [], [ (
-                f"LOW_DISK: 安装目录所在卷剩余 {free_gb} GB，可以安装。建议至少 {recommended} GB（Windows 为估算值）。"
-            ) ]
-        return [], [ (
-            f"LOW_DISK: 安装目录所在卷剩余 {free_gb} GB，可以安装。建议至少 {recommended} GB，以便客机磁盘继续增长。"
-        ) ]
+        if route == "tart-linux":
+            hint = f"建议至少 {recommended} GB，以便客机磁盘继续增长。"
+        else:
+            hint = f"建议至少 {recommended} GB。"
+        return [], [(
+            f"LOW_DISK: 安装目录所在卷剩余 {free_gb} GB，可以安装。{hint}"
+        )]
     return [], []
 
 

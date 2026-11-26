@@ -87,16 +87,17 @@ $errors = @("MISSING_PYTHON: Windows 未检测到真实 Python 3（已排除 Win
 if (-not $vmrunFound) {
   $errors += "MISSING_VMWARE: 未检测到 VMware Workstation Pro (vmrun.exe)"
 }
-# 与 preflight.py 的 VMWARE_LINUX_DISK_MIN_GB / VMWARE_LINUX_DISK_RECOMMENDED_GB 保持一致。Windows 数字是估算。
-$diskMinGb = 5
-$diskRecommendedGb = 8
+# 与 preflight.py 的 VMWARE_LINUX_DISK_MIN_GB / VMWARE_LINUX_DISK_RECOMMENDED_GB 保持一致。
+# 9/12 取 GTR 上 VMware 与 VirtualBox 实测的较大值（VMware）。
+$diskMinGb = 9
+$diskRecommendedGb = 12
 $diskFreeGb = $null
 try {
   $diskFreeGb = Get-CchouseInstallFreeGb
   if ($null -ne $diskFreeGb -and $diskFreeGb -lt $diskMinGb) {
-    $errors += "INSUFFICIENT_DISK: 安装目录所在卷剩余 $diskFreeGb GB，按 OVA 1.58 GB 加导入后 VMDK 估算至少需要 $diskMinGb GB（估算，不是 Windows 实测）。请清理该卷空间后再安装。"
+    $errors += "INSUFFICIENT_DISK: 安装目录所在卷剩余 $diskFreeGb GB，完整安装至少需要 $diskMinGb GB（含下载的镜像）。请清理该卷空间后再安装。"
   } elseif ($null -ne $diskFreeGb -and $diskFreeGb -lt $diskRecommendedGb) {
-    $warnings += "LOW_DISK: 安装目录所在卷剩余 $diskFreeGb GB，可以安装。建议至少 $diskRecommendedGb GB（Windows 为估算值）。"
+    $warnings += "LOW_DISK: 安装目录所在卷剩余 $diskFreeGb GB，可以安装。建议至少 $diskRecommendedGb GB。"
   }
 } catch {
   $warnings += "DISK_CHECK_FAILED: 未能读取安装目录所在卷的剩余空间。"
@@ -114,7 +115,7 @@ $payload = [ordered]@{
     disk_free_gb = $diskFreeGb
     disk_min_gb = $diskMinGb
     disk_recommended_gb = $diskRecommendedGb
-    disk_estimate = $true
+    disk_estimate = $false
   }
   route = $Route
   errors = $errors

@@ -242,15 +242,21 @@ class TestCchouseV2(unittest.TestCase):
             preflight_mod.TART_LINUX_DISK_MIN_GB,
         )
 
-        # Windows：OVA 字节数加上估算的 3 GB 稀疏 VMDK，最低值不得低于这个合计。
-        ova_bytes = 1584588800
-        vmdk_estimate_gb = 3
-        self.assertGreaterEqual(
-            preflight_mod.VMWARE_LINUX_DISK_MIN_GB,
-            ova_bytes / (1024 ** 3) + vmdk_estimate_gb,
-        )
-        self.assertEqual(preflight_mod.VMWARE_LINUX_DISK_MIN_GB, 5)
-        self.assertEqual(preflight_mod.VMWARE_LINUX_DISK_RECOMMENDED_GB, 8)
+        # Windows：GTR 实测。门槛不得低于 VMware 与 VirtualBox 里较大的那次占用。
+        vmware_kept = 1770708992 + 6934653192
+        vbox_kept = 1770708992 + 4154236928
+        vmware_drop = 9418551296
+        vbox_drop = 6196707328
+        self.assertEqual(vmware_kept, 8705362184)
+        self.assertEqual(vbox_kept, 5924945920)
+        self.assertGreater(vmware_kept, vbox_kept)
+        self.assertGreater(vmware_drop, vbox_drop)
+        larger = max(vmware_kept, vbox_kept, vmware_drop, vbox_drop)
+        self.assertEqual(larger, vmware_drop)
+        self.assertGreaterEqual(preflight_mod.VMWARE_LINUX_DISK_MIN_GB, larger / (1024 ** 3))
+        self.assertEqual(preflight_mod.VMWARE_LINUX_DISK_MIN_GB, 9)
+        self.assertEqual(preflight_mod.VMWARE_LINUX_DISK_RECOMMENDED_GB, 12)
+        self.assertEqual(preflight_mod.disk_requirement_gb("vmware-linux"), (9, 12, False))
 
         below, _warn = preflight_mod.assess_install_disk(8.9, "tart-linux")
         self.assertTrue(any("INSUFFICIENT_DISK" in item and "至少需要 9 GB" in item for item in below))
@@ -262,13 +268,15 @@ class TestCchouseV2(unittest.TestCase):
         ok_err, ok_warn = preflight_mod.assess_install_disk(12.0, "tart-linux")
         self.assertEqual((ok_err, ok_warn), ([], []))
 
-        win_below, win_warn = preflight_mod.assess_install_disk(4.9, "vmware-linux")
-        self.assertTrue(any("INSUFFICIENT_DISK" in item and "至少需要 5 GB" in item and "估算" in item for item in win_below))
+        win_below, win_warn = preflight_mod.assess_install_disk(8.9, "vmware-linux")
+        self.assertTrue(any("INSUFFICIENT_DISK" in item and "至少需要 9 GB" in item for item in win_below))
+        self.assertFalse(any("估算" in item for item in win_below))
         self.assertEqual(win_warn, [])
-        win_mid_err, win_mid_warn = preflight_mod.assess_install_disk(5.0, "vmware-linux")
+        win_mid_err, win_mid_warn = preflight_mod.assess_install_disk(9.0, "vmware-linux")
         self.assertEqual(win_mid_err, [])
-        self.assertTrue(any("建议至少 8 GB" in item and "估算" in item for item in win_mid_warn))
-        win_ok_err, win_ok_warn = preflight_mod.assess_install_disk(8.0, "vmware-linux")
+        self.assertTrue(any("建议至少 12 GB" in item for item in win_mid_warn))
+        self.assertFalse(any("估算" in item for item in win_mid_warn))
+        win_ok_err, win_ok_warn = preflight_mod.assess_install_disk(12.0, "vmware-linux")
         self.assertEqual((win_ok_err, win_ok_warn), ([], []))
 
         # v1 macOS 客机仍走 30/50 GB，不套用 Debian 实测值。
@@ -282,11 +290,12 @@ class TestCchouseV2(unittest.TestCase):
             self.assertFalse((Path(td) / "not-created").exists())
 
         ps1 = (ROOT / "scripts" / "preflight.ps1").read_text(encoding="utf-8")
-        self.assertIn("$diskMinGb = 5", ps1)
-        self.assertIn("$diskRecommendedGb = 8", ps1)
+        self.assertIn("$diskMinGb = 9", ps1)
+        self.assertIn("$diskRecommendedGb = 12", ps1)
         self.assertIn("至少需要 $diskMinGb GB", ps1)
         self.assertIn("建议至少 $diskRecommendedGb GB", ps1)
-        self.assertIn("估算，不是 Windows 实测", ps1)
+        self.assertIn("disk_estimate = $false", ps1)
+        self.assertNotIn("估算", ps1)
 
     def test_tart_cached_image_ignores_deployed_vms(self):
         sys.path.insert(0, str(ROOT / "scripts"))
