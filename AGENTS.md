@@ -9,7 +9,7 @@
 0. **环境自检**：运行 `python3 -I scripts/preflight.py --state <private>/state.json`（Windows 无 Python 先跑 `powershell -ExecutionPolicy Bypass -File scripts/preflight.ps1`）。按输出的 JSON `next_action` 推进，不要猜环境。
 1. **前提与路线确认**（未满足则用 `--set-status HUMAN_WAIT` 停下等人）：
    - 确认用户已自备外部代理，选择 `EXIT_MODE=single`（仅 v2 Linux）或 `chain`（v1 macOS 仅支持 `chain` 且 `STRIPE_EXIT_MODE` 为 `front`/`tmh-chain`）。
-   - Windows / Intel Mac 自动锁定 **VMware + Debian 13**（`vmware-linux`）；Apple Silicon Mac 优先推荐 **Tart + Debian 13 arm64**（`tart-linux`，轻量、支持 `single`/`chain`），需 macOS 原生桌面/Safari 高拟真时走 **Tart + macOS**（`macos-tart`，v1）。
+   - Intel Mac 暂不支持。Windows 自动锁定 **VMware + Debian 13**（`vmware-linux`）；Apple Silicon Mac 优先推荐 **Tart + Debian 13 arm64**（`tart-linux`，轻量、支持 `single`/`chain`），需 macOS 原生桌面/Safari 高拟真时走 **Tart + macOS**（`macos-tart`，v1）。
    - 若本机缺 VMware / 未开 BIOS 虚拟化 / 磁盘严重不足，写入 `HUMAN_WAIT` 并停下来等用户处理完继续。
 2. **按路线读文档**：见下方路由表，只加载当前路线所需文档。
 3. **凭据与渲染**：引导用户在私有目录填好 `instance.env`（`chmod 600`），运行 `python3 -I scripts/preflight.py --env <instance.env>` 校验后，执行 `python3 -I scripts/render.py <instance.env> <private>/rendered`。
@@ -21,7 +21,7 @@
 | 任务 | 只读这些文件 |
 |---|---|
 | 配置单节点 / 链式代理与 Stripe 分流 | [docs/proxy-modes.md](docs/proxy-modes.md) |
-| Windows / Intel Mac（VMware + Debian 13） | [docs/install-vmware-linux.md](docs/install-vmware-linux.md) |
+| Windows（VMware + Debian 13） | [docs/install-vmware-linux.md](docs/install-vmware-linux.md) |
 | Apple Silicon Mac（Tart + Debian 13 arm64，轻量首选） | [docs/install-tart-linux.md](docs/install-tart-linux.md) |
 | Apple Silicon Mac（Tart + macOS，v1 高拟真） | [docs/build.md](docs/build.md) |
 | 自建前置、加 UUID（链式模式） | [docs/front.md](docs/front.md) |
