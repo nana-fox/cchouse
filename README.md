@@ -59,7 +59,7 @@ Windows PowerShell 用 `py -3 -I scripts/cchouse.py up --tag cc01`。
 
 **第 3 步：打开虚拟机桌面，网络检查全部通过后再登录**
 
-Mac 上，安装器验收通过后会自动打开客机窗口。在客机的 Chromium 里看 Network Check 检查页（就是上面那张图）。Windows 上，安装器不会自动打开窗口，请在 VMware 里打开这台虚拟机，同样在客机的 Chromium 里看这一页。网络检查全部通过后，再在**虚拟机里的浏览器**登录 Claude。这一页只检查网络，不代表账号状态。
+Mac 上，安装器验收通过后会自动打开客机窗口。在客机的 Chromium 里看 Network Check 检查页（就是上面那张图）。Windows 上，安装器不会自动打开窗口，请在 VMware 或 VirtualBox 里打开名为 claude-cc01 的虚拟机，同样在客机的 Chromium 里看这一页。网络检查全部通过后，再在**虚拟机里的浏览器**登录 Claude。这一页只检查网络，不代表账号状态。
 
 > 登录 Claude Code 时弹出的授权链接，也只能在虚拟机里的浏览器打开，不要复制到你本机的浏览器。
 

@@ -59,7 +59,7 @@ If installation fails, it stops on the step that failed. Fix the cause it prints
 
 **Step 3: Open the VM desktop, and sign in only after every network check passes**
 
-On a Mac, after verification passes, the installer opens the guest window. In the guest's Chromium, look at the Network Check page (the picture above). On Windows, the installer does not open a window. Open this virtual machine in VMware, and look at the same page in the guest's Chromium. After every network check passes, sign in to Claude in **the browser inside the VM**. That page checks the network only. It does not say anything about the account.
+On a Mac, after verification passes, the installer opens the guest window. In the guest's Chromium, look at the Network Check page (the picture above). On Windows, the installer does not open a window. Open the virtual machine named claude-cc01 in VMware or VirtualBox, and look at the same page in the guest's Chromium. After every network check passes, sign in to Claude in **the browser inside the VM**. That page checks the network only. It does not say anything about the account.
 
 > The authorization link shown when you sign in to Claude Code must also be opened in the browser inside the VM. Do not copy it into the browser on your own computer.
 
