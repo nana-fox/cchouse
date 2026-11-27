@@ -244,6 +244,7 @@ class TestHostMihomoProbe(unittest.TestCase):
 
         # 前置不通
         with mock.patch.object(cchouse.subprocess, "Popen", return_value=fake_proc), \
+                mock.patch.object(cchouse, "_macos_default_route_is_utun", return_value=False), \
                 mock.patch.object(cchouse, "_wait_loopback_ready", return_value=True), \
                 mock.patch.object(cchouse, "_curl_via_local_mihomo", return_value=(28, "", "timeout")), \
                 mock.patch.object(cchouse, "_probe_front_reachable", return_value=False):
@@ -255,6 +256,7 @@ class TestHostMihomoProbe(unittest.TestCase):
 
         # 前置正常，出口超时
         with mock.patch.object(cchouse.subprocess, "Popen", return_value=fake_proc), \
+                mock.patch.object(cchouse, "_macos_default_route_is_utun", return_value=False), \
                 mock.patch.object(cchouse, "_wait_loopback_ready", return_value=True), \
                 mock.patch.object(cchouse, "_curl_via_local_mihomo", return_value=(28, "", "timeout")), \
                 mock.patch.object(cchouse, "_probe_front_reachable", return_value=True):
@@ -267,6 +269,7 @@ class TestHostMihomoProbe(unittest.TestCase):
         auth_proc.poll.return_value = None
         auth_proc.communicate.return_value = (b"socks5 auth failed: username/password rejected", b"")
         with mock.patch.object(cchouse.subprocess, "Popen", return_value=auth_proc), \
+                mock.patch.object(cchouse, "_macos_default_route_is_utun", return_value=False), \
                 mock.patch.object(cchouse, "_wait_loopback_ready", return_value=True), \
                 mock.patch.object(cchouse, "_curl_via_local_mihomo", return_value=(56, "", "proxy recv fail")), \
                 mock.patch.object(cchouse, "_probe_front_reachable", return_value=True):

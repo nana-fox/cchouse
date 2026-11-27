@@ -593,7 +593,51 @@ def _probe_orig_host(fields, prefix):
     return None if pinned else None
 
 
-def build_host_probe_config(single_fields, listen_port, via_fields=None):
+def _macos_default_route_is_utun():
+    if platform.system() != "Darwin":
+        return False
+    try:
+        out = subprocess.check_output(
+            ["/sbin/route", "-n", "get", "1.1.1.1"], text=True, stderr=subprocess.DEVNULL, timeout=3
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    for line in out.splitlines():
+        if "interface:" in line:
+            return line.split(":", 1)[1].strip().startswith("utun")
+    return False
+
+
+def _macos_primary_physical_interfaces():
+    """返回 macOS 上当前拥有有效 IPv4 且状态 active 的物理 en* 网卡列表（仅用于宿主 TUN 回环时的临时探测回退）。"""
+    if platform.system() != "Darwin":
+        return []
+    try:
+        out = subprocess.check_output(["/sbin/ifconfig"], text=True, stderr=subprocess.DEVNULL, timeout=3)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    ifaces = []
+    cur = None
+    has_ipv4 = False
+    is_active = False
+    for line in out.splitlines():
+        if line and not line[0].isspace():
+            if cur and cur.startswith("en") and has_ipv4 and is_active:
+                ifaces.append(cur)
+            cur = line.split(":", 1)[0].strip()
+            has_ipv4 = False
+            is_active = False
+        elif cur and cur.startswith("en"):
+            if "\tinet " in line and "127.0.0.1" not in line and "169.254." not in line:
+                has_ipv4 = True
+            if "status: active" in line:
+                is_active = True
+    if cur and cur.startswith("en") and has_ipv4 and is_active:
+        ifaces.append(cur)
+    return ifaces
+
+
+def build_host_probe_config(single_fields, listen_port, via_fields=None, interface_name=None):
     """生成宿主临时 mihomo 最小探测配置：仅 127.0.0.1 mixed-port，无 TUN/控制器/DNS，仅 MATCH,<出口>，绝无 DIRECT。"""
     merged = dict(single_fields)
     if via_fields:
@@ -614,6 +658,7 @@ def build_host_probe_config(single_fields, listen_port, via_fields=None):
         proxy_block = front_block + "\n" + exit_block
     else:
         proxy_block, _ = render_mod.build_proxy_node_lines(merged, "SINGLE", "PROBE-Exit", exit_ip, exit_orig)
+    iface_line = f"interface-name: {interface_name}\n" if interface_name else ""
     config_text = (
         "---\n"
         f"mixed-port: {int(listen_port)}\n"
@@ -622,6 +667,7 @@ def build_host_probe_config(single_fields, listen_port, via_fields=None):
         "mode: rule\n"
         "log-level: warning\n"
         "ipv6: false\n"
+        f"{iface_line}"
         "proxies:\n"
         f"{proxy_block}\n"
         "rules:\n"
@@ -631,13 +677,14 @@ def build_host_probe_config(single_fields, listen_port, via_fields=None):
     return config_text
 
 
-def build_host_front_probe_config(via_fields, listen_port):
+def build_host_front_probe_config(via_fields, listen_port, interface_name=None):
     """仅用于两跳失败时诊断前置节点本身是否连通的最小 mihomo 配置（无 DIRECT、仅 127.0.0.1）。"""
     via_ip = (via_fields.get("SINGLE_VIA_SERVER_IP") or "").strip()
     if not render_mod.is_ipv4(via_ip):
         raise StepError("缺少前置节点的 IPv4 地址，无法生成探测配置。")
     via_orig = _probe_orig_host(via_fields, "SINGLE_VIA")
     front_block, _ = render_mod.build_proxy_node_lines(via_fields, "SINGLE_VIA", "PROBE-Front", via_ip, via_orig)
+    iface_line = f"interface-name: {interface_name}\n" if interface_name else ""
     config_text = (
         "---\n"
         f"mixed-port: {int(listen_port)}\n"
@@ -646,6 +693,7 @@ def build_host_front_probe_config(via_fields, listen_port):
         "mode: rule\n"
         "log-level: warning\n"
         "ipv6: false\n"
+        f"{iface_line}"
         "proxies:\n"
         f"{front_block}\n"
         "rules:\n"
@@ -733,13 +781,13 @@ def _curl_via_local_mihomo(port, url, timeout=15):
         return 1, "", type(exc).__name__
 
 
-def _probe_front_reachable(mihomo_bin, via_fields, timeout=8):
+def _probe_front_reachable(mihomo_bin, via_fields, timeout=8, interface_name=None):
     """快速探测两跳中的前置节点自身是否连通（返回 True/False，绝不泄露凭据）。"""
     tmp_dir = Path(tempfile.mkdtemp(prefix="cchouse-probe-front-"))
     proc = None
     try:
         port = _pick_free_loopback_port()
-        cfg_text = build_host_front_probe_config(via_fields, port)
+        cfg_text = build_host_front_probe_config(via_fields, port, interface_name=interface_name)
         cfg_path = _write_probe_config_secure(tmp_dir, cfg_text)
         proc = subprocess.Popen(
             [str(mihomo_bin), "-d", str(tmp_dir), "-f", str(cfg_path)],
@@ -790,17 +838,7 @@ def _classify_probe_failure(mihomo_log, curl_rc, curl_err, has_via, front_ok=Non
     return "无法通过该节点访问外网（连接被拒绝或中断），请检查节点服务、端口与协议参数是否正确。"
 
 
-def probe_egress_via_proxy(single_fields, via_fields=None, timeout=15, probe_count=3, probe_interval=2.0, mihomo_bin=None):
-    """统一用宿主临时 mihomo（与客机同版本）探测出口 IP/国家/ASN/时区；间隔几秒测 3 次，IP 不一致即停。"""
-    if mihomo_bin is None:
-        try:
-            mihomo_bin = downloads.ensure_host_mihomo(
-                ROOT / "guest-linux" / "mihomo-manifest.json",
-                default_private_root() / "bootstrap",
-            )
-        except downloads.DownloadError as exc:
-            raise StepError(f"准备宿主临时探测程序 mihomo 失败：{exc}") from None
-
+def _run_mihomo_egress_probe(mihomo_bin, single_fields, via_fields, timeout, probe_count, probe_interval, interface_name=None):
     tmp_dir = Path(tempfile.mkdtemp(prefix="cchouse-probe-"))
     proc = None
     mihomo_log = ""
@@ -808,7 +846,7 @@ def probe_egress_via_proxy(single_fields, via_fields=None, timeout=15, probe_cou
     last_err = ""
     try:
         port = _pick_free_loopback_port()
-        cfg_text = build_host_probe_config(single_fields, port, via_fields=via_fields)
+        cfg_text = build_host_probe_config(single_fields, port, via_fields=via_fields, interface_name=interface_name)
         cfg_path = _write_probe_config_secure(tmp_dir, cfg_text)
         try:
             proc = subprocess.Popen(
@@ -832,7 +870,7 @@ def probe_egress_via_proxy(single_fields, via_fields=None, timeout=15, probe_cou
             if rc != 0 or not out.strip():
                 mihomo_log = _stop_temp_mihomo(proc)
                 proc = None
-                front_ok = _probe_front_reachable(mihomo_bin, via_fields) if via_fields else None
+                front_ok = _probe_front_reachable(mihomo_bin, via_fields, interface_name=interface_name) if via_fields else None
                 raise StepError(_classify_probe_failure(mihomo_log, last_rc, last_err, bool(via_fields), front_ok=front_ok))
             try:
                 info = json.loads(out)
@@ -846,7 +884,7 @@ def probe_egress_via_proxy(single_fields, via_fields=None, timeout=15, probe_cou
             except (ValueError, AttributeError):
                 mihomo_log = _stop_temp_mihomo(proc)
                 proc = None
-                front_ok = _probe_front_reachable(mihomo_bin, via_fields) if via_fields else None
+                front_ok = _probe_front_reachable(mihomo_bin, via_fields, interface_name=interface_name) if via_fields else None
                 raise StepError(_classify_probe_failure(mihomo_log, last_rc, last_err, bool(via_fields), front_ok=front_ok))
 
             if not render_mod.is_ipv4(cur["ip"]):
@@ -862,6 +900,40 @@ def probe_egress_via_proxy(single_fields, via_fields=None, timeout=15, probe_cou
     finally:
         _stop_temp_mihomo(proc)
         shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def probe_egress_via_proxy(single_fields, via_fields=None, timeout=15, probe_count=3, probe_interval=2.0, mihomo_bin=None):
+    """统一用宿主临时 mihomo（与客机同版本）探测出口 IP/国家/ASN/时区；间隔几秒测 3 次，IP 不一致即停。"""
+    if mihomo_bin is None:
+        try:
+            mihomo_bin = downloads.ensure_host_mihomo(
+                ROOT / "guest-linux" / "mihomo-manifest.json",
+                default_private_root() / "bootstrap",
+            )
+        except downloads.DownloadError as exc:
+            raise StepError(f"准备宿主临时探测程序 mihomo 失败：{exc}") from None
+
+    try:
+        return _run_mihomo_egress_probe(
+            mihomo_bin, single_fields, via_fields, timeout, probe_count, probe_interval, interface_name=None
+        )
+    except StepError as first_err:
+        msg = str(first_err)
+        # 若 macOS 宿主开着 TUN（如 Clash TUN）导致临时 mihomo 走默认路由超时/回环，
+        # 仅在临时探测配置中绑定活跃物理网卡重试一次（不修改任何宿主网络或代理设置）。
+        if ("不是固定 IP" in msg or "认证失败" in msg or "未能启动监听" in msg):
+            raise
+        if _macos_default_route_is_utun():
+            for iface in _macos_primary_physical_interfaces():
+                try:
+                    return _run_mihomo_egress_probe(
+                        mihomo_bin, single_fields, via_fields, timeout, probe_count, probe_interval, interface_name=iface
+                    )
+                except StepError as retry_err:
+                    if "不是固定 IP" in str(retry_err) or "认证失败" in str(retry_err):
+                        raise
+                    continue
+        raise first_err
 
 
 def generate_ssh_keypair(private_dir, tag):
