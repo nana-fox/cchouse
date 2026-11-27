@@ -135,15 +135,47 @@ class MacBootstrapTests(unittest.TestCase):
                 command.chmod(0o700)
             script = root / "bootstrap.sh"
             script.write_text(bootstrap_text("mac", "a" * 64), encoding="utf-8")
+            saved_env = root / "Library/Application Support/cchouse/cc01/instance.env"
+            saved_env.parent.mkdir(parents=True, exist_ok=True)
+            saved_env.write_text("TAG=cc01\n", encoding="utf-8")
             run = subprocess.run(
                 ["/bin/bash", script], env=dict(os.environ, HOME=td, PATH=f"{binary}:/usr/bin:/bin:/usr/sbin:/sbin"),
-                capture_output=True, text=True, encoding="utf-8", timeout=20,
+                stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8", timeout=20,
             )
             self.assertEqual(run.returncode, 1, run.stdout + run.stderr)
             self.assertIn("SHA-256 校验失败", run.stderr)
+            self.assertIn("检测到已有节点配置", run.stdout)
+            self.assertNotIn("按提示输入节点链接", run.stdout)
             bootstrap = root / "Library/Application Support/cchouse/bootstrap"
             self.assertFalse(any((bootstrap / "tools").iterdir()))
             self.assertFalse((bootstrap / ".prepare").exists())
+
+    def test_non_tty_without_saved_env_exits_20_with_home_cmd_and_no_downloads(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            binary = root / "bin"
+            binary.mkdir()
+            for name, body in {
+                "uname": "echo Darwin",
+                "sysctl": "echo 1",
+                "sw_vers": "echo 13.0",
+                "curl": 'echo "curl should not run" >&2; exit 99',
+            }.items():
+                command = binary / name
+                command.write_text(f"#!/bin/sh\n{body}\n")
+                command.chmod(0o700)
+            script = root / "bootstrap.sh"
+            script.write_text(bootstrap_text("mac", "a" * 64), encoding="utf-8")
+            self_sha = hashlib.sha256(script.read_bytes()).hexdigest()
+            run = subprocess.run(
+                ["/bin/bash", script], env=dict(os.environ, HOME=td, PATH=f"{binary}:/usr/bin:/bin:/usr/sbin:/sbin"),
+                stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8", timeout=20,
+            )
+            self.assertEqual(run.returncode, 20, run.stdout + run.stderr)
+            self.assertIn("需要你本人输入节点链接：请在你自己的终端窗口运行下面这条命令（AI 无法也不应替你输入）", run.stdout)
+            self.assertIn(f"/releases/download/{VERSION}/bootstrap-macos.sh", run.stdout)
+            self.assertIn(self_sha, run.stdout)
+            self.assertFalse((root / "Library/Application Support/cchouse/bootstrap").exists())
 
     @unittest.skipUnless(sys.platform == "darwin", "requires macOS ditto")
     def test_private_paths_with_chinese_and_spaces_are_reused_on_rerun(self):
@@ -186,8 +218,12 @@ cp "$HOME/$kind" "$dest"
             script.write_text(text, encoding="utf-8")
             env = dict(os.environ, HOME=td, PATH=f"{binary}:/usr/bin:/bin:/usr/sbin:/sbin")
             for args, tag in (([], "cc01"), (["--tag", "cc02"], "cc02")):
+                saved_env = root / "Library/Application Support/cchouse" / tag / "instance.env"
+                saved_env.parent.mkdir(parents=True, exist_ok=True)
+                saved_env.write_text(f"TAG={tag}\n", encoding="utf-8")
                 run = subprocess.run(
-                    ["/bin/bash", script, *args], env=env, capture_output=True, text=True, encoding="utf-8", timeout=30,
+                    ["/bin/bash", script, *args], env=env, stdin=subprocess.DEVNULL,
+                    capture_output=True, text=True, encoding="utf-8", timeout=30,
                 )
                 self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
                 self.assertIn(f"UP -I scripts/cchouse.py up --tag {tag}", run.stdout)
@@ -214,6 +250,9 @@ exit $LASTEXITCODE
                               encoding="utf-8-sig")
             system32 = root / "System32" / "OpenSSH"
             system32.mkdir(parents=True)
+            saved_env = root / "cchouse" / "cc01" / "instance.env"
+            saved_env.parent.mkdir(parents=True, exist_ok=True)
+            saved_env.write_text("TAG=cc01\n", encoding="utf-8")
             bootstrap = root / "cchouse" / "bootstrap"
             for openssh_available in (False, True):
                 if openssh_available:
@@ -222,7 +261,7 @@ exit $LASTEXITCODE
                 run = subprocess.run(
                     ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded],
                     env=dict(os.environ, TEST_ROOT=td, LOCALAPPDATA=td, TEST_BOOTSTRAP=str(script)),
-                    capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+                    stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
                 )
                 self.assertEqual(run.returncode, 1, run.stdout + run.stderr)
                 if not openssh_available:
@@ -230,7 +269,37 @@ exit $LASTEXITCODE
                     self.assertFalse(bootstrap.exists())
                 else:
                     self.assertIn("SHA-256 校验失败", run.stdout)
+                    self.assertIn("检测到已有节点配置", run.stdout)
+                    self.assertNotIn("按提示输入节点链接", run.stdout)
                     self.assertFalse(any((bootstrap / "tools").iterdir()))
+
+    def test_non_tty_without_saved_env_exits_20_with_home_cmd_and_no_downloads(self):
+        driver = """
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+& $env:TEST_BOOTSTRAP
+exit $LASTEXITCODE
+"""
+        encoded = base64.b64encode(driver.encode("utf-16-le")).decode("ascii")
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            script = root / "bootstrap.ps1"
+            script.write_text(bootstrap_text("windows", "a" * 64).replace("$env:WINDIR", "$env:TEST_ROOT"),
+                              encoding="utf-8-sig")
+            self_hash = hashlib.sha256(script.read_bytes()).hexdigest()
+            system32 = root / "System32" / "OpenSSH"
+            system32.mkdir(parents=True)
+            for name in ("ssh.exe", "ssh-keygen.exe"):
+                (system32 / name).touch()
+            run = subprocess.run(
+                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded],
+                env=dict(os.environ, TEST_ROOT=td, LOCALAPPDATA=td, TEST_BOOTSTRAP=str(script)),
+                stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+            )
+            self.assertEqual(run.returncode, 20, run.stdout + run.stderr)
+            self.assertIn("需要你本人输入节点链接：请在你自己的终端窗口运行下面这条命令（AI 无法也不应替你输入）", run.stdout)
+            self.assertIn(f"/releases/download/{VERSION}/bootstrap-windows.ps1", run.stdout)
+            self.assertIn(self_hash, run.stdout)
+            self.assertFalse((root / "cchouse" / "bootstrap").exists())
 
     def test_chinese_spaced_path_reruns_without_download_and_propagates_exit(self):
         compile_exe = """
@@ -287,6 +356,9 @@ exit $LASTEXITCODE
             ssh.mkdir(parents=True)
             for name in ("ssh.exe", "ssh-keygen.exe"):
                 (ssh / name).touch()
+            saved_env = root / "cchouse" / "cc01" / "instance.env"
+            saved_env.parent.mkdir(parents=True, exist_ok=True)
+            saved_env.write_text("TAG=cc01\n", encoding="utf-8")
             for _ in range(2):
                 run = run_ps(driver, env)
                 self.assertEqual(run.returncode, 7, run.stdout + run.stderr)

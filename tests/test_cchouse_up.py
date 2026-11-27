@@ -234,6 +234,86 @@ class TestCchouseUpCLI(unittest.TestCase):
         self.assertNotEqual(proc.returncode, 0)
         self.assertFalse(inside_dir.exists())
 
+    def test_up_non_tty_without_saved_env_exits_20_with_home_cmd(self):
+        with tempfile.TemporaryDirectory() as td:
+            priv_dir = Path(td) / "cc01"
+            child_env = os.environ.copy()
+            child_env["PYTHONIOENCODING"] = "utf-8"
+            child_env.pop("CCHOUSE_HOME_CMD", None)
+            proc = subprocess.run(
+                [
+                    sys.executable, "-I", str(ROOT / "scripts" / "cchouse.py"),
+                    "up", "--tag", "cc01", "--private-dir", str(priv_dir),
+                    "--cache-dir", str(Path(td) / "cache"),
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=child_env,
+                timeout=15,
+            )
+            self.assertEqual(proc.returncode, cchouse_mod.EXIT_NEED_TTY, proc.stdout + proc.stderr)
+            self.assertIn("需要你本人输入节点链接：请在你自己的终端窗口运行下面这条命令（AI 无法也不应替你输入）", proc.stdout)
+            self.assertIn("releases/download/", proc.stdout)
+            self.assertFalse((priv_dir / "state.json").exists())
+            self.assertFalse((priv_dir / "instance.env").exists())
+
+    def test_up_non_tty_with_saved_env_does_not_fail_and_reconfigure_exits_20(self):
+        secret_link = "socks5://saved_u:saved_p@203.0.113.55:1080\n"
+        with tempfile.TemporaryDirectory() as td:
+            priv_dir = Path(td) / "cc08"
+            cache_dir = Path(td) / "cache"
+            child_env = os.environ.copy()
+            child_env["PYTHONIOENCODING"] = "utf-8"
+            # Step 1: create saved instance.env via --link-stdin
+            init = subprocess.run(
+                [
+                    sys.executable, "-I", str(ROOT / "scripts" / "cchouse.py"),
+                    "up", "--tag", "cc08", "--private-dir", str(priv_dir),
+                    "--cache-dir", str(cache_dir),
+                    "--timezone", "America/Los_Angeles",
+                    "--expected-ip", "203.0.113.55",
+                    "--expected-country", "US",
+                    "--expected-asn", "AS64500",
+                    "--link-stdin", "--no-probe", "--config-only",
+                ],
+                input=secret_link,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, encoding="utf-8", errors="replace", env=child_env, timeout=30,
+            )
+            self.assertTrue((priv_dir / "instance.env").is_file(), init.stdout + init.stderr)
+            # Step 2: rerun without TTY and without --link-stdin -> reuses saved env, does NOT exit 20
+            rerun = subprocess.run(
+                [
+                    sys.executable, "-I", str(ROOT / "scripts" / "cchouse.py"),
+                    "up", "--tag", "cc08", "--private-dir", str(priv_dir),
+                    "--cache-dir", str(cache_dir),
+                    "--no-probe", "--config-only",
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, encoding="utf-8", errors="replace", env=child_env, timeout=30,
+            )
+            self.assertNotEqual(rerun.returncode, cchouse_mod.EXIT_NEED_TTY, rerun.stdout + rerun.stderr)
+            self.assertNotIn("需要你本人输入节点链接", rerun.stdout)
+            # Step 3: rerun with --reconfigure and no TTY -> exits 20
+            reconf = subprocess.run(
+                [
+                    sys.executable, "-I", str(ROOT / "scripts" / "cchouse.py"),
+                    "up", "--tag", "cc08", "--private-dir", str(priv_dir),
+                    "--cache-dir", str(cache_dir),
+                    "--reconfigure", "--no-probe", "--config-only",
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, encoding="utf-8", errors="replace", env=child_env, timeout=15,
+            )
+            self.assertEqual(reconf.returncode, cchouse_mod.EXIT_NEED_TTY, reconf.stdout + reconf.stderr)
+            self.assertIn("需要你本人输入节点链接：请在你自己的终端窗口运行下面这条命令（AI 无法也不应替你输入）", reconf.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

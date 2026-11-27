@@ -18,6 +18,20 @@
 
 ## 快速开始
 
+### 让 AI 帮你装
+
+如果你用 Claude Code、Codex、Cursor 等 AI 助手，把下面这段话直接复制给它，AI 会带你一步步装完。节点链接全程只由你本人在自己的终端窗口粘贴，AI 不会索要、读取或保存（AI 执行规范见 [AGENTS.md](AGENTS.md)）：
+
+```text
+帮我安装 cchouse（https://github.com/nana-fox/cchouse）。请严格按以下步骤协助我：
+1. 先检查我的电脑类型（仅支持 Apple Silicon Mac 或 Windows x64，其他平台直接告诉我暂不支持并停止）和可用磁盘空间（Mac 至少 9 GB / 建议 12 GB，Windows 至少 7 GB / 建议 10 GB）。
+2. 问我是否已有固定 IP 的 SOCKS5 或 HTTP(S) 代理节点；如果没有，说明这是前提并停止，不要替我购买，也不要推荐具体商家。
+3. 阅读本仓库的 AGENTS.md 和 README.md，只使用 README 首页当前锁定版本的安装命令，不要改写或拼装命令。
+4. 把对应平台的首页安装命令给我，让我在自己的终端窗口运行并在提示处粘贴节点链接；你不要索要、读取、记录或保存我的节点链接。
+5. 我安装完成后，帮我运行 `cchouse status --tag cc01` 确认状态；如果安装失败，按 AGENTS.md 用 `scripts/doctor.py` 排查并给出修复建议，再让我重跑同一条首页命令。
+6. 全部通过后，提醒我在虚拟机桌面打开 check.html 核对全绿，并在虚拟机内自行登录 Claude。
+```
+
 三步完成部署（空缓存首次安装实测耗时见[支持的电脑](#支持的电脑)）：
 
 1. **运行一行命令**：按你的系统复制下方命令（自动下载并校验客机镜像与官方 Claude Code 包，见[镜像清单](guest-linux/image-manifest.json)）。
@@ -73,7 +87,7 @@ f=$(mktemp -t cchouse-bootstrap) && curl -fsSLo "$f" https://github.com/nana-fox
 - 默认读写时，**虚拟机里的程序能改、能删这个文件夹里的文件**。不要放证件、私钥、密码库。卸载时共享文件夹和里面的文件会保留。
 - 共享文件夹不走网络，不影响「只走节点、断了就断网」。
 
-让 AI Agent 协助安装见 [AGENTS.md](AGENTS.md)，手动配置见 [进阶安装](docs/manual-install.md)。
+手动配置见 [进阶安装](docs/manual-install.md)。
 
 ---
 
@@ -117,8 +131,8 @@ f=$(mktemp -t cchouse-bootstrap) && curl -fsSLo "$f" https://github.com/nana-fox
 
 | 你的电脑 | 用什么虚拟机软件 | 状态 |
 |---|---|---|
-| Apple Silicon Mac（M 系列） | Tart | ✅ `v2.0.0-preview.4` 已完成公开命令盲装与真机冷下载验收（26 PASS / 0 FAIL / 1 Stripe WARN） |
-| Windows（x64） | VirtualBox | ✅ `v2.0.0-preview.4` 已在 Windows 11 实机完成空缓存公开命令盲装（26 PASS / 0 FAIL / 1 Stripe WARN） |
+| Apple Silicon Mac（M 系列） | Tart | ✅ 最新版自动验收 29 项通过（0 FAIL；Stripe 连通性按节点情况提示 WARN） |
+| Windows（x64） | VirtualBox | ✅ 最新版自动验收 30 项通过（0 FAIL；Stripe 连通性按节点情况提示 WARN） |
 | Intel Mac | — | 暂不支持 |
 
 虚拟机里统一是 Debian 13 + Chromium + Claude Code。不支持 Linux 电脑作为宿主机。
@@ -130,7 +144,7 @@ f=$(mktemp -t cchouse-bootstrap) && curl -fsSLo "$f" https://github.com/nana-fox
 - **客机镜像**：Apple Silicon Mac（`.tvm`）约 **874 MiB**（`915,980,115` 字节），Windows x64（`.ova`）约 **1511 MiB**（`1,584,588,800` 字节，约 1.5 GB）。
 - **官方 Claude Code 包**：约 **175 MiB**（`183,973,219` 字节）。
 
-`v2.0.0-preview.4` 公开命令与真机实测参考（进度持续更新时可继续等待）：
+`v2.0.0-preview.4` 公开命令与真机实测参考（当时验收项为 26 项，进度持续更新时可继续等待）：
 
 - **Windows 11（x64）**：空缓存公开命令盲装通过（26 PASS / 0 FAIL / 1 Stripe WARN），安装器合计 **48 分 09 秒**；其中客机镜像下载耗时 **45 分 38 秒**（平均 0.37 MB/s，受当时网速影响；Claude Code 16 分 49 秒、VirtualBox 16 分 10 秒与安装步骤重叠）。
 - **Apple Silicon Mac**：公开命令盲装通过（26 PASS / 0 FAIL / 1 Stripe WARN）；该轮镜像与 Claude Code 命中预热缓存，引导阶段下载源码包、私有 Python 和私有 Tart 用时约 **7 分 33 秒**，`cchouse up` 用时 **1 分 57 秒**，全程 **9 分 30 秒**。另在 `v2.0.0-preview.4` 真机冷下载验收中（经宿主代理），TVM 镜像用时 **51.8 秒**（16.85 MiB/s），Claude Code 用时 **15.3 秒**（11.47 MiB/s），除等待输入节点外核心安装与验收用时 **88.5 秒**（同样 26 PASS / 0 FAIL / 1 Stripe WARN）。

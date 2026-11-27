@@ -250,7 +250,8 @@ class TestUpPipeline(unittest.TestCase):
         link = "socks5://test-user:test-password@203.0.113.8:1080"
         with tempfile.TemporaryDirectory() as td:
             ctx = _ctx(td, link_stdin=False, non_interactive=False, no_probe=False)
-            with mock.patch.object(cchouse_mod.getpass, "getpass", return_value=link) as prompt, \
+            with mock.patch.object(cchouse_mod, "_stdin_is_tty", return_value=True), \
+                    mock.patch.object(cchouse_mod.getpass, "getpass", return_value=link) as prompt, \
                     mock.patch("builtins.input", side_effect=AssertionError("unexpected confirmation")), \
                     mock.patch.object(cchouse_mod, "probe_egress_via_proxy", return_value=egress), \
                     mock.patch.object(cchouse_mod, "generate_ssh_keypair", return_value=(ctx.ssh_key, "ssh-ed25519 AAAA test")), \
@@ -306,7 +307,8 @@ class TestUpPipeline(unittest.TestCase):
                 self.assertTrue(downloaded.wait(5))
                 raise EOFError
 
-            with mock.patch.object(cchouse_mod.getpass, "getpass", side_effect=prompt), \
+            with mock.patch.object(cchouse_mod, "_stdin_is_tty", return_value=True), \
+                    mock.patch.object(cchouse_mod.getpass, "getpass", side_effect=prompt), \
                     mock.patch("sys.stdout", io.StringIO()) as out:
                 ctx.downloader.start("image", "img", download)
                 self.assertTrue(started.wait(5))
@@ -341,6 +343,7 @@ class TestUpPipeline(unittest.TestCase):
                 ctx.seed_iso.write_bytes(b"plaintext")
                 out = io.StringIO()
                 with mock.patch("sys.stdin", io.StringIO()), mock.patch("sys.stdout", out), \
+                        mock.patch.object(cchouse_mod, "_stdin_is_tty", return_value=True), \
                         mock.patch.object(cchouse_mod.getpass, "getpass", side_effect=EOFError):
                     rc = cchouse_mod.run_pipeline(ctx)
                 self.assertEqual(rc, 1)
