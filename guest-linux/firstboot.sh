@@ -36,6 +36,7 @@ cat >/etc/sudoers.d/cchouse-verify <<'EOF'
 # 仅允许无参数固定子命令的受控探针，禁止任何通配符
 claude ALL=(root) NOPASSWD: /usr/local/sbin/cchouse-probe nft-loaded
 claude ALL=(root) NOPASSWD: /usr/local/sbin/cchouse-probe nft-live-sha
+claude ALL=(root) NOPASSWD: /usr/local/sbin/cchouse-probe nft-egress-sha
 claude ALL=(root) NOPASSWD: /usr/local/sbin/cchouse-probe direct-count
 claude ALL=(root) NOPASSWD: /usr/local/sbin/cchouse-probe mihomo-stop
 claude ALL=(root) NOPASSWD: /usr/local/sbin/cchouse-probe mihomo-start

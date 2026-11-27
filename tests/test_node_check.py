@@ -1,4 +1,5 @@
 import argparse
+import gzip
 import hashlib
 import io
 import json
@@ -147,10 +148,10 @@ class TestUpLinkFileAndRebuildPrompt(unittest.TestCase):
             env_text = (priv / "instance.env").read_text(encoding="utf-8")
             self.assertIn(f"SINGLE_SERVER='{secret_host}'", env_text)
 
-    def test_up_link_file_unsupported_protocol_points_to_advanced_docs_without_leak(self):
+    def test_up_link_file_unsupported_protocol_rejected_without_leak(self):
         with tempfile.TemporaryDirectory() as td:
-            link_file = Path(td) / "vless.txt"
-            link_file.write_text("vless://test-uuid-placeholder@example.invalid:443?security=reality&pbk=secretpbk\n", encoding="utf-8")
+            link_file = Path(td) / "hy2.txt"
+            link_file.write_text("hysteria2://secret-token-xyz@example.invalid:443?sni=example.invalid\n", encoding="utf-8")
             if os.name != "nt":
                 link_file.chmod(0o600)
             args = _up_args(td, link_file=str(link_file), config_only=True)
@@ -160,9 +161,9 @@ class TestUpLinkFileAndRebuildPrompt(unittest.TestCase):
                 rc = cchouse.cmd_up(args)
             self.assertNotEqual(rc, 0)
             combined = out.getvalue() + err.getvalue()
-            self.assertIn("docs/proxy-modes.md", combined)
+            self.assertIn("不支持 UDP 协议", combined)
             self.assertNotIn("example.invalid", combined)
-            self.assertNotIn("secretpbk", combined)
+            self.assertNotIn("secret-token-xyz", combined)
 
     def test_up_link_file_invalid_format_fails_without_leak(self):
         with tempfile.TemporaryDirectory() as td:
@@ -276,12 +277,16 @@ class TestMacBootstrapLinkFile(unittest.TestCase):
                     info.size = len(data)
                     archive.addfile(info, io.BytesIO(data))
                 text = re.sub(rf"(?m)^{variable}='[^']+'", f"{variable}='{hashlib.sha256(path.read_bytes()).hexdigest()}'", text)
+            mihomo_gz = root / "mihomo.gz"
+            with gzip.open(mihomo_gz, "wb") as gz:
+                gz.write(b"#!/bin/sh\nexit 0\n")
+            text = re.sub(r"(?m)^mihomo_sha='[^']+'", f"mihomo_sha='{hashlib.sha256(mihomo_gz.read_bytes()).hexdigest()}'", text)
             tools = {
                 "uname": "echo Darwin",
                 "sysctl": "echo 1",
                 "sw_vers": "echo 13.0",
                 "curl": """for arg in "$@"; do
-  case "$arg" in *.zip) kind=source.zip ;; *install_only*.tar.gz) kind=python.tar.gz ;; */tart.tar.gz) kind=tart.tar.gz ;; esac
+  case "$arg" in *.zip) kind=source.zip ;; *install_only*.tar.gz) kind=python.tar.gz ;; *mihomo-*.gz) kind=mihomo.gz ;; */tart.tar.gz) kind=tart.tar.gz ;; esac
   dest="$arg"
 done
 cp "$HOME/$kind" "$dest"
@@ -305,7 +310,8 @@ cp "$HOME/$kind" "$dest"
             )
             self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
             expected_abs = str((root / "my-node.txt").resolve())
-            self.assertIn(f"PY -I scripts/cchouse.py up --tag cc01 --link-file {expected_abs}", run.stdout)
+            self.assertIn(f"PY -I scripts/cchouse.py up --tag cc01 --config-only --skip-preflight --link-file {expected_abs}", run.stdout)
+            self.assertIn("PY -I scripts/cchouse.py up --tag cc01", run.stdout)
 
     @unittest.skipUnless(sys.platform == "darwin", "requires macOS ditto")
     def test_link_clipboard_works_without_tty_and_passes_flag(self):
@@ -330,12 +336,16 @@ cp "$HOME/$kind" "$dest"
                     info.size = len(data)
                     archive.addfile(info, io.BytesIO(data))
                 text = re.sub(rf"(?m)^{variable}='[^']+'", f"{variable}='{hashlib.sha256(path.read_bytes()).hexdigest()}'", text)
+            mihomo_gz = root / "mihomo.gz"
+            with gzip.open(mihomo_gz, "wb") as gz:
+                gz.write(b"#!/bin/sh\nexit 0\n")
+            text = re.sub(r"(?m)^mihomo_sha='[^']+'", f"mihomo_sha='{hashlib.sha256(mihomo_gz.read_bytes()).hexdigest()}'", text)
             tools = {
                 "uname": "echo Darwin",
                 "sysctl": "echo 1",
                 "sw_vers": "echo 13.0",
                 "curl": """for arg in "$@"; do
-  case "$arg" in *.zip) kind=source.zip ;; *install_only*.tar.gz) kind=python.tar.gz ;; */tart.tar.gz) kind=tart.tar.gz ;; esac
+  case "$arg" in *.zip) kind=source.zip ;; *install_only*.tar.gz) kind=python.tar.gz ;; *mihomo-*.gz) kind=mihomo.gz ;; */tart.tar.gz) kind=tart.tar.gz ;; esac
   dest="$arg"
 done
 cp "$HOME/$kind" "$dest"
@@ -355,7 +365,8 @@ cp "$HOME/$kind" "$dest"
                 stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8", timeout=30,
             )
             self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
-            self.assertIn("PY -I scripts/cchouse.py up --tag cc01 --link-clipboard", run.stdout)
+            self.assertIn("PY -I scripts/cchouse.py up --tag cc01 --config-only --skip-preflight --link-clipboard", run.stdout)
+            self.assertIn("PY -I scripts/cchouse.py up --tag cc01", run.stdout)
 
 
 class TestLinkClipboardMocked(unittest.TestCase):
@@ -368,7 +379,7 @@ class TestLinkClipboardMocked(unittest.TestCase):
             egress = {"ip": "198.51.100.5", "country": "US", "asn": "AS64500", "timezone": "America/Los_Angeles"}
             out, err = io.StringIO(), io.StringIO()
             with mock.patch.object(cchouse, "_stdin_is_tty", return_value=False), \
-                    mock.patch.object(cchouse, "_read_clipboard_raw", return_value=f"\n  \nsocks5://{secret_user}:{secret_pass}@{secret_host}:1080  \nextra line\n"), \
+                    mock.patch.object(cchouse, "_read_clipboard_raw", return_value=f"\n  \nsocks5://{secret_user}:{secret_pass}@{secret_host}:1080  \n\n"), \
                     mock.patch.object(cchouse, "clear_clipboard", return_value=True) as clear_mock, \
                     mock.patch.object(cchouse, "probe_egress_via_proxy", return_value=egress), \
                     mock.patch.object(cchouse, "run_preflight_check", return_value=(0, {"ok": True, "status": "PREFLIGHT_OK", "next_action": "proceed_to_render", "warnings": [], "errors": []}, "")), \
@@ -415,20 +426,20 @@ class TestLinkClipboardMocked(unittest.TestCase):
             self.assertIn("无法读取剪贴板", combined)
             self.assertIn("--link-file", combined)
 
-    def test_clipboard_advanced_protocol_points_to_docs_without_echo(self):
+    def test_clipboard_unsupported_udp_protocol_rejected_without_echo(self):
         with tempfile.TemporaryDirectory() as td:
             args = _up_args(td, link_clipboard=True, config_only=True)
             out, err = io.StringIO(), io.StringIO()
             with mock.patch.object(cchouse, "_stdin_is_tty", return_value=False), \
-                    mock.patch.object(cchouse, "_read_clipboard_raw", return_value="vless://test-uuid-placeholder@example.invalid:443?security=reality&pbk=secretpbk\n"), \
+                    mock.patch.object(cchouse, "_read_clipboard_raw", return_value="hysteria2://secret-pw@example.invalid:443?sni=example.invalid\n"), \
                     mock.patch.object(cchouse, "clear_clipboard") as clear_mock, \
                     redirect_stdout(out), redirect_stderr(err):
                 rc = cchouse.cmd_up(args)
             self.assertNotEqual(rc, 0)
             clear_mock.assert_not_called()
             combined = out.getvalue() + err.getvalue()
-            self.assertIn("docs/proxy-modes.md", combined)
-            self.assertNotIn("secretpbk", combined)
+            self.assertIn("不支持 UDP 协议", combined)
+            self.assertNotIn("secret-pw", combined)
 
     def test_existing_config_ignores_link_clipboard_unless_reconfigure(self):
         with tempfile.TemporaryDirectory() as td:

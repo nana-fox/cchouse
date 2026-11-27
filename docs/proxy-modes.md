@@ -6,13 +6,16 @@
 
 | 模式 | `EXIT_MODE` | 支持路线 | 适用场景 | 必填代理参数 |
 |---|---|---|---|---|
-| **单节点模式** | `single` | **仅 v2 Linux** | 海外直连、或手里已有 1 个干净固定出口节点（加密协议 VPS / 可直连 ISP） | `SINGLE_TYPE`、`SINGLE_SERVER`（及 `SINGLE_SERVER_IP`）、`SINGLE_PORT` 及对应协议认证项 |
-| **两跳链式模式** | `chain` | **v1 macOS（Tart） & v2 Linux** | 国内无法直连 ISP 代理，需要「前置节点 → 固定 ISP」两跳容灾 | `WEBSHARE_*` + `FRONT_*` + `NODE_*`（见 `instance.env.example`） |
+| **单节点模式（含可选前置跳）** | `single` | **仅 v2 Linux** | 首页一键支持的三种形态：1) 单个 SOCKS5/HTTP(S) 固定 IP；2) 单个 VLESS/Trojan/SS 加密节点；3) 两跳「加密前置（`SINGLE_VIA_*`）→ 固定 IP 出口（`SINGLE_*`）」 | `SINGLE_*`（可选 `SINGLE_VIA_*`，口径同 `SINGLE_*`） |
+| **多路链式容灾模式** | `chain` | **v1 macOS（Tart） & v2 Linux** | 自建前置 + 机场备用 + 固定 ISP 的多路容灾（手动配置） | `WEBSHARE_*` + `FRONT_*` + `NODE_*`（见 `instance.env.example`） |
 
-### 单节点支持的协议（`SINGLE_TYPE`）
+### 单节点与两跳支持的协议（`SINGLE_TYPE` / `SINGLE_VIA_TYPE`）
 
-- 首页一键安装接受 SOCKS5 或 HTTP(S) 链接，通过节点自动读取出口 IPv4、国家或地区、ASN 和时区。
-- VLESS、Trojan、Shadowsocks（`ss`）和 SSH 走[手动安装](manual-install.md#手动快速上手命令行)。使用私有 `instance.env` 填写对应 `SINGLE_*` 参数，并从服务商或经该节点的独立探测取得实际出口 IPv4（`EXPECTED_EGRESS_IP`）、两位国家或地区代码（`EXPECTED_EGRESS_LOC`）、ASN（`EXPECTED_EGRESS_ASN`）与 IANA 时区（`TIMEZONE`）。节点服务器地址只用于建立连接，出口值以实际探测为准。
+- **首页一键安装**支持以下三种常见形态（剪贴板、文件、stdin、无回显交互均支持 1 条或 2 条链接），并在下载大文件前统一通过宿主临时 mihomo（与客机同版本）连续 3 次探测出口 IPv4、国家或地区、ASN 与时区（3 次 IP 不一致会拒绝）：
+  1. **单个 SOCKS5 / HTTP(S) 固定 IP**；
+  2. **单个加密节点 VLESS / Trojan / Shadowsocks（`ss`）**（自建 VPS，出口即该节点）；
+  3. **两跳「前置 → 固定出口」**：1 条加密前置（VLESS / Trojan / SS）+ 1 条 SOCKS5 / HTTP(S) 固定 IP 出口（或两条 SOCKS5 / HTTP(S)，按第一行前置、第二行出口）。渲染时保持 `EXIT_MODE=single`，主出口加 `dialer-proxy` 指向前置，客机 `nftables` 白名单**只放行前置的 `IP:端口`**，Stripe 默认走前置直出（`STRIPE_EXIT_MODE=front`）。
+- SSH 节点、三跳及以上或 `EXIT_MODE=chain` 多路容灾走[手动安装](manual-install.md#手动快速上手命令行)。
 - **明确拒绝**：`hysteria2`、`tuic` 等基于 UDP 的代理协议。`cchouse` 默认全局封锁 UDP，`preflight.py` 与 `render.py` 会在渲染阶段直接拒收，避免运行时默默断网。
 
 > **国内直连提示**：如果在国内直连裸 `socks5` 住宅/ISP 代理，明文协议易被干扰或丢包；且若该 ISP 屏蔽 Stripe，单节点模式直接付款会失败。此时可配置可选的 Stripe 专用节点（`STRIPE_EXIT_MODE=node` + `STRIPE_NODE_*`），或改用 `EXIT_MODE=chain`。

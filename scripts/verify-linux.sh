@@ -51,11 +51,29 @@ if [ -z "${STRIPE_EXIT_MODE:-}" ]; then
   if [ "$EXIT_MODE" = "single" ]; then
     if [ -n "${STRIPE_NODE_SERVER:-}" ]; then
       STRIPE_EXIT_MODE="node"
+    elif [ -n "${SINGLE_VIA_TYPE:-}" ] || [ -n "${SINGLE_VIA_SERVER:-}" ]; then
+      STRIPE_EXIT_MODE="front"
     else
       STRIPE_EXIT_MODE="off"
     fi
   else
     STRIPE_EXIT_MODE="front"
+  fi
+fi
+
+EXPECTED_NFT_EGRESS_SHA="${CCHOUSE_EXPECTED_NFT_EGRESS_SHA:-}"
+if [ -z "$EXPECTED_NFT_EGRESS_SHA" ] && [ "$GUEST_LOCAL" = 0 ] && [ "$EXIT_MODE" = "single" ]; then
+  if [ -n "${SINGLE_VIA_SERVER_IP:-}" ] && [ -n "${SINGLE_VIA_PORT:-}" ]; then
+    _egress_lines="${SINGLE_VIA_SERVER_IP}:${SINGLE_VIA_PORT}"
+    if [ "$STRIPE_EXIT_MODE" = "node" ] && [ -n "${STRIPE_NODE_SERVER_IP:-}" ] && [ -n "${STRIPE_NODE_PORT:-}" ]; then
+      _egress_lines="${_egress_lines}
+${STRIPE_NODE_SERVER_IP}:${STRIPE_NODE_PORT}"
+    fi
+    if command -v sha256sum >/dev/null 2>&1; then
+      EXPECTED_NFT_EGRESS_SHA="$(printf '%s\n' "$_egress_lines" | sort -u | sha256sum | awk '{print $1}')"
+    elif command -v shasum >/dev/null 2>&1; then
+      EXPECTED_NFT_EGRESS_SHA="$(printf '%s\n' "$_egress_lines" | sort -u | shasum -a 256 | awk '{print $1}')"
+    fi
   fi
 fi
 
@@ -395,6 +413,10 @@ if guest "test -f /var/lib/cchouse/expected-nft-live.sha256" >/dev/null 2>&1; th
 else
   bad "缺少 /var/lib/cchouse/expected-nft-live.sha256，无法核对内核 nftables 规则摘要"
 fi
+if [ -n "${EXPECTED_NFT_EGRESS_SHA:-}" ]; then
+  cur_egress_sha=$(guest "sudo -n /usr/local/sbin/cchouse-probe nft-egress-sha" 2>/dev/null)
+  expect "内核 nftables 仅放行前置节点白名单" "$cur_egress_sha" "$EXPECTED_NFT_EGRESS_SHA"
+fi
 for svc in cchouse-default-drop cchouse-nftables cchouse-mihomo; do
   expect "$svc.service active" "$(guest "systemctl is-active $svc.service 2>/dev/null")" "active"
 done
@@ -408,7 +430,7 @@ sudo_audit=$(guest "sudo -n -l 2>/dev/null | awk '
     if (\$0 ~ /\*/) { bad=1 }
     if (\$0 ~ /^\(root\) NOPASSWD: \/usr\/bin\/systemctl poweroff\$/) { poweroff=1 }
     else if (\$0 ~ /^\(root\) NOPASSWD: \/usr\/bin\/systemctl reboot\$/) { reboot=1 }
-    else if (\$0 !~ /^\(root\) NOPASSWD: \/usr\/local\/sbin\/cchouse-probe (nft-loaded|nft-live-sha|direct-count|mihomo-stop|mihomo-start|root-egress)\$/) { bad=1 }
+    else if (\$0 !~ /^\(root\) NOPASSWD: \/usr\/local\/sbin\/cchouse-probe (nft-loaded|nft-live-sha|nft-egress-sha|direct-count|mihomo-stop|mihomo-start|root-egress)\$/) { bad=1 }
   }
   END { if (n >= 8 && poweroff && reboot && !bad) print \"ok\"; else print \"bad(\" n \",power=\" (poweroff+reboot) \")\" }
 '" 2>/dev/null || echo "err")

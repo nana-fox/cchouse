@@ -23,6 +23,10 @@ $sourceHash = '@CCHOUSE_SHA256@'
 $pythonVersion = '3.12.10'
 $pythonUrl = "https://www.python.org/ftp/python/$pythonVersion/python-$pythonVersion-embed-amd64.zip"
 $pythonHash = '4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3'
+$mihomoVersion = 'v1.19.19'
+$mihomoAsset = "mihomo-windows-amd64-compatible-$mihomoVersion.zip"
+$mihomoUrl = "https://github.com/MetaCubeX/mihomo/releases/download/$mihomoVersion/$mihomoAsset"
+$mihomoHash = '94c042f4f9ad0e040a27394623740f6e76cf7c3d8c708c0db8f18d1ac6c6153c'
 $stage = $null
 $lock = $null
 $exitCode = 1
@@ -310,6 +314,26 @@ try {
       Expand-Archive -LiteralPath $pythonZip -DestinationPath $pythonStage
       Move-Item -LiteralPath $pythonStage -Destination $pythonHome
     }
+    $mihomoHome = Join-Path $tools "mihomo-$mihomoVersion"
+    $mihomoBin = Join-Path $mihomoHome 'mihomo.exe'
+    if (-not (Test-Path -LiteralPath $mihomoBin -PathType Leaf)) {
+      $mihomoZip = Join-Path $downloads "mihomo-$mihomoVersion-$mihomoHash.zip"
+      $effectiveMihomoUrl = if ($env:CCHOUSE_BOOTSTRAP_MIRROR) {
+        "$($env:CCHOUSE_BOOTSTRAP_MIRROR.TrimEnd('/'))/$mihomoAsset"
+      } else {
+        $mihomoUrl
+      }
+      Get-VerifiedArchive $effectiveMihomoUrl $mihomoHash $mihomoZip
+      $mihomoStage = Join-Path $stage 'mihomo'
+      Expand-Archive -LiteralPath $mihomoZip -DestinationPath $mihomoStage
+      $exeFiles = @(Get-ChildItem -LiteralPath $mihomoStage -Filter '*.exe' -File)
+      if ($exeFiles.Count -ne 1) {
+        throw 'mihomo 压缩包中未找到唯一的 .exe 文件。'
+      }
+      [void][IO.Directory]::CreateDirectory($mihomoHome)
+      Move-Item -LiteralPath $exeFiles[0].FullName -Destination $mihomoBin -Force
+    }
+    $env:CCHOUSE_MIHOMO_BIN = $mihomoBin
     $code = Join-Path $packages "$version-$($sourceHash.Substring(0,12))"
     if (-not (Test-Path -LiteralPath $code -PathType Container)) {
       Expand-Archive -LiteralPath $sourceZip -DestinationPath (Join-Path $stage 'source')

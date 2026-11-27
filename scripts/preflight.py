@@ -410,6 +410,12 @@ def check_stripe_reachability(env_path, timeout=8):
     if exit_mode != "single":
         return {"skipped": True, "reason": "chain_mode_uses_guest_verify"}
     stripe_mode = render_mod.effective_stripe_mode(env, guest_os, exit_mode)
+    if stripe_mode == "front" or render_mod.has_single_via(env):
+        return {
+            "skipped": True,
+            "target": "SINGLE_VIA" if stripe_mode == "front" else "SINGLE",
+            "reason": "protocol_requires_guest_verify",
+        }
     prefix = "STRIPE_NODE" if stripe_mode == "node" else "SINGLE"
     stype = env.get(f"{prefix}_TYPE", "").strip().lower()
     uses_tls = env.get(f"{prefix}_TLS", "").strip().lower() == "true"
@@ -465,11 +471,16 @@ def validate_env_file(env_path, route):
     if exit_mode not in ("single", "chain"):
         errors.append(f"INVALID_EXIT_MODE: EXIT_MODE={exit_mode}，仅支持 single 或 chain")
     elif exit_mode == "single":
+        via_present = render_mod.has_single_via(env)
         if guest_os != "linux":
             errors.append("UNSUPPORTED_SINGLE_ON_MACOS: v1 macOS 模板当前仅支持 EXIT_MODE=chain")
-        if stripe_mode not in ("off", "node"):
-            errors.append("INVALID_STRIPE_MODE: EXIT_MODE=single 时 STRIPE_EXIT_MODE 仅支持 off 或 node")
+        if stripe_mode not in ("off", "node", "front"):
+            errors.append("INVALID_STRIPE_MODE: EXIT_MODE=single 时 STRIPE_EXIT_MODE 仅支持 off、node 或 front")
+        elif stripe_mode == "front" and not via_present:
+            errors.append("INVALID_STRIPE_MODE: EXIT_MODE=single 时 STRIPE_EXIT_MODE=front 需要配置 SINGLE_VIA_* 前置节点")
         _validate_node_fields(env, "SINGLE", errors, warnings)
+        if via_present:
+            _validate_node_fields(env, "SINGLE_VIA", errors, warnings)
         if stripe_mode == "node":
             _validate_node_fields(env, "STRIPE_NODE", errors, warnings)
         elif env.get("STRIPE_NODE_SERVER", "").strip():

@@ -209,12 +209,16 @@ class MacBootstrapTests(unittest.TestCase):
                     info.size = len(data)
                     archive.addfile(info, io.BytesIO(data))
                 text = re.sub(rf"(?m)^{variable}='[^']+'", f"{variable}='{hashlib.sha256(path.read_bytes()).hexdigest()}'", text)
+            mihomo_gz = root / "mihomo.gz"
+            with gzip.open(mihomo_gz, "wb") as gz:
+                gz.write(b"#!/bin/sh\nexit 0\n")
+            text = re.sub(r"(?m)^mihomo_sha='[^']+'", f"mihomo_sha='{hashlib.sha256(mihomo_gz.read_bytes()).hexdigest()}'", text)
             tools = {
                 "uname": "echo Darwin",
                 "sysctl": "echo 1",
                 "sw_vers": "echo 13.0",
                 "curl": """for arg in "$@"; do
-  case "$arg" in *.zip) kind=source.zip ;; *install_only*.tar.gz) kind=python.tar.gz ;; */tart.tar.gz) kind=tart.tar.gz ;; esac
+  case "$arg" in *.zip) kind=source.zip ;; *install_only*.tar.gz) kind=python.tar.gz ;; *mihomo-*.gz) kind=mihomo.gz ;; */tart.tar.gz) kind=tart.tar.gz ;; esac
   dest="$arg"
 done
 printf '%s\n' "$kind" >> "$HOME/downloads.log"
@@ -238,7 +242,7 @@ cp "$HOME/$kind" "$dest"
                 )
                 self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
                 self.assertIn(f"UP -I scripts/cchouse.py up --tag {tag}", run.stdout)
-            self.assertEqual((root / "downloads.log").read_text().splitlines(), ["source.zip", "python.tar.gz", "tart.tar.gz"])
+            self.assertEqual((root / "downloads.log").read_text().splitlines(), ["source.zip", "python.tar.gz", "mihomo.gz", "tart.tar.gz"])
 
 
 @unittest.skipUnless(os.name == "nt", "requires Windows PowerShell")
@@ -334,7 +338,7 @@ $env:PATH = "$PSHOME;$env:WINDIR\System32"
 if (Get-Command git -ErrorAction SilentlyContinue) { throw 'Git should be absent from PATH' }
 function Invoke-WebRequest {
   param([switch]$UseBasicParsing, [string]$Uri, [string]$OutFile)
-  $name = if ($Uri -like '*embed-amd64.zip') { 'python.zip' } else { 'source.zip' }
+  $name = if ($Uri -like '*embed-amd64.zip') { 'python.zip' } elseif ($Uri -like '*mihomo-*.zip') { 'mihomo.zip' } else { 'source.zip' }
   Add-Content -LiteralPath (Join-Path $env:TEST_ROOT 'downloads.log') $name
   Copy-Item -LiteralPath (Join-Path $env:TEST_ROOT $name) -Destination $OutFile
 }
@@ -359,9 +363,14 @@ exit $LASTEXITCODE
             python = root / "python.zip"
             with zipfile.ZipFile(python, "w") as archive:
                 archive.write(exe, "python.exe")
+            mihomo_zip = root / "mihomo.zip"
+            with zipfile.ZipFile(mihomo_zip, "w") as archive:
+                archive.write(exe, "mihomo-windows-amd64-compatible.exe")
             script_text = bootstrap_text("windows", source_zip(root / "source.zip")).replace("$env:WINDIR", "$env:TEST_ROOT")
             python_hash = hashlib.sha256(python.read_bytes()).hexdigest()
+            mihomo_hash = hashlib.sha256(mihomo_zip.read_bytes()).hexdigest()
             script_text = re.sub(r"(?m)^\$pythonHash = '[^']+'", f"$pythonHash = '{python_hash}'", script_text)
+            script_text = re.sub(r"(?m)^\$mihomoHash = '[^']+'", f"$mihomoHash = '{mihomo_hash}'", script_text)
             script.write_text(script_text, encoding="utf-8-sig")
             ssh = root / "System32/OpenSSH"
             ssh.mkdir(parents=True)
@@ -374,4 +383,4 @@ exit $LASTEXITCODE
                 run = run_ps(driver, env)
                 self.assertEqual(run.returncode, 7, run.stdout + run.stderr)
                 self.assertIn("UP -I scripts/cchouse.py up --tag cc01 --vm-backend virtualbox", run.stdout)
-            self.assertEqual((root / "downloads.log").read_text(encoding="ascii").splitlines(), ["source.zip", "python.zip"])
+            self.assertEqual((root / "downloads.log").read_text(encoding="ascii").splitlines(), ["source.zip", "python.zip", "mihomo.zip"])

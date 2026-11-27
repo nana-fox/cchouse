@@ -9,15 +9,19 @@
 - 镜像源：CCHOUSE_IMAGE_MIRROR（黄金镜像目录 URL）、CCHOUSE_NPM_MIRROR（npm registry 镜像），校验值仍以官方为准。
 """
 import base64
+import gzip
 import hashlib
 import json
 import os
+import platform
 import re
+import shutil
 import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zipfile
 from pathlib import Path
 
 USER_AGENT = "cchouse-fetch/1"
@@ -595,3 +599,110 @@ def _guest_additions_from(data, version):
         "size_bytes": size,
         "url": url,
     }
+
+
+def host_mihomo_platform():
+    sys_name = platform.system()
+    machine = platform.machine().lower()
+    if sys_name == "Darwin" and machine in ("arm64", "aarch64"):
+        return "darwin-arm64"
+    if sys_name == "Windows" and machine in ("amd64", "x86_64"):
+        return "windows-amd64"
+    return None
+
+
+def load_mihomo_artifact(manifest_path, platform_key=None):
+    """读取与客机同版本的宿主临时 mihomo 清单，严格校验官网 URL 与 SHA-256。"""
+    key = platform_key or host_mihomo_platform()
+    if not key:
+        raise DownloadError("当前宿主机平台没有可用的官方 mihomo 探测程序")
+    data = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or data.get("schema_version") != 1:
+        raise DownloadError("mihomo-manifest.json schema_version 必须为 1")
+    version = str(data.get("version") or "")
+    if not re.fullmatch(r"v\d+\.\d+\.\d+", version):
+        raise DownloadError("mihomo-manifest.json version 无效")
+    artifacts = data.get("artifacts")
+    if not isinstance(artifacts, dict) or key not in artifacts:
+        raise DownloadError(f"mihomo-manifest.json 中没有平台 {key} 的制品")
+    art = artifacts[key]
+    if not isinstance(art, dict):
+        raise DownloadError("mihomo-manifest.json 制品格式无效")
+    filename = str(art.get("filename") or "")
+    binary_name = str(art.get("binary_name") or "")
+    fmt = str(art.get("format") or "")
+    url = str(art.get("url") or "")
+    sha = str(art.get("sha256") or "").lower()
+    size = art.get("size_bytes")
+    if fmt not in ("gz", "zip") or not filename or not binary_name:
+        raise DownloadError("mihomo-manifest.json 制品字段缺失")
+    if not re.fullmatch(r"[0-9a-f]{64}", sha):
+        raise DownloadError("mihomo-manifest.json sha256 无效")
+    if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
+        raise DownloadError("mihomo-manifest.json size_bytes 无效")
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https" or (parsed.hostname or "").lower() != "github.com":
+        raise DownloadError("mihomo-manifest.json 只允许 https://github.com/MetaCubeX/mihomo 官方地址")
+    if parsed.path != f"/MetaCubeX/mihomo/releases/download/{version}/{filename}":
+        raise DownloadError("mihomo-manifest.json URL 与版本或文件名不一致")
+    return {
+        "version": version,
+        "platform": key,
+        "filename": filename,
+        "binary_name": binary_name,
+        "format": fmt,
+        "size_bytes": size,
+        "url": url,
+        "sha256": sha,
+    }
+
+
+def ensure_host_mihomo(manifest_path, bootstrap_root, platform_key=None, opener=None, log=None):
+    """确保私有 bootstrap/tools 目录下存在经 SHA-256 校验的同版本官方 mihomo，缓存复用。"""
+    override = os.environ.get("CCHOUSE_MIHOMO_BIN", "").strip()
+    if override and os.path.isfile(override):
+        return Path(override)
+    art = load_mihomo_artifact(manifest_path, platform_key=platform_key)
+    bootstrap_root = Path(bootstrap_root)
+    tool_dir = bootstrap_root / "tools" / f"mihomo-{art['version']}"
+    bin_path = tool_dir / art["binary_name"]
+    if bin_path.is_file():
+        return bin_path
+    downloads_dir = bootstrap_root / "downloads"
+    downloads_dir.mkdir(parents=True, exist_ok=True)
+    archive_path = downloads_dir / f"mihomo-{art['version']}-{art['platform']}-{art['sha256'][:12]}.{art['format']}"
+    urls = [art["url"]]
+    mirror = os.environ.get("CCHOUSE_BOOTSTRAP_MIRROR", "").strip()
+    if mirror:
+        urls.insert(0, mirror.rstrip("/") + "/" + art["filename"])
+    fetch_verified(
+        urls,
+        archive_path,
+        sha256=art["sha256"],
+        size=art["size_bytes"],
+        opener=opener,
+        log=log,
+    )
+    tool_dir.mkdir(parents=True, exist_ok=True)
+    tmp_bin = tool_dir / f".{art['binary_name']}.tmp.{os.getpid()}"
+    try:
+        if art["format"] == "gz":
+            with gzip.open(archive_path, "rb") as src, open(tmp_bin, "wb") as dst:
+                shutil.copyfileobj(src, dst)
+        else:
+            with zipfile.ZipFile(archive_path, "r") as zf:
+                exe_members = [m for m in zf.namelist() if m.lower().endswith(".exe") and not m.endswith("/")]
+                if len(exe_members) != 1:
+                    raise DownloadError("mihomo Windows 压缩包中未找到唯一的 .exe 文件")
+                with zf.open(exe_members[0], "r") as src, open(tmp_bin, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+        if os.name != "nt":
+            os.chmod(tmp_bin, 0o700)
+        os.replace(tmp_bin, bin_path)
+    finally:
+        if tmp_bin.exists():
+            try:
+                tmp_bin.unlink()
+            except OSError:
+                pass
+    return bin_path
