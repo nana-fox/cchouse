@@ -1,6 +1,6 @@
 # 变更记录
 
-## 未发布（Unreleased）
+## [v2.0.0-preview.10](https://github.com/nana-fox/cchouse/releases/tag/v2.0.0-preview.10) · 2026-11-27
 
 - 剪贴板/链接文件输入与重建提示优化：Mac/Windows 引导脚本及 `cchouse up` 新增 `--link-clipboard`（Windows `-LinkClipboard`）与 `--link-file <路径>`（Windows `-LinkFile`），无 TTY 亦可完整安装。`--link-clipboard` 由安装器直接读取本机剪贴板第一条非空行（Mac `pbpaste` / Windows `Get-Clipboard`），绝不回显，非链接仅提示「剪贴板里不是节点链接，请复制后重试」，成功写入 `instance.env` 后自动清空剪贴板并告知，无桌面会话/读不到剪贴板时提示改用其他方式；`--link-file` 校验普通文件与当前用户归属（POSIX 对组/其他人可读给出警告并继续），写入 `instance.env` 后提醒用户自行删除文件。已有配置未传 `--reconfigure` 时提示并忽略 `--link-clipboard` / `--link-file`（传 `--reconfigure` 时正常更新配置）。自动重建前补充显示旧记录创建日期与 `--reconfigure` 提示；同步更新中英首页「让 AI 帮你装」与 `AGENTS.md`。
 
