@@ -1,6 +1,6 @@
 # 变更记录
 
-## Unreleased
+## [v2.0.0-preview.8](https://github.com/nana-fox/cchouse/releases/tag/v2.0.0-preview.8) · 2026-11-27
 
 - 实例复原第一期：后端存在性改为三态判定（存在 / 确认不存在 / 查不了），Tart 核对可执行程序、`TART_HOME` 在线可读与 `list` 成功，VirtualBox 区分查询失败、`inaccessible` 与私有目录 `vm/` 未注册残留；`state.json` 损坏时停止且不覆盖原文件；`up` 遇到确认双失（含无归属字段的旧版记录且无同名对象）自动沿用节点设置、SSH 密钥与共享设置重建（清理旧 `known_hosts` / `guest_ip` 并复验节点出口，出口漂移则停下提示 `--reconfigure`），Mac 仅丢主 VM 但干净快照归属可核验时从快照克隆回主 VM 并复验交付，查不了或同名归属不明时零写操作停止；`open` / `status` 遇实例丢失提示重跑首页安装命令重建。
 
