@@ -1040,7 +1040,16 @@ class UpContext:
 
 def _stdin_is_tty():
     try:
-        return bool(sys.stdin is not None and sys.stdin.isatty())
+        if sys.stdin is None or not sys.stdin.isatty():
+            return False
+        if os.name == "nt":
+            import ctypes
+            handle = ctypes.windll.kernel32.GetStdHandle(-10)  # STD_INPUT_HANDLE
+            if not handle or handle == -1:
+                return False
+            mode = ctypes.c_uint32()
+            return bool(ctypes.windll.kernel32.GetConsoleMode(handle, ctypes.byref(mode)))
+        return True
     except Exception:
         return False
 

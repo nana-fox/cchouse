@@ -31,7 +31,7 @@ VERSION = (ROOT / "VERSION").read_text(encoding="ascii").strip()
 
 def bootstrap_text(platform, source_hash):
     name = "bootstrap-macos.sh" if platform == "mac" else "bootstrap-windows.ps1"
-    return ((ROOT / "scripts" / name).read_text(encoding="utf-8")
+    return ((ROOT / "scripts" / name).read_text(encoding="utf-8-sig")
             .replace("@CCHOUSE_VERSION@", VERSION).replace("@CCHOUSE_SHA256@", source_hash))
 
 
