@@ -919,20 +919,22 @@ def probe_egress_via_proxy(single_fields, via_fields=None, timeout=15, probe_cou
         )
     except StepError as first_err:
         msg = str(first_err)
-        # 若 macOS 宿主开着 TUN（如 Clash TUN）导致临时 mihomo 走默认路由超时/回环，
-        # 仅在临时探测配置中绑定活跃物理网卡重试一次（不修改任何宿主网络或代理设置）。
+        # 若 macOS 宿主开着 TUN（如 Clash TUN）导致默认路由连不上节点，
+        # 用物理网卡快速复测 1 次以区分「节点本身不可用」与「宿主 TUN 拦截/回环」（虚拟机流量必须经宿主默认路由，不能跳过）。
         if ("不是固定 IP" in msg or "认证失败" in msg or "未能启动监听" in msg):
             raise
         if _macos_default_route_is_utun():
             for iface in _macos_primary_physical_interfaces():
                 try:
-                    return _run_mihomo_egress_probe(
-                        mihomo_bin, single_fields, via_fields, timeout, probe_count, probe_interval, interface_name=iface
+                    _run_mihomo_egress_probe(
+                        mihomo_bin, single_fields, via_fields, min(timeout, 8), 1, 0, interface_name=iface
                     )
-                except StepError as retry_err:
-                    if "不是固定 IP" in str(retry_err) or "认证失败" in str(retry_err):
-                        raise
+                except StepError:
                     continue
+                raise StepError(
+                    "本机代理软件的 TUN 模式正在拦截该节点（绕过 TUN 经物理网卡可通，但虚拟机流量必须经过宿主默认路由）。"
+                    "请先将该节点地址加入本机代理软件的直连/绕过规则，或暂时关闭本机 TUN 模式后重跑。"
+                ) from None
         raise first_err
 
 

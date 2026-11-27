@@ -300,6 +300,23 @@ class TestHostMihomoProbe(unittest.TestCase):
             self.assertEqual(art["version"], "v1.19.19")
             self.assertEqual(len(art["sha256"]), 64)
 
+    def test_macos_utun_interception_gives_plain_language_hint(self):
+        exit_f = cchouse.parse_node_link(LINK_VLESS)
+        egress = {"ip": "198.51.100.88", "timezone": "America/Los_Angeles", "country": "US", "asn": "AS64500"}
+
+        def fake_run(_bin, _sf, _vf, _to, _cnt, _iv, interface_name=None):
+            if interface_name is None:
+                raise cchouse.StepError("连接节点超时")
+            return egress
+
+        with mock.patch.object(cchouse, "_run_mihomo_egress_probe", side_effect=fake_run), \
+                mock.patch.object(cchouse, "_macos_default_route_is_utun", return_value=True), \
+                mock.patch.object(cchouse, "_macos_primary_physical_interfaces", return_value=["en1"]):
+            with self.assertRaises(cchouse.StepError) as cm:
+                cchouse.probe_egress_via_proxy(exit_f, mihomo_bin="/fake/mihomo")
+        self.assertIn("TUN 模式正在拦截该节点", str(cm.exception))
+        self.assertNotIn("demo-uuid-secret", str(cm.exception))
+
 
 class TestTwoHopRenderVerifyAndDoctor(unittest.TestCase):
     def _two_hop_env(self):
