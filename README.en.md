@@ -1,69 +1,56 @@
 # cchouse
 
-**A clean, stable, leak-proof environment dedicated to Claude.**
-cchouse runs a small isolated virtual machine on your computer. You use Claude on the web and Claude Code inside it, and all of its traffic goes only through your own proxy node. If that node drops, the whole machine goes offline. It will not quietly fall back to your computer's own network.
+> **Give Claude its own dedicated IP and isolated environment in a local VM.**
+
+cchouse runs a small isolated virtual machine on your computer for Claude on the web and Claude Code. Guest traffic goes only through your own single fixed proxy node, locale and time zone match your exit automatically, and if the node drops the VM goes offline. Your main computer keeps its own language, time zone, and proxy settings, with no host folders mounted.
 
 [![CI](https://github.com/nana-fox/cchouse/actions/workflows/ci.yml/badge.svg)](https://github.com/nana-fox/cchouse/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/nana-fox/cchouse?include_prereleases&label=release)](https://github.com/nana-fox/cchouse/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-[中文](README.md) | English
+[中文](README.md) | English · [Quick start](#quick-start) · [Compare](#how-it-compares) · [FAQ](#faq) · [Security design](#security-design)
 
 ![After the automated checks pass, open the network check page on the VM desktop and sign in only after every check passes (example image; the IP is a documentation sample address)](docs/assets/check-all-green.png)
 
----
-
-## Who it's for
-
-You already have your own proxy node and want to use Claude (the website and Claude Code) steadily, without worrying about:
-
-1. **A drifting IP**: one region today, another tomorrow.
-2. **An environment that does not match**: the IP is in the United States, but the computer's time zone is Beijing and the system language is Chinese.
-3. **A proxy that fails open**: for the few seconds the node is down, software quietly uses your computer's own network and your real IP leaks.
-
-cchouse uses only the one node you configure, sets the VM's time zone, language, and region to match where that node is, and stays offline when the node is down. It does not switch to another path on its own.
-
----
-
-## How it works
-
-![An isolated VM inside your computer reaches Claude only through your proxy node. If the node goes offline, the VM goes offline.](docs/assets/how-it-works.en.svg)
-
-- Inside the VM, only traffic to your one node is allowed. Every other path is blocked.
-- Your computer itself keeps using the internet as usual.
+<sub>After automated checks pass, open the desktop network check page and confirm every check is green before signing in (IP shown is a documentation sample).</sub>
 
 ---
 
 ## Quick start
 
-The installer downloads and verifies the matching guest image and official Claude Code package. [Image manifest](guest-linux/image-manifest.json)
+Up and running in 3 steps (see [Supported computers](#supported-computers) for measured empty-cache install times):
+
+1. **Run one command**: copy the locked command for your platform below (downloads and verifies the guest image and official Claude Code package; see [Image manifest](guest-linux/image-manifest.json)).
+2. **Paste your node**: enter your own fixed SOCKS5 or HTTP(S) node link (hidden input). The installer provisions the VM, aligns locale and time zone with your exit IP, runs automated checks, and saves a clean snapshot.
+3. **Verify green, then sign in**: open the desktop network check page inside the VM. Once every check is green, sign in to Claude inside the VM.
 
 ### Windows (x64)
 
-Open Windows PowerShell and run this one line to install `v2.0.0-preview.6`.
+Open Windows PowerShell and run this one line to install `v2.0.0-preview.6`:
 
 ```powershell
 $f = "$env:TEMP\cchouse-bootstrap-$([guid]::NewGuid().ToString('N')).ps1"; iwr https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.6/bootstrap-windows.ps1 -UseBasicParsing -OutFile $f -ErrorAction Stop; if ((Get-FileHash $f -Algorithm SHA256).Hash -ne '59aabc99822170257a0153bd2bc1c95f715bcc2d6fc7ae4a626330b941a5fe98') { throw 'SHA-256 mismatch' }; Unblock-File -LiteralPath $f; powershell -NoProfile -ExecutionPolicy RemoteSigned -File $f -CleanupBootstrap
 ```
 
-When prompted, paste your node link. The input is hidden. If VirtualBox is missing, the installer installs it automatically. Click **Yes** once when Windows asks for User Account Control (UAC) approval.
+When prompted, paste your node link (hidden input). If VirtualBox is missing, the installer installs it automatically; click **Yes** once when Windows asks for User Account Control (UAC) approval.
 
 ### Apple Silicon Mac
 
-Requires Apple Silicon (M series) and macOS 13.0 Ventura or later. Open Terminal and run this one line to install `v2.0.0-preview.6`. The bootstrap verifies and prepares a private Python and Tart if needed.
+Requires Apple Silicon (M series) and macOS 13.0 Ventura or later. Open Terminal and run this one line to install `v2.0.0-preview.6` (the bootstrap verifies and prepares a private Python and Tart if needed):
 
 ```bash
 f=$(mktemp -t cchouse-bootstrap) && curl -fsSLo "$f" https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.6/bootstrap-macos.sh && printf '%s  %s\n' '63132f4c4f12c10ff0fa70efca8fd1b74c6587fd022543e452238e694300091f' "$f" | shasum -a 256 -c - && /bin/bash "$f" --cleanup-bootstrap
 ```
 
-When prompted, paste your SOCKS5 or HTTP(S) node link. The input is hidden.
+When prompted, paste your SOCKS5 or HTTP(S) node link (hidden input).
 
 ### Open the guest and sign in
 
-The installer configures the guest and runs automated checks, then saves a clean snapshot. If a step fails, fix the issue shown and rerun your platform's original command. Verified downloads and completed steps are reused.
+The installer configures the guest, runs automated checks, and saves a clean snapshot. If a step fails, fix the issue shown and rerun your platform's original command — verified downloads and completed steps are reused.
 
-After the automated checks pass, open the network check page on the VM desktop (the picture above). After every network check passes, sign in to Claude in **the browser inside the VM**. That page checks the network only. It does not say anything about the account.
+After the automated checks pass, open the network check page on the VM desktop (shown above). Once every check passes, sign in to Claude in **the browser inside the VM**. That page checks the network only; it does not reflect account status.
 
+> [!IMPORTANT]
 > The authorization link shown when you sign in to Claude Code must also be opened in the browser inside the VM. Do not copy it into the browser on your own computer.
 
 ### Daily use
@@ -78,6 +65,42 @@ After installation there is a `cchouse (cc01)` launcher icon on your desktop (on
 - If the terminal cannot find `cchouse`, use the full path: Mac `~/.local/bin/cchouse status --tag cc01`; Windows PowerShell `& "$env:LOCALAPPDATA\cchouse\bin\cchouse.cmd" status --tag cc01`.
 
 For AI-assisted installation, see [AGENTS.md](AGENTS.md). For manual configuration, see the [advanced installation guide](docs/manual-install.md).
+
+---
+
+## Who it's for · What it is not
+
+### Who it's for
+
+You already have a fixed proxy node, want a dedicated IP and isolated environment for official Claude (Web + Claude Code) that goes offline if the node drops, and do not want to alter your main computer's language, time zone, or proxy setup.
+
+### What it is not
+
+- **Not a proxy or account vendor**: never bundles or sells nodes, accounts, or billing services. You bring your own node and your own account.
+- **Not a host OS tweaker**: never changes your host language, region, time zone, or host proxy, and does not mount host folders (only installs the required VM runtime, Tart or VirtualBox).
+- **Not a ban guarantee**: cchouse enforces local isolation and leak prevention only; account standing is solely decided by Anthropic.
+
+---
+
+## How it compares
+
+| Dimension | Host proxy only | Host OS tweaks + proxy | Rented remote VM / Mac | cchouse (local isolated VM) |
+|---|---|---|---|---|
+| **Daily host use** | Unaffected | Alters host language & time zone | Remote-desktop latency | **Host language, time zone & proxy untouched** |
+| **Web + Claude Code** | CLI often bypasses proxy | Needs system-wide CLI capture | Both, remote file friction | **Same VM, same exit** |
+| **When node drops** | Easy fallback to host IP | Depends on proxy client rules | Depends on remote host | **OS-level fail-closed offline** |
+| **Locale, TZ, IPv6** | Remains local settings | Alters host OS settings | Isolated environment | **Auto-aligned; IPv6 & UDP blocked** |
+| **Recovery** | Manual troubleshooting | Revert host settings manually | Re-provision remote host | **Clean snapshot rebuild** |
+| **Cost & code** | Own node | Own or monthly proxy plan | Monthly machine rental | **MIT open source & free**, own node |
+
+---
+
+## How it works
+
+![An isolated VM inside your computer reaches Claude only through your proxy node. If the node goes offline, the VM goes offline.](docs/assets/how-it-works.en.svg)
+
+- Inside the VM, only traffic to your one node is allowed. Every other path is blocked.
+- Your computer itself keeps using the internet as usual.
 
 ---
 
