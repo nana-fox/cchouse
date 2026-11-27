@@ -213,6 +213,13 @@ When invoking `scripts/cchouse.py up` directly (see [manual install](docs/manual
 </details>
 
 <details>
+<summary><b>Host proxy TUN / global mode is on and the node cannot be reached?</b></summary>
+
+When a host proxy app's TUN or global mode is enabled, both the pre-install node check and the VM's outbound traffic go through it first, which can block or loop connections to your node. If you see a "front unreachable" or timeout error, set your node server IP to direct/bypass in your host proxy app or temporarily turn off TUN mode, then rerun (cchouse will never modify your host proxy settings).
+
+</details>
+
+<details>
 <summary><b>Clash TUN is on, and the first exit check fails?</b></summary>
 
 Wait 1–2 minutes, then rerun the same command from Quick start. The installer resumes and runs verification again. If the guest is already shut down, start that same guest in the VM app first.
