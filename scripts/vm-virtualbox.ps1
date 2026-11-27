@@ -580,6 +580,7 @@ function Get-CchouseVBoxState {
     }
   }
   if (-not $vmState) { return "missing" }
+  if ($vmState -eq "inaccessible") { return "inaccessible" }
   if ($vmState -in @("running", "starting", "paused", "stopping")) {
     if ($sessionName -eq "headless") { return "running-headless" }
     return "running"
@@ -600,22 +601,65 @@ function Test-CchouseVBoxSnapshotExists {
   return $false
 }
 
+function Get-CchouseVBoxCfgFileFromLines {
+  param([string[]]$Lines)
+  foreach ($line in @($Lines)) {
+    if ($line -cmatch '^CfgFile="([^"]+)"$') {
+      return $Matches[1].Replace('\\', '\')
+    }
+  }
+  return $null
+}
+
 function Get-CchouseVBoxStatus {
   param([string]$Name, [string]$SnapName = "cchouse-clean")
   if ([string]::IsNullOrWhiteSpace($Name)) { throw "CcVmName is required" }
   $info = Invoke-CchouseVBoxOptional -CcArgumentList @("showvminfo", $Name, "--machinereadable")
   if ($info.ExitCode -ne 0) {
+    $list = Invoke-CchouseVBoxOptional -CcArgumentList @("list", "vms")
+    if ($list.ExitCode -ne 0) {
+      Write-Output "VM_STATE=unknown"
+      Write-Output "SNAPSHOT_STATE=unknown"
+      return
+    }
+    $exactPattern = '^"{0}"\s+\{{([0-9a-f]{{8}}(?:-[0-9a-f]{{4}}){{3}}-[0-9a-f]{{12}})\}}$' -f [regex]::Escape($Name)
+    foreach ($line in @($list.Output)) {
+      if ($line -match $exactPattern) {
+        Write-Output "VM_STATE=unknown"
+        Write-Output "SNAPSHOT_STATE=unknown"
+        return
+      }
+      if ($line -match '^"<inaccessible>"\s+\{([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\}$') {
+        $inaccUuid = $Matches[1]
+        $inaccInfo = Invoke-CchouseVBoxOptional -CcArgumentList @("showvminfo", $inaccUuid, "--machinereadable")
+        $inaccText = (($inaccInfo.Output -join "`n") + "`n" + [string]$inaccInfo.Stderr)
+        if ($inaccInfo.ExitCode -ne 0 -or $inaccText -match [regex]::Escape($Name)) {
+          Write-Output "VM_STATE=inaccessible"
+          Write-Output "SNAPSHOT_STATE=unknown"
+          return
+        }
+      }
+    }
     Write-Output "VM_STATE=missing"
     Write-Output "SNAPSHOT_STATE=missing"
     return
   }
   $state = Get-CchouseVBoxState -Lines $info.Output
+  if ($state -eq "inaccessible") {
+    Write-Output "VM_STATE=inaccessible"
+    Write-Output "SNAPSHOT_STATE=unknown"
+    return
+  }
   $snapState = "missing"
   if ($SnapName -and (Test-CchouseVBoxSnapshotExists -Name $Name -SnapName $SnapName)) {
     $snapState = "present"
   }
+  $cfgFile = Get-CchouseVBoxCfgFileFromLines -Lines $info.Output
   Write-Output "VM_STATE=$state"
   Write-Output "SNAPSHOT_STATE=$snapState"
+  if ($cfgFile) {
+    Write-Output "CFG_FILE=$cfgFile"
+  }
 }
 
 function Test-CchouseInteractiveSession {

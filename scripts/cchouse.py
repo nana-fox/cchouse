@@ -574,6 +574,15 @@ class StepError(RuntimeError):
         self.exit_code = 128 - exit_code if exit_code < 0 else exit_code
 
 
+class StateCorruptError(StepError):
+    """state.json 损坏或无法解析，绝不覆盖原文件。"""
+
+
+PROBE_PRESENT = "present"
+PROBE_ABSENT = "absent"
+PROBE_UNKNOWN = "unknown"
+
+
 def _now_iso():
     return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
 
@@ -864,11 +873,24 @@ class UpContext:
     # ---- state.json（断点续跑 + 计时） ----
     def _load_state(self):
         data = {}
-        if self.state_path.is_file():
+        if self.state_path.exists() or self.state_path.is_symlink():
+            if not self.state_path.is_file() or self.state_path.is_symlink():
+                raise StateCorruptError(
+                    f"安装记录文件损坏或无法读取：{self.state_path}。为避免覆盖原记录，已停止操作。"
+                    "原文件未被修改；请先检查该文件，或用 --tag 换一个新实例名重新安装。"
+                )
             try:
                 data = json.loads(self.state_path.read_text(encoding="utf-8"))
             except (OSError, ValueError):
-                data = {}
+                raise StateCorruptError(
+                    f"安装记录文件 {self.state_path} 已损坏（无法解析 JSON）。为避免覆盖原记录，已停止操作。"
+                    "原文件未被修改；请先检查该文件，或用 --tag 换一个新实例名重新安装。"
+                ) from None
+            if not isinstance(data, dict):
+                raise StateCorruptError(
+                    f"安装记录文件 {self.state_path} 格式异常（不是有效对象）。为避免覆盖原记录，已停止操作。"
+                    "原文件未被修改；请先检查该文件，或用 --tag 换一个新实例名重新安装。"
+                )
         data.setdefault("completed_steps", [])
         data.setdefault("timings", {})
         data.setdefault("downloads", {})
@@ -1167,26 +1189,196 @@ def step_download(ctx):
     return ctx.wait_download("image")
 
 
-def vm_exists(ctx):
-    if ctx.dry_run:
-        return False
-    if ctx.backend == "tart":
-        return subprocess.run(
-            ["bash", str(ROOT / "scripts" / "vm-tart.sh"), "exists", ctx.vm_name],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            env=_tart_env(ctx.tart_bin),
-        ).returncode == 0
-    if ctx.backend == "virtualbox":
+def _resolve_executable_tart(tart_bin=None):
+    """解析并确认 Tart 可执行文件存在且可执行；返回 (exe_path, error_msg)。"""
+    if tart_bin:
+        cand = str(tart_bin)
+        if os.path.isabs(cand) or os.sep in cand:
+            if os.path.isfile(cand) and os.access(cand, os.X_OK):
+                return cand, None
+            return None, f"找不到或无法执行 Tart 程序：{cand}"
+        found = shutil.which(cand) or preflight_mod.find_tart()
+        if found and os.path.isfile(found) and os.access(found, os.X_OK):
+            return os.path.abspath(found), None
+        return None, f"找不到或无法执行 Tart 程序：{cand}"
+    found = _resolve_up_tart_bin()
+    if found and os.path.isfile(found) and os.access(found, os.X_OK):
+        return found, None
+    return None, "找不到可执行的 Tart 程序"
+
+
+def _probe_tart_inventory(tart_bin=None, *, require_home_dir=True):
+    """三态查询 Tart 本地清单：先核对可执行文件、TART_HOME 在线可读、list 成功。
+
+    返回 (inventory_dict, error_msg)；error_msg 非空时代表「查不了」。
+    """
+    exe, err = _resolve_executable_tart(tart_bin)
+    if err:
+        return None, err
+    th = preflight_mod.tart_home_dir(exe)
+    explicit_home = bool(os.environ.get("TART_HOME", "").strip()) or preflight_mod._parse_wrapper_tart_home(exe) is not None
+    if th.is_dir():
         try:
-            proc = subprocess.run(
-                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-                 str(ROOT / "scripts" / "vm-virtualbox.ps1"), "-CcOp", "exists", "-CcVmName", ctx.vm_name],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
+            os.listdir(th)
         except OSError:
-            return False
-        return proc.returncode == 0
-    return False
+            return None, f"无法读取 Tart 目录：{th}"
+    elif require_home_dir or explicit_home:
+        return None, f"无法访问 Tart 目录：{th}"
+    try:
+        proc = subprocess.run(
+            [exe, "list", "--source", "local", "--format", "json"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None, f"无法运行 Tart 列表查询：{exe}"
+    if proc.returncode != 0:
+        return None, f"Tart 列表查询失败（退出码 {proc.returncode}）"
+    try:
+        items = json.loads(proc.stdout or "")
+    except (ValueError, TypeError):
+        return None, "无法解析 Tart 虚拟机列表"
+    if not isinstance(items, list):
+        return None, "无法解析 Tart 虚拟机列表"
+    inv = {}
+    for vm in items:
+        if isinstance(vm, dict) and isinstance(vm.get("Name"), str):
+            inv[vm["Name"]] = vm
+    return inv, None
+
+
+def _probe_tart_target(name, tart_bin=None, *, inventory=None, inv_error=None, require_home_dir=True):
+    """查询单个 Tart 虚拟机或快照：返回 (PROBE_PRESENT|PROBE_ABSENT|PROBE_UNKNOWN, reason, meta)。"""
+    if inventory is None and inv_error is None:
+        inventory, inv_error = _probe_tart_inventory(tart_bin, require_home_dir=require_home_dir)
+    if inv_error:
+        return PROBE_UNKNOWN, inv_error, None
+    if name in inventory:
+        return PROBE_PRESENT, None, inventory[name]
+    vm_dir = tart_vm_dir(name, tart_bin)
+    try:
+        if vm_dir.exists() or vm_dir.is_symlink():
+            return PROBE_UNKNOWN, f"Tart 列表中未见 {name}，但目录 {vm_dir} 仍存在", None
+    except OSError:
+        return PROBE_UNKNOWN, f"无法读取 Tart 目录：{vm_dir}", None
+    return PROBE_ABSENT, None, None
+
+
+def _vbox_unregistered_remnants(private_dir):
+    """检查 VirtualBox 实例私有目录 vm/ 下是否有未注册残留；返回问题描述或 None。"""
+    if private_dir is None:
+        return None
+    vm_dir = Path(private_dir) / "vm"
+    try:
+        if vm_dir.is_symlink():
+            return f"私有目录 {vm_dir} 为符号链接，无法确认残留状态"
+        if vm_dir.exists():
+            if not vm_dir.is_dir():
+                return f"私有目录 {vm_dir} 存在异常文件残留"
+            if any(vm_dir.iterdir()):
+                return f"私有目录 {vm_dir} 下存在未注册的虚拟机残留文件"
+    except OSError:
+        return f"无法读取私有目录 {vm_dir}"
+    return None
+
+
+def _vbox_cfg_matches(cfg_file, private_dir, vm_name):
+    """校验 VirtualBox 注册的 CfgFile 是否属于本实例 private_dir/vm/<vm_name>/<vm_name>.vbox。"""
+    if not cfg_file or private_dir is None:
+        return True
+    expected = _remove_path(Path(private_dir).resolve()) / "vm" / vm_name / f"{vm_name}.vbox"
+    actual = _remove_path(cfg_file)
+    if os.name == "nt":
+        return str(actual).casefold() == str(expected).casefold()
+    return actual == expected
+
+
+def _probe_vbox_status(vm_name, snapshot, private_dir=None, *, allow_missing_vboxmanage=False):
+    """三态查询 VirtualBox 虚拟机与快照状态。"""
+    if allow_missing_vboxmanage and not vboxmanage_present():
+        remnant = _vbox_unregistered_remnants(private_dir)
+        if remnant:
+            return {
+                "vm": PROBE_UNKNOWN, "vm_state": "unknown", "snapshot": PROBE_UNKNOWN,
+                "cfg_file": None, "reason": remnant,
+            }
+        return {
+            "vm": PROBE_ABSENT, "vm_state": "missing", "snapshot": PROBE_ABSENT,
+            "cfg_file": None, "reason": None,
+        }
+    try:
+        proc = subprocess.run(
+            _virtualbox_cmd("status", VmName=vm_name, Snapshot=snapshot),
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return {
+            "vm": PROBE_UNKNOWN, "vm_state": "unknown", "snapshot": PROBE_UNKNOWN,
+            "cfg_file": None, "reason": "VBoxManage 查询失败",
+        }
+    if proc.returncode != 0:
+        return {
+            "vm": PROBE_UNKNOWN, "vm_state": "unknown", "snapshot": PROBE_UNKNOWN,
+            "cfg_file": None, "reason": f"VBoxManage 查询失败（退出码 {proc.returncode}）",
+        }
+    vm_state = None
+    snap_raw = None
+    cfg_file = None
+    for line in (proc.stdout or "").splitlines():
+        line = line.strip()
+        if line.startswith("VM_STATE="):
+            vm_state = line.split("=", 1)[1].strip()
+        elif line.startswith("SNAPSHOT_STATE="):
+            snap_raw = line.split("=", 1)[1].strip().lower()
+        elif line.startswith("CFG_FILE="):
+            cfg_file = line.split("=", 1)[1].strip()
+    if vm_state in ("running", "running-headless", "stopped"):
+        if snap_raw == "present":
+            snap_probe = PROBE_PRESENT
+        elif snap_raw == "missing":
+            snap_probe = PROBE_ABSENT
+        else:
+            snap_probe = PROBE_UNKNOWN
+        return {
+            "vm": PROBE_PRESENT, "vm_state": vm_state, "snapshot": snap_probe,
+            "cfg_file": cfg_file, "reason": None,
+        }
+    if vm_state == "missing":
+        remnant = _vbox_unregistered_remnants(private_dir)
+        if remnant:
+            return {
+                "vm": PROBE_UNKNOWN, "vm_state": "unknown", "snapshot": PROBE_UNKNOWN,
+                "cfg_file": None, "reason": remnant,
+            }
+        return {
+            "vm": PROBE_ABSENT, "vm_state": "missing", "snapshot": PROBE_ABSENT,
+            "cfg_file": None, "reason": None,
+        }
+    reason = (
+        "VirtualBox 中的虚拟机处于不可访问（inaccessible）状态"
+        if vm_state == "inaccessible"
+        else "VBoxManage 返回的状态无法识别"
+    )
+    return {
+        "vm": PROBE_UNKNOWN, "vm_state": "unknown", "snapshot": PROBE_UNKNOWN,
+        "cfg_file": cfg_file, "reason": reason,
+    }
+
+
+def probe_vm_state(ctx):
+    """三态查询当前实例虚拟机存在性，返回 (PROBE_PRESENT|PROBE_ABSENT|PROBE_UNKNOWN, reason)。"""
+    if ctx.dry_run or ctx.backend == "manual":
+        return PROBE_ABSENT, None
+    has_prior = bool(ctx.state.get("vm_created_by_up") or ctx.done("import") or ctx.done("snapshot") or ctx.state.get("vm_name"))
+    if ctx.backend == "tart":
+        state, reason, _meta = _probe_tart_target(
+            ctx.vm_name, ctx.tart_bin, require_home_dir=(has_prior or bool(ctx.state.get("tart_bin"))),
+        )
+        return state, reason
+    if ctx.backend == "virtualbox":
+        snap = ctx.state.get("clean_snapshot") or CLEAN_SNAPSHOT
+        res = _probe_vbox_status(ctx.vm_name, snap, ctx.private_dir, allow_missing_vboxmanage=(not has_prior))
+        return res["vm"], res["reason"]
+    return PROBE_ABSENT, None
 
 
 def tart_vm_dir(name, tart_bin=None):
@@ -1318,17 +1510,21 @@ def step_import(ctx):
     owned = ctx.state.get("vm_created_by_up") is True
     if ctx.backend == "virtualbox":
         _ensure_virtualbox_installed(ctx)
-    exists = vm_exists(ctx)
+    vm_state, probe_err = probe_vm_state(ctx)
+    if vm_state == PROBE_UNKNOWN:
+        raise StepError(f"目前无法确认原虚拟机状态（{probe_err}），已停止导入。")
+    exists = vm_state == PROBE_PRESENT
     if exists and not owned:
         raise StepError(vm_name_conflict(ctx.vm_name))
     if ctx.backend == "tart":
         if exists:
             _verify_tart_ownership(ctx.vm_name, ctx.state, "tart_vm_identity", "tart_vm_mac", ctx.tart_bin)
-        existed = (not ctx.dry_run) and subprocess.run(
-            ["bash", str(ROOT / "scripts" / "vm-tart.sh"), "exists", ctx.golden_name],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            env=_tart_env(ctx.tart_bin),
-        ).returncode == 0
+        existed = False
+        if not ctx.dry_run:
+            g_state, g_err, _ = _probe_tart_target(ctx.golden_name, ctx.tart_bin, require_home_dir=False)
+            if g_state == PROBE_UNKNOWN:
+                raise StepError(f"无法确认 Tart 黄金镜像状态（{g_err}），已停止导入。")
+            existed = g_state == PROBE_PRESENT
         if existed:
             print(f"  本机已有黄金镜像 {ctx.golden_name}，直接克隆（热缓存）")
         else:
@@ -1440,18 +1636,18 @@ def step_verify(ctx):
 def step_snapshot(ctx):
     if ctx.backend == "tart":
         snap = f"{ctx.vm_name}-clean"
-        snap_exists = (not ctx.dry_run) and (
-            subprocess.run(
-                ["bash", str(ROOT / "scripts" / "vm-tart.sh"), "exists", snap],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                env=_tart_env(ctx.tart_bin),
-            ).returncode == 0
-            or tart_vm_dir(snap, ctx.tart_bin).exists()
-        )
+        snap_exists = False
+        if not ctx.dry_run:
+            s_state, s_err, _ = _probe_tart_target(snap, ctx.tart_bin, require_home_dir=True)
+            if s_state == PROBE_UNKNOWN:
+                raise StepError(f"无法确认干净快照 {snap} 的状态（{s_err}），已停止。")
+            snap_exists = s_state == PROBE_PRESENT
         if snap_exists:
             if not ctx.state.get("tart_snapshot_identity") and not ctx.state.get("tart_snapshot_mac"):
                 raise StepError(vm_name_conflict(snap))
             _verify_tart_ownership(snap, ctx.state, "tart_snapshot_identity", "tart_snapshot_mac", ctx.tart_bin)
+            if not ctx.dry_run:
+                ctx.tart("stop", ctx.vm_name)
         else:
             if not ctx.dry_run:
                 _verify_tart_ownership(ctx.vm_name, ctx.state, "tart_vm_identity", "tart_vm_mac", ctx.tart_bin)
@@ -1682,6 +1878,120 @@ def finish_manual(ctx, steps):
     return 0
 
 
+def _unknown_backend_msg(backend, reason):
+    detail = f"（{reason}）" if reason else ""
+    if backend == "tart":
+        return (
+            f"目前无法确认原虚拟机在哪里{detail}。\n"
+            "请先接回原磁盘，或在 Tart 中确认原虚拟机可访问，然后重跑这条命令。"
+        )
+    return (
+        f"目前无法确认原虚拟机在哪里{detail}。\n"
+        "请先在 VirtualBox 中确认原虚拟机可访问（或检查私有目录下的残留文件），然后重跑这条命令。"
+    )
+
+
+def _conflict_object_msg(name, backend):
+    app = "Tart" if backend == "tart" else "VirtualBox"
+    return (
+        f"找到名为 {name} 的虚拟机或快照，但无法确认它属于这份安装记录。\n"
+        f"请先在 {app} 中核对原机；如果只想另装一台，请用 --tag 换一个实例名（例如 --tag cc02）。"
+    )
+
+
+def _verify_saved_egress(ctx):
+    """重建前复验保存的节点可用性与出口一致性；不可用或出口漂移即停，绝不打印节点或凭据。"""
+    if ctx.args.no_probe:
+        return
+    try:
+        env = render_mod.load_env(ctx.env_path)
+    except Exception as exc:
+        raise StepError(f"无法读取节点配置文件 {ctx.env_path}：{exc}") from None
+    if env.get("EXIT_MODE", "single") != "single":
+        return
+    if env.get("SINGLE_TYPE", "") not in QUICK_NODE_TYPES:
+        return
+    fields = {
+        "SINGLE_TYPE": env.get("SINGLE_TYPE", ""),
+        "SINGLE_SERVER": env.get("SINGLE_SERVER", ""),
+        "SINGLE_SERVER_IP": env.get("SINGLE_SERVER_IP", ""),
+        "SINGLE_PORT": env.get("SINGLE_PORT", ""),
+        "SINGLE_USER": env.get("SINGLE_USER", ""),
+        "SINGLE_PASS": env.get("SINGLE_PASS", ""),
+        "SINGLE_TLS": env.get("SINGLE_TLS", ""),
+    }
+    if not fields["SINGLE_SERVER_IP"] and fields["SINGLE_SERVER"]:
+        fields["SINGLE_SERVER_IP"] = resolve_server_ipv4(fields["SINGLE_SERVER"])
+    if not fields["SINGLE_SERVER_IP"]:
+        raise StepError(
+            "保存的节点暂时无法验证（无法解析节点地址）。\n"
+            "请检查节点，在恢复可用后重跑同一条命令；如果要更换节点，请加 --reconfigure 重新粘贴链接。"
+        )
+    probed = probe_egress_via_proxy(fields)
+    if not probed or not probed.get("ip"):
+        raise StepError(
+            "保存的节点暂时无法验证（可能已过期或暂时不可用）。\n"
+            "请检查节点，在恢复可用后重跑同一条命令；如果要更换节点，请加 --reconfigure 重新粘贴链接。"
+        )
+    for env_key, probe_key in (
+        ("EXPECTED_EGRESS_IP", "ip"),
+        ("EXPECTED_EGRESS_LOC", "country"),
+        ("EXPECTED_EGRESS_ASN", "asn"),
+        ("TIMEZONE", "timezone"),
+    ):
+        expected = (env.get(env_key) or "").strip()
+        actual = (probed.get(probe_key) or "").strip()
+        if expected and actual != expected:
+            raise StepError(
+                "这个节点的出口和上次记录不一致。\n"
+                "请先核对你的固定出口；如果要更换节点，请加 --reconfigure 重新粘贴链接。"
+            )
+    print("  保存的节点连通正常，出口与记录一致，开始重建...")
+
+
+def _clear_stale_guest_trust(ctx):
+    """清理与旧客机绑定的信任与地址文件。"""
+    for path in (ctx.known_hosts, ctx.ip_file, ctx.hostkey_log, ctx.logs / "hostkey.trust"):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _reset_for_rebuild(ctx, *, keep_config=True):
+    """为确认双失后的自动重建重置过期信任记录与完成步骤，保留 instance.env、SSH 密钥和共享设置。"""
+    _clear_stale_guest_trust(ctx)
+    for key in ("tart_vm_identity", "tart_vm_mac", "tart_snapshot_identity", "tart_snapshot_mac", "failed_step"):
+        ctx.state.pop(key, None)
+    ctx.state["vm_created_by_up"] = False
+    ctx.state["completed_steps"] = ["up:config"] if (keep_config and ctx.env_path.is_file()) else []
+    ctx.save_state()
+
+
+def _recover_from_tart_snapshot(ctx, snap_name):
+    """Mac 仅主 VM 丢失、干净快照归属可核验时，从快照克隆回主 VM，再经 boot + verify(--fail-closed) 复验交付。"""
+    print(f"旧虚拟机已找不到。正在用已核对的干净快照重建 {ctx.tag}。")
+    print("旧虚拟机里的文件和登录状态找不回来，共享文件夹里的文件不受影响。")
+    _verify_tart_ownership(snap_name, ctx.state, "tart_snapshot_identity", "tart_snapshot_mac", ctx.tart_bin)
+    ctx.tart("clone-new", snap_name, ctx.vm_name)
+    updates = dict(
+        vm_created_by_up=True,
+        vm_name=ctx.vm_name,
+        vm_backend="tart",
+        clean_snapshot=snap_name,
+        tart_vm_identity=tart_vm_identity(ctx.vm_name, ctx.tart_bin),
+    )
+    if ctx.tart_bin:
+        updates["tart_bin"] = ctx.tart_bin
+    vm_mac = _tart_vm_mac(ctx.vm_name, ctx.tart_bin)
+    if vm_mac:
+        updates["tart_vm_mac"] = vm_mac
+    ctx.state.update(updates)
+    ctx.state.pop("failed_step", None)
+    ctx.state["completed_steps"] = ["up:config", "up:preflight", "up:seed", "up:download", "up:import", "up:firstboot"]
+    ctx.save_state()
+
+
 def cmd_up(args):
     tag = (args.tag or "cc01").strip().lower()
     if not SAFE_TAG_RE.fullmatch(tag):
@@ -1692,7 +2002,11 @@ def cmd_up(args):
     if _is_inside_repo(private_dir) or (args.cache_dir and _is_inside_repo(Path(args.cache_dir).expanduser())):
         sys.exit("错误：私有目录/缓存目录不能放在 cchouse 仓库内，请改用用户私有目录")
 
-    ctx = UpContext(args, tag, route, private_dir)
+    try:
+        ctx = UpContext(args, tag, route, private_dir)
+    except StateCorruptError as exc:
+        sys.exit(str(exc))
+
     share_arg = getattr(args, "share", None)
     share_ro = bool(getattr(args, "read_only", False))
     try:
@@ -1723,46 +2037,115 @@ def cmd_up(args):
     # 早期安装记录没有 vm_backend，但会在私有配置记录旧版虚拟机路径。
     if ctx.route == "virtualbox-linux" and ctx.env_path.is_file() and _env_raw_value(ctx.env_path, "VMX_PATH"):
         sys.exit("错误：该实例包含旧版虚拟机路径，请使用新的 --tag 创建 VirtualBox 实例")
+
     live_run = not args.dry_run and not args.config_only
-    if live_run:
-        cur_share = share_mod.normalize_share_state(ctx.state)
-        if cur_share["enabled"] and not share_arg:
-            share_mod.ensure_share_dir(cur_share["host_path"])
-    if live_run and vm_exists(ctx):
-        owned = (ctx.state.get("vm_created_by_up") is True and ctx.state.get("vm_name") == ctx.vm_name
-                 and previous_backend == ctx.backend)
-        if ctx.backend == "tart" and owned:
-            identity = ctx.state.get("tart_vm_identity")
-            has_mac = bool(ctx.state.get("tart_vm_mac"))
-            if identity is not None or has_mac:
+    if live_run and ctx.backend != "manual":
+        has_prior_record = bool(
+            ctx.state.get("vm_created_by_up")
+            or ctx.done("import")
+            or ctx.done("snapshot")
+            or ctx.state.get("vm_name")
+        )
+        cfg_file = None
+        if ctx.backend == "tart":
+            snap_name = ctx.state.get("clean_snapshot") or f"{ctx.vm_name}-clean"
+            require_home = has_prior_record or bool(ctx.state.get("tart_bin"))
+            inv, inv_err = _probe_tart_inventory(ctx.tart_bin, require_home_dir=require_home)
+            vm_probe, vm_err, _ = _probe_tart_target(
+                ctx.vm_name, ctx.tart_bin, inventory=inv, inv_error=inv_err, require_home_dir=require_home,
+            )
+            snap_probe, snap_err, _ = _probe_tart_target(
+                snap_name, ctx.tart_bin, inventory=inv, inv_error=inv_err, require_home_dir=require_home,
+            )
+        elif ctx.backend == "virtualbox":
+            snap_name = ctx.state.get("clean_snapshot") or CLEAN_SNAPSHOT
+            vb = _probe_vbox_status(
+                ctx.vm_name, snap_name, ctx.private_dir, allow_missing_vboxmanage=(not has_prior_record),
+            )
+            vm_probe, vm_err, cfg_file = vb["vm"], vb["reason"], vb["cfg_file"]
+            snap_probe, snap_err = vb["snapshot"], vb["reason"]
+        else:
+            snap_name = CLEAN_SNAPSHOT
+            vm_probe, vm_err = PROBE_ABSENT, None
+            snap_probe, snap_err = PROBE_ABSENT, None
+
+        # 任一对象「查不了」→ 停，不动任何东西
+        if vm_probe == PROBE_UNKNOWN or snap_probe == PROBE_UNKNOWN:
+            sys.exit(_unknown_backend_msg(ctx.backend, vm_err or snap_err))
+
+        if vm_probe == PROBE_PRESENT:
+            owned = (
+                ctx.state.get("vm_created_by_up") is True
+                and ctx.state.get("vm_name") == ctx.vm_name
+                and previous_backend == ctx.backend
+            )
+            if not owned:
+                sys.exit(_conflict_object_msg(ctx.vm_name, ctx.backend))
+            if ctx.backend == "tart":
                 try:
                     _verify_tart_ownership(ctx.vm_name, ctx.state, "tart_vm_identity", "tart_vm_mac", ctx.tart_bin)
                 except StepError as exc:
                     sys.exit(str(exc))
-            elif not ctx.done("snapshot"):
-                sys.exit(_tart_unverifiable_ownership_msg(ctx.vm_name, ctx.tart_bin))
-        if not owned:
-            sys.exit(vm_name_conflict(ctx.vm_name))
-        print(f"检测到 {ctx.vm_name} 的安装记录，将沿用已完成步骤。")
-    elif live_run and ctx.done("import") and ctx.backend != "manual":
-        sys.exit(f"安装记录中的虚拟机 {ctx.vm_name} 已不存在。请使用新的 --tag，或先核对并卸载旧记录。")
-    if live_run and ctx.backend == "tart" and not ctx.done("snapshot"):
-        snapshot = f"{ctx.vm_name}-clean"
-        snap_exists = (
-            subprocess.run(
-                ["bash", str(ROOT / "scripts" / "vm-tart.sh"), "exists", snapshot],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                env=_tart_env(ctx.tart_bin),
-            ).returncode == 0
-            or tart_vm_dir(snapshot, ctx.tart_bin).exists()
-        )
-        if snap_exists:
-            if not ctx.state.get("tart_snapshot_identity") and not ctx.state.get("tart_snapshot_mac"):
-                sys.exit(vm_name_conflict(snapshot))
-            try:
-                _verify_tart_ownership(snapshot, ctx.state, "tart_snapshot_identity", "tart_snapshot_mac", ctx.tart_bin)
-            except StepError as exc:
-                sys.exit(str(exc))
+                if snap_probe == PROBE_PRESENT and not ctx.done("snapshot"):
+                    try:
+                        _verify_tart_ownership(snap_name, ctx.state, "tart_snapshot_identity", "tart_snapshot_mac", ctx.tart_bin)
+                    except StepError as exc:
+                        sys.exit(str(exc))
+            elif ctx.backend == "virtualbox":
+                if not _vbox_cfg_matches(cfg_file, ctx.private_dir, ctx.vm_name):
+                    sys.exit(_conflict_object_msg(ctx.vm_name, ctx.backend))
+            print(f"检测到 {ctx.vm_name} 的安装记录，将沿用已完成步骤。")
+        elif snap_probe == PROBE_PRESENT:
+            # Mac：VM 没了，但 <vm>-clean 还在
+            if not has_prior_record:
+                sys.exit(_conflict_object_msg(snap_name, ctx.backend))
+            if ctx.backend == "tart":
+                try:
+                    _verify_tart_ownership(snap_name, ctx.state, "tart_snapshot_identity", "tart_snapshot_mac", ctx.tart_bin)
+                except StepError as exc:
+                    sys.exit(str(exc))
+                if not ctx.env_path.is_file() or not ctx.ssh_key.is_file():
+                    sys.exit(
+                        f"找到干净快照 {snap_name}，但缺少节点配置或 SSH 密钥。"
+                        "请先在 Tart 中核对原快照，或用 --tag 换一个实例名重新安装。"
+                    )
+                cur_share = share_mod.normalize_share_state(ctx.state)
+                if cur_share["enabled"] and not share_arg:
+                    share_mod.ensure_share_dir(cur_share["host_path"])
+                try:
+                    _recover_from_tart_snapshot(ctx, snap_name)
+                except StepError as exc:
+                    sys.exit(str(exc))
+            else:
+                sys.exit(_conflict_object_msg(snap_name, ctx.backend))
+        elif has_prior_record:
+            # VM 与干净快照均确认不存在（含旧版无归属字段记录）→ 自动重建，不再询问
+            if ctx.env_path.is_file() and not ctx.args.reconfigure:
+                print(f"之前的虚拟机和干净快照已找不到。正在用保存的节点设置重新建一台 {ctx.tag}。")
+                print("旧虚拟机里的文件和登录状态找不回来，共享文件夹里的文件不受影响。")
+                try:
+                    _verify_saved_egress(ctx)
+                except StepError as exc:
+                    sys.exit(str(exc))
+                cur_share = share_mod.normalize_share_state(ctx.state)
+                if cur_share["enabled"] and not share_arg:
+                    share_mod.ensure_share_dir(cur_share["host_path"])
+                _reset_for_rebuild(ctx, keep_config=True)
+            else:
+                if ctx.args.reconfigure:
+                    print(f"之前的虚拟机和干净快照已找不到，将按 --reconfigure 重新输入节点链接并重建 {ctx.tag}。")
+                else:
+                    print(f"之前的虚拟机已找不到，且缺少节点设置。请按提示粘贴节点链接重新安装 {ctx.tag}。")
+                print("旧虚拟机里的文件和登录状态找不回来，共享文件夹里的文件不受影响。")
+                cur_share = share_mod.normalize_share_state(ctx.state)
+                if cur_share["enabled"] and not share_arg:
+                    share_mod.ensure_share_dir(cur_share["host_path"])
+                _reset_for_rebuild(ctx, keep_config=False)
+
+    if live_run:
+        cur_share = share_mod.normalize_share_state(ctx.state)
+        if cur_share["enabled"] and not share_arg:
+            share_mod.ensure_share_dir(cur_share["host_path"])
     return run_pipeline(ctx)
 
 
@@ -2150,36 +2533,38 @@ def _tart_cmd(*args):
 def _backend_status(info):
     """查询后端虚拟机与干净快照状态，返回 (vm_state, snapshot_exists)。
 
-    vm_state: 'running' | 'running-headless' | 'stopped' | 'missing'
-    snapshot_exists: bool
+    vm_state: 'running' | 'running-headless' | 'stopped' | 'missing' | 'unknown'
+    snapshot_exists: True | False | None（None 表示无法查询）
     """
     backend = info["backend"]
     vm_name = info["vm_name"]
     snapshot = info["snapshot"]
     if backend == "tart":
-        tenv = _tart_env(info.get("tart_bin"))
-        proc = subprocess.run(_tart_cmd("status", vm_name), capture_output=True, text=True, env=tenv)
-        vm_state = (proc.stdout or "").strip().splitlines()[-1].strip() if proc.stdout and proc.stdout.strip() else "missing"
-        if vm_state not in ("running", "stopped", "missing"):
+        inv, inv_err = _probe_tart_inventory(info.get("tart_bin"), require_home_dir=True)
+        if inv_err:
+            return "unknown", None
+        v_probe, _v_err, v_meta = _probe_tart_target(
+            vm_name, info.get("tart_bin"), inventory=inv, inv_error=inv_err, require_home_dir=True,
+        )
+        if v_probe == PROBE_PRESENT:
+            running = bool(v_meta and (v_meta.get("Running") is True or str(v_meta.get("State", "")).lower() == "running"))
+            vm_state = "running" if running else "stopped"
+        elif v_probe == PROBE_ABSENT:
             vm_state = "missing"
-        snap_exists = subprocess.run(
-            _tart_cmd("exists", snapshot), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=tenv,
-        ).returncode == 0
+        else:
+            vm_state = "unknown"
+        s_probe, _s_err, _s_meta = _probe_tart_target(
+            snapshot, info.get("tart_bin"), inventory=inv, inv_error=inv_err, require_home_dir=True,
+        )
+        snap_exists = True if s_probe == PROBE_PRESENT else (False if s_probe == PROBE_ABSENT else None)
         return vm_state, snap_exists
     if backend == "virtualbox":
-        proc = subprocess.run(
-            _virtualbox_cmd("status", VmName=vm_name, Snapshot=snapshot),
-            capture_output=True, text=True,
+        vb = _probe_vbox_status(vm_name, snapshot, info.get("private_dir"), allow_missing_vboxmanage=False)
+        snap_exists = (
+            True if vb["snapshot"] == PROBE_PRESENT
+            else (False if vb["snapshot"] == PROBE_ABSENT else None)
         )
-        vm_state = "missing"
-        snap_exists = False
-        for line in (proc.stdout or "").splitlines():
-            line = line.strip()
-            if line.startswith("VM_STATE="):
-                vm_state = line.split("=", 1)[1].strip()
-            elif line.startswith("SNAPSHOT_STATE="):
-                snap_exists = line.split("=", 1)[1].strip().lower() == "present"
-        return vm_state, snap_exists
+        return vb["vm_state"], snap_exists
     raise StepError(f"当前后端 {backend} 暂不支持该操作")
 
 
@@ -2279,8 +2664,12 @@ def cmd_status(args):
         "running-headless": "运行中（无窗口）",
         "stopped": "已关机",
         "missing": "不存在",
+        "unknown": "无法查询",
     }.get(vm_state, vm_state)
-    snap_label = f"存在（{info['snapshot']}）" if snap_exists else "不存在"
+    snap_label = (
+        f"存在（{info['snapshot']}）" if snap_exists is True
+        else ("无法查询" if snap_exists is None else "不存在")
+    )
     share_cfg = share_mod.normalize_share_state(info["state"])
     if getattr(args, "json", False):
         print(json.dumps({
@@ -2297,6 +2686,10 @@ def cmd_status(args):
         print(f"状态：{label}")
         print(f"干净快照：{snap_label}")
         print(share_mod.format_share_status_line(info["state"]))
+        if vm_state == "missing" and info["state"]:
+            print(f"提示：虚拟机已不存在，重跑首页安装命令即可用保存的设置重建（或运行 cchouse up --tag {info['tag']}）。")
+        elif vm_state == "unknown":
+            print("提示：目前无法确认原虚拟机在哪里。请先接回原磁盘，或在 Tart / VirtualBox 中确认原虚拟机可访问后重试。")
     return 0
 
 
@@ -2306,8 +2699,13 @@ def cmd_open(args):
         if not info["state"]:
             raise StepError(f"没有找到 {info['tag']} 的安装记录，请先运行 cchouse up --tag {info['tag']}。")
         vm_state, _ = _backend_status(info)
+        if vm_state == "unknown":
+            raise StepError("目前无法确认原虚拟机在哪里。请先接回原磁盘，或在 Tart / VirtualBox 中确认原虚拟机可访问后重试。")
         if vm_state == "missing":
-            raise StepError(f"虚拟机 {info['vm_name']} 不存在，请核对或运行 cchouse up --tag {info['tag']}。")
+            raise StepError(
+                f"虚拟机 {info['vm_name']} 已不存在，重跑首页安装命令即可用保存的设置重建"
+                f"（或运行 cchouse up --tag {info['tag']}）。"
+            )
         share_cfg = share_mod.normalize_share_state(info["state"])
         if info["backend"] == "tart":
             info["logs"].mkdir(parents=True, exist_ok=True)
@@ -2332,6 +2730,8 @@ def cmd_stop(args):
         if not info["state"]:
             raise StepError(f"没有找到 {info['tag']} 的安装记录。")
         vm_state, _ = _backend_status(info)
+        if vm_state == "unknown":
+            raise StepError("目前无法确认原虚拟机状态，已停止关机。请先接回原磁盘或在 Tart / VirtualBox 中核对。")
         if vm_state == "missing":
             raise StepError(f"虚拟机 {info['vm_name']} 不存在。")
         if vm_state == "stopped":
@@ -2378,6 +2778,8 @@ def cmd_restore(args):
         if not info["state"]:
             raise StepError(f"没有找到 {info['tag']} 的安装记录。")
         vm_state, snap_exists = _backend_status(info)
+        if vm_state == "unknown" or snap_exists is None:
+            raise StepError("目前无法确认原虚拟机或干净快照状态，已停止恢复。请先接回原磁盘或在 Tart / VirtualBox 中核对。")
         if not snap_exists:
             raise StepError(f"找不到干净快照 {info['snapshot']}，无法恢复。")
         if info["backend"] == "tart":
