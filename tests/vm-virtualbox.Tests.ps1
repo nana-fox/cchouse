@@ -711,6 +711,17 @@ try {
   Assert-True "bootstrap passes share path" ($bsShareArgs -contains "C:\Users\Alice\my-share")
   Assert-True "bootstrap passes --read-only" ($bsShareArgs -contains "--read-only")
 
+  $bsLinkArgs = @(Get-CchouseBootstrapUpArgs -Tag "cc01" -LinkFile "C:\Users\Alice\cchouse-node.txt" -Reconfigure)
+  Assert-True "bootstrap passes --link-file" ($bsLinkArgs -contains "--link-file")
+  Assert-True "bootstrap passes link file path" ($bsLinkArgs -contains "C:\Users\Alice\cchouse-node.txt")
+  Assert-True "bootstrap passes --reconfigure" ($bsLinkArgs -contains "--reconfigure")
+
+  $bsClipArgs = @(Get-CchouseBootstrapUpArgs -Tag "cc01" -LinkClipboard)
+  Assert-True "bootstrap passes --link-clipboard" ($bsClipArgs -contains "--link-clipboard")
+
+  $resolvedEmpty = Resolve-CchouseLinkFilePath -LinkFile "   "
+  Assert-Equal "empty link file resolves to empty" $resolvedEmpty ""
+
   # Test Windows .lnk creation & removal via WScript.Shell on Windows_NT
   if ($env:OS -eq "Windows_NT") {
     $lnkPath = Join-Path $bsTmp "cchouse (cc99).lnk"

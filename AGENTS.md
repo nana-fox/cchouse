@@ -3,7 +3,10 @@
 ## 用公开版本安装
 
 1. 根据宿主选择 [README 快速开始](README.md#快速开始) 的对应命令。Apple Silicon Mac 使用 Tart + Debian 13 arm64，Windows x64 使用 VirtualBox + Debian 13 amd64。Intel Mac 暂不支持。只读本次路线的文档。
-2. 首次安装需要输入节点链接，且当前终端无交互 TTY 时（如 AI 工具调用），引导脚本与 `cchouse up` 会立即以退出码 `20` 停下并打印原样首页命令（Windows 经外层 PowerShell 调用时退出码可能显示为 `1`，以「需要你本人输入节点链接」提示为准）；请把该命令交给用户在**自己的终端窗口**运行，由用户本人在无回显提示处粘贴自备的 SOCKS5 或 HTTP(S) 节点（AI 不索要、不读取、不保存链接）。已有保存节点配置时的续跑或重建无需交互，可在无 TTY 下直接完成。VLESS、Trojan、Shadowsocks 及两跳配置按 [进阶文档](docs/proxy-modes.md) 操作。
+2. **无 TTY 安装（剪贴板优先 / 链接文件）**：
+   - **推荐（剪贴板）**：请用户先复制节点链接、不要发进对话，待用户回复「好了」后，在首页引导命令末尾追加 `--link-clipboard`（Windows `-LinkClipboard`）运行。安装器自行读取剪贴板第一条非空行、绝不回显，写入 `instance.env` 后自动清空剪贴板并告知；AI 严禁自行运行 `pbpaste`、`Get-Clipboard` 或任何读取剪贴板/读取 `instance.env` 的命令。
+   - **链接文件**：用户已有存放链接的文件时，只接收路径并追加 `--link-file <路径>`（Windows `-LinkFile <路径>`），AI 不打开该文件，装完提醒用户删除（程序不自动删）。若用户执意直接发送链接（不推荐，会经过 AI 服务商），将其写入仅当前用户可读（POSIX `600` / Windows 仅当前用户 ACL）的临时文件、绝不放入命令行参数，用 `--link-file` 装完后立即删除该临时文件。
+   - **公共行为**：两种参数均支持无 TTY 完整安装（不触发退出码 `20`），安装第 1–2 步会先解析并检查节点（VLESS/Trojan/Shadowsocks 等不支持的协议会提示进阶安装并给出 [docs/proxy-modes.md](docs/proxy-modes.md) 链接；剪贴板非链接只提示「剪贴板里不是节点链接，请复制后重试」；节点不可用或 preflight 失败立即停下且不回显链接）。已有 `instance.env` 且未传 `--reconfigure` 时提示并忽略 `--link-clipboard`/`--link-file`。用户也可在**自己的终端窗口**直接运行原样首页命令并无回显粘贴；无上述参数且无交互 TTY 首次安装时，引导脚本与 `cchouse up` 会立即以退出码 `20` 停下并打印原样首页命令（Windows 经外层 PowerShell 调用时退出码可能显示为 `1`，以「需要你本人输入节点链接」提示为准）。已有保存节点配置时的续跑或重建无需交互，可在无 TTY 下直接完成。
 3. 失败时读取该实例的 `state.json`，核对 `status`、`failed_step`、`next_action` 及退出码。使用安装器输出的工作目录和私有 Python 运行 `scripts/doctor.py`。先检查脱敏结果，按失败步骤排查，再重跑同一个锁定命令。默认私有根为 macOS 的 `~/Library/Application Support/cchouse` 或 Windows 的 `%LOCALAPPDATA%\cchouse`，默认标签为 `cc01`。
 4. 自动验收须退出 0 且状态为 `DONE`。随后把桌面 `check.html` 核对与账号登录交给用户。Stripe 连通性 WARN 可接受。
 
@@ -11,7 +14,7 @@
 
 | 操作 | 入口 |
 |---|---|
-| 安装或续跑 | 首页对应平台的锁定命令。维护入口为 `scripts/cchouse.py up --tag <TAG>` |
+| 安装或续跑 | 首页对应平台的锁定命令（可追加 `--link-clipboard` / `-LinkClipboard` 或 `--link-file <路径>` / `-LinkFile <路径>`）。维护入口为 `scripts/cchouse.py up --tag <TAG>` |
 | 预览并卸载 | `scripts/cchouse.py remove --tag <TAG>`。自定义过 `--private-dir` 时也传原路径。核对归属清单后再确认 |
 | 导出诊断 | `scripts/doctor.py`。有私有配置时加 `--env <instance.env>`，有状态记录时可加 `--state <state.json>`，客机正在运行时可加 `--vm-ssh` |
 | 查状态 | `cchouse status --tag <TAG>`。不在 PATH 时用 Mac `~/.local/bin/cchouse`、Windows PowerShell `& "$env:LOCALAPPDATA\cchouse\bin\cchouse.cmd"` |

@@ -20,16 +20,19 @@ cchouse runs a small isolated virtual machine on your computer for Claude on the
 
 ### Let AI install it for you
 
-If you use an AI coding assistant such as Claude Code, Codex, or Cursor, copy the prompt below and send it to your assistant. Your node link is only ever pasted by you in your own terminal window—the AI will not ask for, read, or save it (see [AGENTS.md](AGENTS.md) for agent rules):
+If you use an AI coding assistant such as Claude Code, Codex, or Cursor, copy the prompt below and send it to your assistant. The recommended flow lets the installer read your copied node link directly from the clipboard and clear it afterward without pasting the link into chat (note: the AI has local command permissions, so this relies on instruction compliance rather than technical isolation; if you prefer, run the home-page command in your own terminal and paste it yourself; see [AGENTS.md](AGENTS.md) for agent rules):
 
 ```text
 Help me install cchouse (https://github.com/nana-fox/cchouse). Please follow these steps strictly:
-1. Check my computer first (only Apple Silicon Mac and Windows x64 are supported; if it is anything else, tell me it is unsupported and stop) and verify free disk space (at least 9 GB / 12 GB recommended on Mac; at least 7 GB / 10 GB recommended on Windows).
-2. Ask if I already have a fixed-IP SOCKS5 or HTTP(S) proxy node. If not, explain that this is required and stop—do not buy one for me or recommend specific vendors.
-3. Read AGENTS.md and README.md in this repo, and use only the currently version-pinned install command from the README home page without rewriting it.
-4. Give me the home-page command for my platform so I can run it in my own terminal window and paste my node link at the prompt; never ask for, read, log, or store my node link.
-5. After I finish running it, run `cchouse status --tag cc01` to verify the VM status (if `cchouse` is not found, use the full path: Mac `~/.local/bin/cchouse`, Windows PowerShell `& "$env:LOCALAPPDATA\cchouse\bin\cchouse.cmd"`). If installation failed, troubleshoot with `scripts/doctor.py` per AGENTS.md, then have me rerun the same home-page command.
-6. Once everything passes, remind me to open check.html on the VM desktop to confirm all checks are green and sign in to Claude inside the VM myself.
+1. Check my computer first (only Apple Silicon Mac and Windows x64 are supported; if anything else, tell me it is unsupported and stop) and verify free disk space (at least 9 GB / 12 GB recommended on Mac; at least 7 GB / 10 GB recommended on Windows). Read AGENTS.md and README.md in this repo, and use only the currently version-pinned bootstrap command from the README home page without altering its download/verification part.
+2. Provide the node link using one of these three options (option (a) is recommended; all three verify the node type and connectivity in steps 1–2 and stop immediately if unsupported or unreachable—if so, relay the result to me and stop):
+   (a) Recommended (clipboard): tell me verbatim: "Please copy your node link first—no need to send it to me. Next, the installer will read the link directly from your clipboard on your computer; it will not be displayed or sent to me, and the clipboard will be cleared once read. Reply 'ready' when you've copied it." Once I reply "ready", run the home-page bootstrap command with `--link-clipboard` (Windows: `-LinkClipboard`) appended.
+   (b) Existing link file: if I give you the path to a file containing my node link, run the home-page bootstrap command with `--link-file <path>` (Windows: `-LinkFile <path>`) appended; never open, read, or display that file, and remind me to delete it when done.
+   (c) Sending the link directly (not recommended, as the link passes through the AI provider): if I paste the link to you directly, write it to a temporary file readable only by the current user (never pass the link in command-line arguments), install with `--link-file <temp-file>` (Windows: `-LinkFile`), and delete that temporary file immediately afterward.
+   (Alternative: if I prefer manual input, give me the plain home-page command so I can run it in my own terminal window and paste the link with hidden input.)
+3. Rules: never run `pbpaste`, `Get-Clipboard`, or any command to read the clipboard or `instance.env` yourself, and never scan other proxy apps on my computer—only run the home-page bootstrap command.
+4. After installation finishes, run `cchouse status --tag cc01` to confirm the VM status (if `cchouse` is not found, use the full path: Mac `~/.local/bin/cchouse`, Windows PowerShell `& "$env:LOCALAPPDATA\cchouse\bin\cchouse.cmd"`). If anything fails, troubleshoot with `scripts/doctor.py` per AGENTS.md and rerun after fixing.
+5. Once everything passes, remind me to open check.html on the VM desktop to confirm all checks are green and sign in to Claude inside the VM myself.
 ```
 
 Up and running in 3 steps (see [Supported computers](#supported-computers) for measured empty-cache install times):
