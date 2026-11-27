@@ -1,56 +1,42 @@
 # cchouse
 
-**一台干净、稳定、不漏网的 Claude 专用环境。**
-在你的电脑里开一台隔离的小虚拟机，网页版 Claude 和 Claude Code 都在里面用，所有流量只走你自己的节点；节点一断，整台机器就断网，不会偷偷用你本机的网络。
+> **给 Claude 一个独立 IP、独立环境的专用虚拟机。**
+
+在你的电脑里开一台隔离的小虚拟机，网页版 Claude 和 Claude Code 都在里面用，客机流量只走你自己的单个固定节点；时区和语言按出口自动对齐，节点一断整机断网。你的主力电脑不改语言、不改时区、不改代理设置，也不挂载本机文件。
 
 [![CI](https://github.com/nana-fox/cchouse/actions/workflows/ci.yml/badge.svg)](https://github.com/nana-fox/cchouse/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/nana-fox/cchouse?include_prereleases&label=release)](https://github.com/nana-fox/cchouse/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-中文 | [English](README.en.md)
+中文 | [English](README.en.md) · [快速开始](#快速开始) · [方案对比](#与常见方式的对比) · [常见问题](#常见问题) · [安全设计](#安全设计)
 
 ![自动验收通过后，在虚拟机桌面打开网络检查页，全部通过后再登录（图为示例，IP 为文档示例地址）](docs/assets/check-all-green.png)
 
----
-
-## 适合谁
-
-你已经有一个自己的代理节点，想长期稳定地用 Claude（网页版 + Claude Code），又不想每天担心下面这些事：
-
-1. **IP 飘来飘去**：今天一个地区，明天另一个地区。
-2. **环境对不上**：IP 在美国，电脑时区却是北京时间、系统语言是中文。
-3. **代理断了偷偷直连**：节点掉线的那几秒，软件悄悄用回了本机网络，真实 IP 就露了。
-
-cchouse 的做法：只走你配置的那一个节点，把虚拟机的时区、语言、地区设成和节点所在地一致，并且断了就是断了，不会自动换路。
-
----
-
-## 原理
-
-![隔离虚拟机位于你的电脑内，只能通过你自己的节点访问 Claude。节点断开时，虚拟机断网。](docs/assets/how-it-works.svg)
-
-- 虚拟机里只允许通往你那一个节点的流量，别的路一律堵死。
-- 你的电脑本身照常上网，不受影响。
+<sub>自动验收通过后，在虚拟机桌面打开网络检查页，全部通过后再登录（图中 IP 为文档示例地址）。</sub>
 
 ---
 
 ## 快速开始
 
-安装器会下载并校验匹配的客机镜像和官方 Claude Code 包。[镜像清单](guest-linux/image-manifest.json)
+三步完成部署（空缓存首次安装实测耗时见[支持的电脑](#支持的电脑)）：
+
+1. **运行一行命令**：按你的系统复制下方命令（自动下载并校验客机镜像与官方 Claude Code 包，见[镜像清单](guest-linux/image-manifest.json)）。
+2. **粘贴你的节点**：无回显输入你自己的 SOCKS5 或 HTTP(S) 固定节点链接，安装器自动建机、对齐出口时区与语言、运行网络验收并拍干净快照。
+3. **全绿后登录**：在虚拟机桌面打开网络检查页，确认全部通过后，再在虚拟机内的浏览器与终端登录 Claude。
 
 ### Windows（x64）
 
-打开 Windows PowerShell，运行下面这一行安装 `v2.0.0-preview.6`。
+打开 Windows PowerShell，运行下面这一行安装 `v2.0.0-preview.6`：
 
 ```powershell
 $f = "$env:TEMP\cchouse-bootstrap-$([guid]::NewGuid().ToString('N')).ps1"; iwr https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.6/bootstrap-windows.ps1 -UseBasicParsing -OutFile $f -ErrorAction Stop; if ((Get-FileHash $f -Algorithm SHA256).Hash -ne '59aabc99822170257a0153bd2bc1c95f715bcc2d6fc7ae4a626330b941a5fe98') { throw 'SHA-256 mismatch' }; Unblock-File -LiteralPath $f; powershell -NoProfile -ExecutionPolicy RemoteSigned -File $f -CleanupBootstrap
 ```
 
-按提示粘贴自己的节点链接，输入不会回显。缺少 VirtualBox 时，安装器会自动安装。Windows 弹出用户账户控制（UAC）提示时，点一次「是」。
+按提示粘贴自己的节点链接，输入不会回显。缺少 VirtualBox 时，安装器会自动安装；Windows 弹出用户账户控制（UAC）提示时，点一次「是」。
 
 ### Apple Silicon Mac
 
-需要 Apple Silicon（M 系列）及 macOS 13.0 Ventura 或更新版本。打开「终端」，运行下面这一行安装 `v2.0.0-preview.6`。引导脚本会校验并准备私有 Python 和所需的 Tart。
+需要 Apple Silicon（M 系列）及 macOS 13.0 Ventura 或更新版本。打开「终端」，运行下面这一行安装 `v2.0.0-preview.6`（引导脚本会校验并准备私有 Python 和所需的 Tart）：
 
 ```bash
 f=$(mktemp -t cchouse-bootstrap) && curl -fsSLo "$f" https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.6/bootstrap-macos.sh && printf '%s  %s\n' '63132f4c4f12c10ff0fa70efca8fd1b74c6587fd022543e452238e694300091f' "$f" | shasum -a 256 -c - && /bin/bash "$f" --cleanup-bootstrap
@@ -60,10 +46,11 @@ f=$(mktemp -t cchouse-bootstrap) && curl -fsSLo "$f" https://github.com/nana-fox
 
 ### 打开客机并登录
 
-安装器会配置客机、运行自动验收，并在通过后保存干净快照。遇到错误时，按提示处理后重跑同一条命令。安装器会复用已校验的下载和已完成的步骤。
+安装器会配置客机、运行自动验收，并在通过后保存干净快照。遇到错误时，按提示处理后重跑同一条命令，安装器会复用已校验的下载和已完成的步骤。
 
-自动验收通过后，打开虚拟机桌面上的网络检查页（就是上面那张图）。网络检查全部通过后，再在**虚拟机里的浏览器**登录 Claude。这一页只检查网络，不代表账号状态。
+自动验收通过后，打开虚拟机桌面上的网络检查页（见上方截图），全部通过后再在**虚拟机里的浏览器**登录 Claude。这一页只检查网络，不代表账号状态。
 
+> [!IMPORTANT]
 > 登录 Claude Code 时弹出的授权链接，也只能在虚拟机里的浏览器打开，不要复制到你本机的浏览器。
 
 ### 日常使用
@@ -77,7 +64,43 @@ f=$(mktemp -t cchouse-bootstrap) && curl -fsSLo "$f" https://github.com/nana-fox
 - **卸载**：`cchouse remove --tag cc01`，见下方「卸载」。
 - 终端找不到 `cchouse` 时用完整路径：Mac `~/.local/bin/cchouse status --tag cc01`；Windows PowerShell `& "$env:LOCALAPPDATA\cchouse\bin\cchouse.cmd" status --tag cc01`。
 
-让 AI Agent 协助安装见 [AGENTS.md](AGENTS.md)。手动配置见 [进阶安装](docs/manual-install.md)。
+让 AI Agent 协助安装见 [AGENTS.md](AGENTS.md)，手动配置见 [进阶安装](docs/manual-install.md)。
+
+---
+
+## 适合谁 · 它不是什么
+
+### 适合谁
+
+已经有一个自己的固定代理节点，想给官方 Claude（网页版 + Claude Code）一个独立 IP、独立语言时区、断网即停的专用环境，同时不想为了用 Claude 改动日常主力电脑的系统语言、时区或代理设置。
+
+### 它不是什么
+
+- **不卖节点、不代充值**：不提供、不内置任何代理线路，也不代注册或代付款。账号与节点完全归你。
+- **不改主力机环境**：不修改本机的语言、地区、时区或代理软件，不挂载宿主机文件（仅安装运行所需的虚拟化软件 Tart 或 VirtualBox）。
+- **不承诺永不封号**：cchouse 只负责本地环境隔离与防泄漏，账号状态由 Anthropic 决定。
+
+---
+
+## 与常见方式的对比
+
+| 维度 | 本机直接开代理 | 改本机环境 + 代理 | 租远程云电脑 / Mac | cchouse（本地隔离虚拟机） |
+|---|---|---|---|---|
+| **主力机日常使用** | 不受影响 | 需改整机语言与时区 | 隔屏操作 | **不改语言、时区与代理** |
+| **网页 + Claude Code** | 终端常漏走代理 | 需系统级接管终端 | 均可，传文件不便 | **同机同出口** |
+| **节点断开时** | 易退回本机直连 | 视代理软件规则而定 | 视远程机网络而定 | **系统级 fail-closed 断网** |
+| **时区、语言、IPv6** | 仍为本机真实环境 | 需改动整机配置 | 独立环境 | **自动对齐出口，封 IPv6/UDP** |
+| **故障回滚** | 手动排查 | 手动恢复本机设置 | 重装远程机 | **内置干净快照重建** |
+| **费用与代码** | 自备节点 | 自备或月付线路 | 按月租机器 | **MIT 开源免费**，自备节点 |
+
+---
+
+## 原理
+
+![隔离虚拟机位于你的电脑内，只能通过你自己的节点访问 Claude。节点断开时，虚拟机断网。](docs/assets/how-it-works.svg)
+
+- 虚拟机里只允许通往你那一个节点的流量，别的路一律堵死。
+- 你的电脑本身照常上网，不受影响。
 
 ---
 
