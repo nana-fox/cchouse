@@ -43,6 +43,7 @@ import downloads  # noqa: E402
 import launcher as launcher_mod  # noqa: E402
 import preflight as preflight_mod  # noqa: E402
 import render as render_mod  # noqa: E402
+import share as share_mod  # noqa: E402
 
 REJECTED_SCHEMES = frozenset(set(render_mod.REJECTED_UDP_TYPES) | {"wg", "quic"})
 SUPPORTED_SCHEMES = frozenset({"socks5", "socks5h", "socks", "http", "https", "vless", "trojan", "ss"})
@@ -918,7 +919,8 @@ class UpContext:
             raise StepError(f"找不到命令：{cmd[0]}") from None
 
     def tart(self, *op):
-        return self.run(["bash", ROOT / "scripts" / "vm-tart.sh", *op], env=_tart_env(self.tart_bin))
+        share_cfg = share_mod.normalize_share_state(self.state) if (op and op[0] in ("boot", "gui", "open")) else None
+        return self.run(["bash", ROOT / "scripts" / "vm-tart.sh", *op], env=_tart_env(self.tart_bin, share_cfg))
 
     def virtualbox(self, op, **kw):
         cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ROOT / "scripts" / "vm-virtualbox.ps1", "-CcOp", op]
@@ -1403,6 +1405,7 @@ def step_boot(ctx):
             IpFile=ctx.ip_file,
             SshPort=str(ctx.vbox_ssh_port),
             HostKeyLog=str(ctx.hostkey_log),
+            **_vbox_share_kwargs(ctx.state),
         )
         ctx.delete_plaintext()
     else:
@@ -1468,7 +1471,7 @@ def step_snapshot(ctx):
         if ctx.dry_run:
             ctx.virtualbox("stop", VmName=ctx.vm_name, Force="no", Timeout="60")
             ctx.virtualbox("snapshot", VmName=ctx.vm_name, Snapshot=snap)
-            ctx.virtualbox("gui", VmName=ctx.vm_name)
+            ctx.virtualbox("gui", VmName=ctx.vm_name, **_vbox_share_kwargs(ctx.state))
         else:
             info = {
                 "tag": ctx.tag,
@@ -1489,7 +1492,7 @@ def step_snapshot(ctx):
             except (OSError, subprocess.SubprocessError) as exc:
                 print(f"WARN  创建桌面启动图标失败（不影响客机使用）：{exc}", file=sys.stderr)
             ctx.save_state()
-            ctx.virtualbox("gui", VmName=ctx.vm_name)
+            ctx.virtualbox("gui", VmName=ctx.vm_name, **_vbox_share_kwargs(ctx.state))
     else:
         raise StepError("当前后端不支持自动保存快照")
     ctx.state["clean_snapshot"] = snap
@@ -1565,6 +1568,10 @@ def print_handoff(ctx):
     print("\n== 部署完成，交给你 ==")
     # Windows 经 SSH 等非交互会话安装时不弹窗口、客机保持关机，这里不说「已开机」
     print(f"- 客机 {ctx.vm_name} 已就绪，干净快照：{ctx.state.get('clean_snapshot')}")
+    share_cfg = share_mod.normalize_share_state(ctx.state)
+    if share_cfg["enabled"]:
+        mode = "只读" if share_cfg["read_only"] else "读写"
+        print(f"- 共享文件夹：{share_cfg['host_path']}（{mode}）→ 客机内 ~/shared")
     launchers = ctx.state.get("launchers") or []
     if launchers:
         desktop = [p for p in launchers if "Desktop" in p]
@@ -1686,6 +1693,27 @@ def cmd_up(args):
         sys.exit("错误：私有目录/缓存目录不能放在 cchouse 仓库内，请改用用户私有目录")
 
     ctx = UpContext(args, tag, route, private_dir)
+    share_arg = getattr(args, "share", None)
+    share_ro = bool(getattr(args, "read_only", False))
+    try:
+        if share_arg:
+            validated_share = share_mod.validate_share_path(share_arg, allow_create=False)
+            ctx.state["share"] = share_mod.make_share_state(validated_share, read_only=share_ro, enabled=True)
+        elif "share" in ctx.state:
+            existing_share = share_mod.normalize_share_state(ctx.state)
+            if existing_share["enabled"]:
+                validated_share = share_mod.validate_share_path(existing_share["host_path"], allow_create=True)
+                ctx.state["share"] = share_mod.make_share_state(
+                    validated_share,
+                    read_only=(share_ro or existing_share["read_only"]),
+                    enabled=True,
+                )
+        else:
+            default_dir = share_mod.default_share_dir(tag)
+            validated_share = share_mod.validate_share_path(default_dir, allow_create=True)
+            ctx.state["share"] = share_mod.make_share_state(validated_share, read_only=share_ro, enabled=True)
+    except share_mod.SharePathError as exc:
+        sys.exit(f"错误：{exc}")
     if (ctx.state.get("tag", tag) != tag or ctx.state.get("route", route) != route
             or Path(ctx.state.get("private_dir", private_dir)).resolve() != private_dir.resolve()):
         sys.exit("错误：现有安装记录与当前标签、路线或私有目录不匹配，请使用新的 --tag")
@@ -1696,6 +1724,10 @@ def cmd_up(args):
     if ctx.route == "virtualbox-linux" and ctx.env_path.is_file() and _env_raw_value(ctx.env_path, "VMX_PATH"):
         sys.exit("错误：该实例包含旧版虚拟机路径，请使用新的 --tag 创建 VirtualBox 实例")
     live_run = not args.dry_run and not args.config_only
+    if live_run:
+        cur_share = share_mod.normalize_share_state(ctx.state)
+        if cur_share["enabled"] and not share_arg:
+            share_mod.ensure_share_dir(cur_share["host_path"])
     if live_run and vm_exists(ctx):
         owned = (ctx.state.get("vm_created_by_up") is True and ctx.state.get("vm_name") == ctx.vm_name
                  and previous_backend == ctx.backend)
@@ -1766,13 +1798,34 @@ def _tart_bin(state=None, *, announce_legacy=False):
     return chosen
 
 
-def _tart_env(tart_bin=None):
+def _tart_env(tart_bin=None, share_cfg=None):
     env = os.environ.copy()
     if tart_bin and (os.path.isabs(str(tart_bin)) or os.sep in str(tart_bin)):
         env["CCHOUSE_TART_BIN"] = str(tart_bin)
     else:
         env.pop("CCHOUSE_TART_BIN", None)
+    if share_cfg and share_cfg.get("enabled") and share_cfg.get("host_path"):
+        env["CCHOUSE_SHARE_PATH"] = str(share_cfg["host_path"])
+        env["CCHOUSE_SHARE_RO"] = "1" if share_cfg.get("read_only") else "0"
+    else:
+        env.pop("CCHOUSE_SHARE_PATH", None)
+        env.pop("CCHOUSE_SHARE_RO", None)
     return env
+
+
+def _vbox_share_kwargs(state):
+    cfg = share_mod.normalize_share_state(state)
+    if cfg["enabled"]:
+        return {
+            "ShareEnabled": "yes",
+            "SharePath": cfg["host_path"],
+            "ShareReadOnly": "yes" if cfg["read_only"] else "no",
+        }
+    return {
+        "ShareEnabled": "no",
+        "SharePath": "",
+        "ShareReadOnly": "no",
+    }
 
 
 def _tart_inventory(tart_bin=None):
@@ -1894,6 +1947,7 @@ def cmd_remove(args):
             print(f"没有找到 {tag} 的安装记录。")
             _print_remove_remainder(cache_dir, golden_name, False)
             return 0
+        share_cfg = share_mod.normalize_share_state(state)
 
         backend = state.get("vm_backend")
         snapshot = state.get("clean_snapshot")
@@ -1964,6 +2018,8 @@ def cmd_remove(args):
                 print(f"  - 下载缓存 {path}（{size:,} 字节）")
         if not owned:
             print("该记录没有安装器创建虚拟机的标记。手动创建的虚拟机需在虚拟机软件里核对并删除。")
+        if share_cfg["enabled"]:
+            print(f"共享文件夹 {share_cfg['host_path']} 将保留，不会被删除。")
         if not args.purge_cache:
             if backend == "tart":
                 print("Tart 黄金镜像和共享下载缓存默认保留。")
@@ -2014,6 +2070,8 @@ def cmd_remove(args):
         print(f"可在文件管理器核对共享下载缓存 {cache_dir}，仅删除不再需要的安装包。")
         return 1
     print(f"已完成 {tag} 的卸载。")
+    if share_cfg["enabled"]:
+        print(f"共享文件夹 {share_cfg['host_path']} 已保留")
     _print_remove_remainder(cache_dir, golden_name, args.purge_cache, tart_bin=tart_bin)
     return 0
 
@@ -2223,6 +2281,7 @@ def cmd_status(args):
         "missing": "不存在",
     }.get(vm_state, vm_state)
     snap_label = f"存在（{info['snapshot']}）" if snap_exists else "不存在"
+    share_cfg = share_mod.normalize_share_state(info["state"])
     if getattr(args, "json", False):
         print(json.dumps({
             "tag": info["tag"],
@@ -2231,11 +2290,13 @@ def cmd_status(args):
             "state": vm_state,
             "snapshot": info["snapshot"],
             "snapshot_exists": snap_exists,
+            "share": share_cfg,
         }, ensure_ascii=False))
     else:
         print(f"实例：{info['tag']}（{info['vm_name']}）")
         print(f"状态：{label}")
         print(f"干净快照：{snap_label}")
+        print(share_mod.format_share_status_line(info["state"]))
     return 0
 
 
@@ -2247,15 +2308,16 @@ def cmd_open(args):
         vm_state, _ = _backend_status(info)
         if vm_state == "missing":
             raise StepError(f"虚拟机 {info['vm_name']} 不存在，请核对或运行 cchouse up --tag {info['tag']}。")
+        share_cfg = share_mod.normalize_share_state(info["state"])
         if info["backend"] == "tart":
             info["logs"].mkdir(parents=True, exist_ok=True)
             subprocess.run(
                 _tart_cmd("open", info["vm_name"], info["logs"] / "tart-gui.log"),
-                check=True, env=_tart_env(info.get("tart_bin")),
+                check=True, env=_tart_env(info.get("tart_bin"), share_cfg),
             )
             print("提示：关机请用桌面右键 Safe Shutdown 或 cchouse stop")
         elif info["backend"] == "virtualbox":
-            subprocess.run(_virtualbox_cmd("gui", VmName=info["vm_name"]), check=True)
+            subprocess.run(_virtualbox_cmd("gui", VmName=info["vm_name"], **_vbox_share_kwargs(info["state"])), check=True)
         else:
             raise StepError(f"当前后端 {info['backend']} 暂不支持 open")
     except (StepError, subprocess.CalledProcessError, OSError) as exc:
@@ -2355,15 +2417,120 @@ def cmd_restore(args):
             _save_state_dict(info["state_path"], info["state"])
         elif info["backend"] == "virtualbox":
             subprocess.run(
-                _virtualbox_cmd("restore", VmName=info["vm_name"], Snapshot=info["snapshot"]),
+                _virtualbox_cmd("restore", VmName=info["vm_name"], Snapshot=info["snapshot"], **_vbox_share_kwargs(info["state"])),
                 check=True,
             )
             _save_state_dict(info["state_path"], info["state"])
         else:
             raise StepError(f"当前后端 {info['backend']} 暂不支持 restore")
-        print(f"已将 {info['vm_name']} 恢复到干净快照 {info['snapshot']}（instance.env 与 SSH 密钥已保留）。")
+        share_cfg = share_mod.normalize_share_state(info["state"])
+        share_note = "、共享文件夹设置" if share_cfg["enabled"] else ""
+        print(f"已将 {info['vm_name']} 恢复到干净快照 {info['snapshot']}（instance.env、SSH 密钥{share_note}已保留）。")
     except (StepError, subprocess.CalledProcessError, OSError) as exc:
         print(f"恢复失败：{exc}", file=sys.stderr)
+        return exc.exit_code if isinstance(exc, StepError) else 1
+    return 0
+
+
+def _guest_has_share_service(info):
+    """检查运行中客机是否已安装 cchouse-share.service；无法连上时返回 None。"""
+    ssh_key = info["ssh_key"]
+    env_path = info["env_path"]
+    if not ssh_key.is_file() or not env_path.is_file():
+        return None
+    ip = _sync_tart_ip_and_known_hosts(info) if info["backend"] == "tart" else _env_raw_value(env_path, "GUEST_IP")
+    if not ip:
+        return None
+    port = _env_raw_value(env_path, "SSH_PORT") if info["backend"] == "virtualbox" else None
+    kh = info["known_hosts"]
+    ssh_bin = "ssh"
+    if os.name == "nt":
+        sys32_ssh = Path(os.environ.get("WINDIR") or r"C:\Windows") / "System32" / "OpenSSH" / "ssh.exe"
+        if sys32_ssh.is_file():
+            ssh_bin = str(sys32_ssh)
+    cmd = [ssh_bin, "-F", "none", "-i", str(ssh_key), "-o", "BatchMode=yes", "-o", "ConnectTimeout=5"]
+    if kh.is_file():
+        kh_opt = f'UserKnownHostsFile="{kh.resolve().as_posix()}"' if os.name == "nt" else f'UserKnownHostsFile="{kh}"'
+        cmd += ["-o", "StrictHostKeyChecking=yes", "-o", kh_opt]
+    else:
+        cmd += ["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"]
+    if port:
+        cmd += ["-p", str(port)]
+    cmd += [f"claude@{ip}", "test -f /etc/systemd/system/cchouse-share.service && echo YES || echo NO"]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        out = (proc.stdout or "").strip()
+        if out == "YES":
+            return True
+        if out == "NO":
+            return False
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return None
+
+
+def cmd_share(args):
+    try:
+        info = _load_instance_context(args.tag, getattr(args, "private_dir", None))
+        if not info["state"]:
+            raise StepError(f"没有找到 {info['tag']} 的安装记录，请先运行 cchouse up --tag {info['tag']}。")
+
+        path_arg = getattr(args, "path", None)
+        off = bool(getattr(args, "off", False))
+        read_only = bool(getattr(args, "read_only", False))
+
+        if off and (path_arg or read_only):
+            raise StepError("参数冲突：--off 不能与共享路径或 --read-only 同时使用。", 2)
+
+        # 无参数 = 显示当前设置
+        if not off and not path_arg:
+            if read_only:
+                raise StepError("请提供共享文件夹路径（用法：cchouse share --tag <tag> <路径> [--read-only]）。", 2)
+            print(share_mod.format_share_status_line(info["state"]))
+            return 0
+
+        if off:
+            info["state"]["share"] = share_mod.make_share_state(enabled=False)
+            _save_state_dict(info["state_path"], info["state"])
+            vm_state, _ = _backend_status(info)
+            if vm_state in ("running", "running-headless"):
+                print("已关闭共享文件夹。虚拟机正在运行，重启后生效（可运行 cchouse stop 后再 cchouse open）。")
+            else:
+                if info["backend"] == "virtualbox" and vm_state == "stopped":
+                    subprocess.run(
+                        _virtualbox_cmd("sync-share", VmName=info["vm_name"], **_vbox_share_kwargs(info["state"])),
+                        check=True,
+                    )
+                print("已关闭共享文件夹，下次开机生效。")
+            return 0
+
+        try:
+            validated = share_mod.validate_share_path(path_arg, allow_create=False)
+        except share_mod.SharePathError as exc:
+            raise StepError(str(exc), 2) from None
+
+        info["state"]["share"] = share_mod.make_share_state(validated, read_only=read_only, enabled=True)
+        _save_state_dict(info["state_path"], info["state"])
+        mode = "只读" if read_only else "读写"
+        vm_state, _ = _backend_status(info)
+        if vm_state in ("running", "running-headless"):
+            has_svc = _guest_has_share_service(info)
+            if has_svc is False:
+                print(
+                    "提示：检测到该实例由旧版 cchouse 安装，客机内缺少共享挂载服务（客机无 root 权限无法在线补装），"
+                    "建议保留共享目录后用新版重新安装实例。",
+                    file=sys.stderr,
+                )
+            print(f"共享文件夹已设置为：{validated}（{mode}）。虚拟机正在运行，重启后生效（可运行 cchouse stop 后再 cchouse open）。")
+        else:
+            if info["backend"] == "virtualbox" and vm_state == "stopped":
+                subprocess.run(
+                    _virtualbox_cmd("sync-share", VmName=info["vm_name"], **_vbox_share_kwargs(info["state"])),
+                    check=True,
+                )
+            print(f"共享文件夹已设置为：{validated}（{mode}），下次开机生效。")
+    except (StepError, subprocess.CalledProcessError, OSError) as exc:
+        print(f"设置共享文件夹失败：{exc}", file=sys.stderr)
         return exc.exit_code if isinstance(exc, StepError) else 1
     return 0
 
@@ -2395,6 +2562,8 @@ def main():
     p_up.add_argument("--vm-backend", choices=("auto", "tart", "virtualbox", "manual"), default="auto",
                       help="虚拟机自动化后端（默认：Apple Silicon→tart；Windows→virtualbox；其余→manual）")
     p_up.add_argument("--reconfigure", action="store_true", help="忽略已有 instance.env，重新输入节点链接")
+    p_up.add_argument("--share", default=None, help="自定义共享给客机 ~/shared 的宿主文件夹路径（默认 ~/cchouse-share/<tag>）")
+    p_up.add_argument("--read-only", action="store_true", help="以只读方式共享宿主文件夹给客机")
     p_up.add_argument("--config-only", action="store_true", help="只生成 instance.env 并跑 preflight（第一轮行为），不下载不建虚拟机")
     p_up.add_argument("--dry-run", action="store_true", help="只演练：生成配置并跑 preflight，其余步骤只打印命令，不下载、不动虚拟机、不写 state.json")
 
@@ -2424,6 +2593,13 @@ def main():
     p_restore.add_argument("--private-dir", default=None, help="安装时使用的自定义私有目录")
     p_restore.add_argument("--yes", action="store_true", help="跳过确认提示")
 
+    p_share = sub.add_parser("share", help="查看、修改或关闭宿主共享文件夹（下次开机生效）")
+    p_share.add_argument("--tag", default="cc01", help="实例短名（默认 cc01）")
+    p_share.add_argument("--private-dir", default=None, help="安装时使用的自定义私有目录")
+    p_share.add_argument("path", nargs="?", default=None, help="要共享的宿主文件夹路径（不填则显示当前设置）")
+    p_share.add_argument("--read-only", action="store_true", help="以只读方式共享给客机")
+    p_share.add_argument("--off", action="store_true", help="关闭共享文件夹")
+
     args = parser.parse_args()
     if args.command == "up":
         sys.exit(cmd_up(args))
@@ -2437,6 +2613,8 @@ def main():
         sys.exit(cmd_status(args))
     if args.command == "restore":
         sys.exit(cmd_restore(args))
+    if args.command == "share":
+        sys.exit(cmd_share(args))
 
 
 if __name__ == "__main__":

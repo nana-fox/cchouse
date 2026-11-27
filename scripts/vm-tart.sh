@@ -130,11 +130,23 @@ cchouse_tart_firstboot() {
   return 0
 }
 
+cchouse_tart_dir_args() {
+  CCHOUSE_TART_DIR_ARGS=()
+  if [ -n "${CCHOUSE_SHARE_PATH:-}" ]; then
+    if [ "${CCHOUSE_SHARE_RO:-0}" = "1" ]; then
+      CCHOUSE_TART_DIR_ARGS=("--dir=shared:${CCHOUSE_SHARE_PATH}:ro")
+    else
+      CCHOUSE_TART_DIR_ARGS=("--dir=shared:${CCHOUSE_SHARE_PATH}")
+    fi
+  fi
+}
+
 cchouse_tart_boot() {
   local vm="$1" key="$2" kh="$3" ip_file="$4" runlog="${5:-/dev/null}" tries="${CCHOUSE_BOOT_TRIES:-40}"
   local ip="" ssh_ok=0 i w
   cchouse_resolve_tart || return 1
-  nohup "$CCHOUSE_TART_CMD" run --no-graphics "$vm" >"$runlog" 2>&1 &
+  cchouse_tart_dir_args
+  nohup "$CCHOUSE_TART_CMD" run --no-graphics ${CCHOUSE_TART_DIR_ARGS[@]+"${CCHOUSE_TART_DIR_ARGS[@]}"} "$vm" >"$runlog" 2>&1 &
   CCHOUSE_TART_PID=$!
   echo "Started networked VM (pid=$CCHOUSE_TART_PID), waiting for IP + SSH..."
   for i in $(seq 1 "$tries"); do
@@ -174,7 +186,8 @@ cchouse_tart_boot() {
 cchouse_tart_gui() {
   local vm="$1" runlog="${2:-/dev/null}"
   cchouse_resolve_tart || return 1
-  nohup "$CCHOUSE_TART_CMD" run "$vm" >"$runlog" 2>&1 &
+  cchouse_tart_dir_args
+  nohup "$CCHOUSE_TART_CMD" run ${CCHOUSE_TART_DIR_ARGS[@]+"${CCHOUSE_TART_DIR_ARGS[@]}"} "$vm" >"$runlog" 2>&1 &
   CCHOUSE_TART_PID=$!
   echo "Started $vm with graphics (pid=$CCHOUSE_TART_PID)."
 }

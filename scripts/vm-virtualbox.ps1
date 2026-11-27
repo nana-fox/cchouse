@@ -4,7 +4,7 @@
 # Host public keys come from the guest serial log.
 # Do not print credentials.
 param(
-  [ValidateSet("", "install", "import", "firstboot", "boot", "snapshot", "exists", "delete", "gui", "stop", "restore", "status")] [string]$CcOp = "",
+  [ValidateSet("", "install", "import", "firstboot", "boot", "snapshot", "exists", "delete", "gui", "stop", "restore", "status", "sync-share")] [string]$CcOp = "",
   [string]$CcOva = "",
   [string]$CcVmName = "",
   [string]$CcVmDir = "",
@@ -20,7 +20,10 @@ param(
   [string]$CcSha256 = "",
   [string]$CcHostKeyLog = "",
   [ValidateSet("yes", "no")] [string]$CcForce = "no",
-  [int]$CcTimeout = 60
+  [int]$CcTimeout = 60,
+  [ValidateSet("yes", "no", "keep")] [string]$CcShareEnabled = "keep",
+  [string]$CcSharePath = "",
+  [ValidateSet("yes", "no")] [string]$CcShareReadOnly = "no"
 )
 
 $script:CchouseHostKeyHelper = Join-Path $PSScriptRoot "windows-hostkey.ps1"
@@ -342,7 +345,10 @@ function Invoke-CchouseVBoxBoot {
     [string]$KnownHostsPath,
     [string]$IpFile,
     [int]$SshPort,
-    [string]$HostKeyLog
+    [string]$HostKeyLog,
+    [ValidateSet("yes", "no", "keep")] [string]$ShareEnabled = "keep",
+    [string]$SharePath = "",
+    [ValidateSet("yes", "no")] [string]$ShareReadOnly = "no"
   )
   Assert-CchouseSshPort -Port $SshPort
   $vbm = Get-CchouseVBoxManage
@@ -357,6 +363,7 @@ function Invoke-CchouseVBoxBoot {
     if (Test-Path -LiteralPath $SeedIso) { throw "seed.iso still present" }
   }
   Invoke-CchouseVBox -CcArgumentList @("modifyvm", $Name, "--cableconnected1", "on") -FailureMessage "enable NIC failed"
+  Sync-CchouseVBoxSharedFolder -Name $Name -Enabled $ShareEnabled -HostPath $SharePath -ReadOnly $ShareReadOnly
   # Read the serial log while the VM is off. A running VM may lock the file.
   Enable-CchouseVBoxSerialLog -Name $Name -HostKeyLog $HostKeyLog
   $serialText = Read-CchouseSerialText -Path $HostKeyLog
@@ -502,6 +509,65 @@ function Set-CchouseVBoxCloseActions {
   ) -FailureMessage "VBoxManage setextradata GUI/RestrictedCloseActions failed" | Out-Null
 }
 
+function Get-CchouseVBoxSharedFolderNames {
+  param([string[]]$Lines)
+  $names = @()
+  foreach ($line in @($Lines)) {
+    if ($line -match '^SharedFolderNameMachineMapping\d+="([^"]*)"') {
+      $names += $Matches[1]
+    }
+  }
+  return $names
+}
+
+function Get-CchouseVBoxSharedFolderAddArgs {
+  param(
+    [string]$Name,
+    [string]$HostPath,
+    [ValidateSet("yes", "no")] [string]$ReadOnly = "no",
+    [string]$ShareName = "cchouse-shared",
+    [string]$AutoMountPoint = "/home/claude/shared"
+  )
+  if ([string]::IsNullOrWhiteSpace($Name)) { throw "CcVmName is required" }
+  if ([string]::IsNullOrWhiteSpace($HostPath)) { throw "CcSharePath is required" }
+  $argsList = @(
+    "sharedfolder", "add", $Name,
+    "--name", $ShareName,
+    "--hostpath", $HostPath,
+    "--automount",
+    "--auto-mount-point", $AutoMountPoint
+  )
+  if ($ReadOnly -eq "yes") {
+    $argsList += "--readonly"
+  }
+  return $argsList
+}
+
+function Sync-CchouseVBoxSharedFolder {
+  param(
+    [string]$Name,
+    [ValidateSet("yes", "no", "keep")] [string]$Enabled = "keep",
+    [string]$HostPath = "",
+    [ValidateSet("yes", "no")] [string]$ReadOnly = "no"
+  )
+  if ($Enabled -eq "keep") { return }
+  if ([string]::IsNullOrWhiteSpace($Name)) { throw "CcVmName is required" }
+  $info = @(Get-CchouseShowvminfoLines -Name $Name)
+  $state = Get-CchouseVBoxState -Lines $info
+  if ($state -in @("running", "running-headless")) {
+    throw "VirtualBox VM $Name is running; shared folder changes require poweroff"
+  }
+  foreach ($existingName in @(Get-CchouseVBoxSharedFolderNames -Lines $info)) {
+    Invoke-CchouseVBox -CcArgumentList @("sharedfolder", "remove", $Name, "--name", $existingName) `
+      -FailureMessage "VBoxManage sharedfolder remove failed" | Out-Null
+  }
+  if ($Enabled -eq "yes") {
+    $addArgs = @(Get-CchouseVBoxSharedFolderAddArgs -Name $Name -HostPath $HostPath -ReadOnly $ReadOnly)
+    Invoke-CchouseVBox -CcArgumentList $addArgs `
+      -FailureMessage "VBoxManage sharedfolder add failed" | Out-Null
+  }
+}
+
 function Get-CchouseVBoxState {
   param([string[]]$Lines)
   $vmState = $null
@@ -626,17 +692,26 @@ function Stop-CchouseVBoxVM {
 }
 
 function Invoke-CchouseVBoxGui {
-  param([string]$Name, [int]$Timeout = 60)
+  param(
+    [string]$Name,
+    [int]$Timeout = 60,
+    [ValidateSet("yes", "no", "keep")] [string]$ShareEnabled = "keep",
+    [string]$SharePath = "",
+    [ValidateSet("yes", "no")] [string]$ShareReadOnly = "no"
+  )
   if ([string]::IsNullOrWhiteSpace($Name)) { throw "CcVmName is required" }
   $info = Invoke-CchouseVBoxOptional -CcArgumentList @("showvminfo", $Name, "--machinereadable")
   if ($info.ExitCode -ne 0) { throw "VirtualBox VM not found: $Name" }
   Set-CchouseVBoxCloseActions -Name $Name
+  $state = Get-CchouseVBoxState -Lines $info.Output
+  if ($state -eq "stopped") {
+    Sync-CchouseVBoxSharedFolder -Name $Name -Enabled $ShareEnabled -HostPath $SharePath -ReadOnly $ShareReadOnly
+  }
   if (-not (Test-CchouseInteractiveSession)) {
     Write-Host "当前为 SSH/非交互会话，无法弹出虚拟机窗口。请在桌面双击「cchouse」图标打开。"
     Write-Host "VM_GUI=deferred-noninteractive"
     return
   }
-  $state = Get-CchouseVBoxState -Lines $info.Output
   if ($state -eq "running") {
     [void](Show-CchouseVBoxWindow -Name $Name)
     Write-Host "VM_GUI=already-running"
@@ -645,6 +720,7 @@ function Invoke-CchouseVBoxGui {
   if ($state -eq "running-headless") {
     Write-Host "客机正在后台无窗口运行，正在安全关机后以桌面窗口重启..."
     Stop-CchouseVBoxVM -Name $Name -Force "no" -Timeout $Timeout
+    Sync-CchouseVBoxSharedFolder -Name $Name -Enabled $ShareEnabled -HostPath $SharePath -ReadOnly $ShareReadOnly
   }
   Start-CchouseVmGui -Name $Name
   Write-Host "VM_GUI=started"
@@ -654,7 +730,10 @@ function Restore-CchouseVBoxSnapshot {
   param(
     [string]$Name,
     [string]$SnapName = "cchouse-clean",
-    [int]$Timeout = 60
+    [int]$Timeout = 60,
+    [ValidateSet("yes", "no", "keep")] [string]$ShareEnabled = "keep",
+    [string]$SharePath = "",
+    [ValidateSet("yes", "no")] [string]$ShareReadOnly = "no"
   )
   if ([string]::IsNullOrWhiteSpace($Name)) { throw "CcVmName is required" }
   if ([string]::IsNullOrWhiteSpace($SnapName)) { throw "CcSnapshot is required" }
@@ -670,6 +749,7 @@ function Restore-CchouseVBoxSnapshot {
   Invoke-CchouseVBox -CcArgumentList @("snapshot", $Name, "restore", $SnapName) `
     -FailureMessage "VBoxManage snapshot restore failed" | Out-Null
   Set-CchouseVBoxCloseActions -Name $Name
+  Sync-CchouseVBoxSharedFolder -Name $Name -Enabled $ShareEnabled -HostPath $SharePath -ReadOnly $ShareReadOnly
   Write-Host "RESTORE_OK=$SnapName"
 }
 
@@ -683,13 +763,14 @@ if ($CcOp) {
     "install" { Install-CchouseVirtualBox $CcInstaller $CcSha256 }
     "import" { Import-CchouseVBoxOva $CcOva $CcVmName $CcVmDir $CcSshPort $CcHostKeyLog $CcReplaceExisting }
     "firstboot" { Invoke-CchouseVBoxFirstboot $CcVmName $CcSeedIso $CcFirstbootSeconds $CcHostKeyLog }
-    "boot" { Invoke-CchouseVBoxBoot $CcVmName $CcSeedIso $CcKey $CcKnownHosts $CcIpFile $CcSshPort $CcHostKeyLog }
+    "boot" { Invoke-CchouseVBoxBoot $CcVmName $CcSeedIso $CcKey $CcKnownHosts $CcIpFile $CcSshPort $CcHostKeyLog $CcShareEnabled $CcSharePath $CcShareReadOnly }
     "snapshot" { New-CchouseVBoxSnapshot $CcVmName $CcSnapshot }
     "delete" { Remove-CchouseVBoxVM -Name $CcVmName -VmDir $CcVmDir }
     "status" { Get-CchouseVBoxStatus -Name $CcVmName -SnapName $CcSnapshot }
-    "gui" { Invoke-CchouseVBoxGui -Name $CcVmName -Timeout $CcTimeout }
+    "gui" { Invoke-CchouseVBoxGui -Name $CcVmName -Timeout $CcTimeout -ShareEnabled $CcShareEnabled -SharePath $CcSharePath -ShareReadOnly $CcShareReadOnly }
     "stop" { Stop-CchouseVBoxVM -Name $CcVmName -Force $CcForce -Timeout $CcTimeout }
-    "restore" { Restore-CchouseVBoxSnapshot -Name $CcVmName -SnapName $CcSnapshot -Timeout $CcTimeout }
+    "restore" { Restore-CchouseVBoxSnapshot -Name $CcVmName -SnapName $CcSnapshot -Timeout $CcTimeout -ShareEnabled $CcShareEnabled -SharePath $CcSharePath -ShareReadOnly $CcShareReadOnly }
+    "sync-share" { Sync-CchouseVBoxSharedFolder -Name $CcVmName -Enabled $CcShareEnabled -HostPath $CcSharePath -ReadOnly $CcShareReadOnly }
   }
   exit 0
 }

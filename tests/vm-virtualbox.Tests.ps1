@@ -686,6 +686,30 @@ try {
     Assert-True "IWR fallback wrote verified dest" (Test-Path -LiteralPath $dest -PathType Leaf)
   }
 
+  # Test shared folder helpers in vm-virtualbox.ps1 & bootstrap-windows.ps1
+  $sfNames = @(Get-CchouseVBoxSharedFolderNames -Lines @(
+    'SharedFolderNameMachineMapping1="cchouse-shared"',
+    'SharedFolderPathMachineMapping1="C:\Users\Alice\cchouse-share\cc01"',
+    'SharedFolderNameMachineMapping2="extra"'
+  ))
+  Assert-Equal "shared folder name count" $sfNames.Count 2
+  Assert-Equal "first shared folder name" $sfNames[0] "cchouse-shared"
+  Assert-Equal "second shared folder name" $sfNames[1] "extra"
+
+  $rwArgs = @(Get-CchouseVBoxSharedFolderAddArgs -Name "claude-cc01" -HostPath "C:\Users\Alice\cchouse-share\cc01" -ReadOnly "no")
+  Assert-True "rw has --automount" ($rwArgs -contains "--automount")
+  Assert-True "rw has --auto-mount-point" ($rwArgs -contains "--auto-mount-point")
+  Assert-True "rw mounts at /home/claude/shared" ($rwArgs -contains "/home/claude/shared")
+  Assert-False "rw omits --readonly" ($rwArgs -contains "--readonly")
+
+  $roArgs = @(Get-CchouseVBoxSharedFolderAddArgs -Name "claude-cc01" -HostPath "C:\Users\Alice\cchouse-share\cc01" -ReadOnly "yes")
+  Assert-True "ro includes --readonly" ($roArgs -contains "--readonly")
+
+  $bsShareArgs = @(Get-CchouseBootstrapUpArgs -Tag "cc01" -Share "C:\Users\Alice\my-share" -ShareReadOnly)
+  Assert-True "bootstrap passes --share" ($bsShareArgs -contains "--share")
+  Assert-True "bootstrap passes share path" ($bsShareArgs -contains "C:\Users\Alice\my-share")
+  Assert-True "bootstrap passes --read-only" ($bsShareArgs -contains "--read-only")
+
   # Test Windows .lnk creation & removal via WScript.Shell on Windows_NT
   if ($env:OS -eq "Windows_NT") {
     $lnkPath = Join-Path $bsTmp "cchouse (cc99).lnk"
