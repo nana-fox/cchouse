@@ -2,7 +2,7 @@
 
 > **Give Claude its own dedicated IP and isolated environment in a local VM.**
 
-cchouse runs a small isolated virtual machine on your computer for Claude on the web and Claude Code. Guest traffic goes only through your own single fixed proxy node, locale and time zone match your exit automatically, and if the node drops the VM goes offline. Your main computer keeps its own language, time zone, and proxy settings, with no host folders mounted.
+cchouse runs a small isolated virtual machine on your computer for Claude on the web and Claude Code. Guest traffic goes only through your own single fixed proxy node, locale and time zone match your exit automatically, and if the node drops the VM goes offline. Your main computer keeps its own language, time zone, and proxy settings, and only the one folder you choose is shared with the VM.
 
 [![CI](https://github.com/nana-fox/cchouse/actions/workflows/ci.yml/badge.svg)](https://github.com/nana-fox/cchouse/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/nana-fox/cchouse?include_prereleases&label=release)](https://github.com/nana-fox/cchouse/releases)
@@ -26,20 +26,20 @@ Up and running in 3 steps (see [Supported computers](#supported-computers) for m
 
 ### Windows (x64)
 
-Open Windows PowerShell and run this one line to install `v2.0.0-preview.6`:
+Open Windows PowerShell and run this one line to install `v2.0.0-preview.7`:
 
 ```powershell
-$f = "$env:TEMP\cchouse-bootstrap-$([guid]::NewGuid().ToString('N')).ps1"; iwr https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.6/bootstrap-windows.ps1 -UseBasicParsing -OutFile $f -ErrorAction Stop; if ((Get-FileHash $f -Algorithm SHA256).Hash -ne '59aabc99822170257a0153bd2bc1c95f715bcc2d6fc7ae4a626330b941a5fe98') { throw 'SHA-256 mismatch' }; Unblock-File -LiteralPath $f; powershell -NoProfile -ExecutionPolicy RemoteSigned -File $f -CleanupBootstrap
+$f = "$env:TEMP\cchouse-bootstrap-$([guid]::NewGuid().ToString('N')).ps1"; iwr https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.7/bootstrap-windows.ps1 -UseBasicParsing -OutFile $f -ErrorAction Stop; if ((Get-FileHash $f -Algorithm SHA256).Hash -ne 'b869ad747ccd37b0fbc9de281300b4327743ee2151bf2013fc6bc77cb71aefdf') { throw 'SHA-256 mismatch' }; Unblock-File -LiteralPath $f; powershell -NoProfile -ExecutionPolicy RemoteSigned -File $f -CleanupBootstrap
 ```
 
 When prompted, paste your node link (hidden input). If VirtualBox is missing, the installer installs it automatically; click **Yes** once when Windows asks for User Account Control (UAC) approval.
 
 ### Apple Silicon Mac
 
-Requires Apple Silicon (M series) and macOS 13.0 Ventura or later. Open Terminal and run this one line to install `v2.0.0-preview.6` (the bootstrap verifies and prepares a private Python and Tart if needed):
+Requires Apple Silicon (M series) and macOS 13.0 Ventura or later. Open Terminal and run this one line to install `v2.0.0-preview.7` (the bootstrap verifies and prepares a private Python and Tart if needed):
 
 ```bash
-f=$(mktemp -t cchouse-bootstrap) && curl -fsSLo "$f" https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.6/bootstrap-macos.sh && printf '%s  %s\n' '63132f4c4f12c10ff0fa70efca8fd1b74c6587fd022543e452238e694300091f' "$f" | shasum -a 256 -c - && /bin/bash "$f" --cleanup-bootstrap
+f=$(mktemp -t cchouse-bootstrap) && curl -fsSLo "$f" https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.7/bootstrap-macos.sh && printf '%s  %s\n' '707d8ed51d65ace6aa457492cd9367561a549f9902623032a1d815af5410075a' "$f" | shasum -a 256 -c - && /bin/bash "$f" --cleanup-bootstrap
 ```
 
 When prompted, paste your SOCKS5 or HTTP(S) node link (hidden input).
@@ -64,6 +64,15 @@ After installation there is a `cchouse (cc01)` launcher icon on your desktop (on
 - **Uninstall**: `cchouse remove --tag cc01`; see "Uninstall" below.
 - If the terminal cannot find `cchouse`, use the full path: Mac `~/.local/bin/cchouse status --tag cc01`; Windows PowerShell `& "$env:LOCALAPPDATA\cchouse\bin\cchouse.cmd" status --tag cc01`.
 
+### Shared folder
+
+After installation, `~/cchouse-share/cc01` on your computer (Windows: `%USERPROFILE%\cchouse-share\cc01`) appears as `~/shared` inside the VM, read-write on both sides, for exchanging files.
+
+- **Change the folder or make it read-only**: `cchouse share --tag cc01 <folder path>`; add `--read-only` so the VM can only read; `cchouse share --tag cc01 --off` disables it. Restart the VM to apply.
+- Only one folder can be shared. Your whole home folder, the system drive root, and Desktop/Documents/Downloads themselves are refused (their subfolders are fine).
+- In the default read-write mode, **programs inside the VM can modify and delete files in this folder**. Do not put IDs, private keys, or password vaults there. Uninstalling keeps the shared folder and its files.
+- The shared folder does not use the network and does not weaken "only through your node, offline if it drops".
+
 For AI-assisted installation, see [AGENTS.md](AGENTS.md). For manual configuration, see the [advanced installation guide](docs/manual-install.md).
 
 ---
@@ -77,7 +86,7 @@ You already have a fixed proxy node, want a dedicated IP and isolated environmen
 ### What it is not
 
 - **Not a proxy or account vendor**: never bundles or sells nodes, accounts, or billing services. You bring your own node and your own account.
-- **Not a host OS tweaker**: never changes your host language, region, time zone, or host proxy, and does not mount host folders (only installs the required VM runtime, Tart or VirtualBox).
+- **Not a host OS tweaker**: never changes your host language, region, time zone, or host proxy, and shares only the one folder you choose (only installs the required VM runtime, Tart or VirtualBox).
 - **Not a ban guarantee**: cchouse enforces local isolation and leak prevention only; account standing is solely decided by Anthropic.
 
 ---

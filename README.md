@@ -2,7 +2,7 @@
 
 > **给 Claude 一个独立 IP、独立环境的专用虚拟机。**
 
-在你的电脑里开一台隔离的小虚拟机，网页版 Claude 和 Claude Code 都在里面用，客机流量只走你自己的单个固定节点；时区和语言按出口自动对齐，节点一断整机断网。你的主力电脑不改语言、不改时区、不改代理设置，也不挂载本机文件。
+在你的电脑里开一台隔离的小虚拟机，网页版 Claude 和 Claude Code 都在里面用，客机流量只走你自己的单个固定节点；时区和语言按出口自动对齐，节点一断整机断网。你的主力电脑不改语言、不改时区、不改代理设置；只共享你指定的一个文件夹。
 
 [![CI](https://github.com/nana-fox/cchouse/actions/workflows/ci.yml/badge.svg)](https://github.com/nana-fox/cchouse/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/nana-fox/cchouse?include_prereleases&label=release)](https://github.com/nana-fox/cchouse/releases)
@@ -26,20 +26,20 @@
 
 ### Windows（x64）
 
-打开 Windows PowerShell，运行下面这一行安装 `v2.0.0-preview.6`：
+打开 Windows PowerShell，运行下面这一行安装 `v2.0.0-preview.7`：
 
 ```powershell
-$f = "$env:TEMP\cchouse-bootstrap-$([guid]::NewGuid().ToString('N')).ps1"; iwr https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.6/bootstrap-windows.ps1 -UseBasicParsing -OutFile $f -ErrorAction Stop; if ((Get-FileHash $f -Algorithm SHA256).Hash -ne '59aabc99822170257a0153bd2bc1c95f715bcc2d6fc7ae4a626330b941a5fe98') { throw 'SHA-256 mismatch' }; Unblock-File -LiteralPath $f; powershell -NoProfile -ExecutionPolicy RemoteSigned -File $f -CleanupBootstrap
+$f = "$env:TEMP\cchouse-bootstrap-$([guid]::NewGuid().ToString('N')).ps1"; iwr https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.7/bootstrap-windows.ps1 -UseBasicParsing -OutFile $f -ErrorAction Stop; if ((Get-FileHash $f -Algorithm SHA256).Hash -ne 'b869ad747ccd37b0fbc9de281300b4327743ee2151bf2013fc6bc77cb71aefdf') { throw 'SHA-256 mismatch' }; Unblock-File -LiteralPath $f; powershell -NoProfile -ExecutionPolicy RemoteSigned -File $f -CleanupBootstrap
 ```
 
 按提示粘贴自己的节点链接，输入不会回显。缺少 VirtualBox 时，安装器会自动安装；Windows 弹出用户账户控制（UAC）提示时，点一次「是」。
 
 ### Apple Silicon Mac
 
-需要 Apple Silicon（M 系列）及 macOS 13.0 Ventura 或更新版本。打开「终端」，运行下面这一行安装 `v2.0.0-preview.6`（引导脚本会校验并准备私有 Python 和所需的 Tart）：
+需要 Apple Silicon（M 系列）及 macOS 13.0 Ventura 或更新版本。打开「终端」，运行下面这一行安装 `v2.0.0-preview.7`（引导脚本会校验并准备私有 Python 和所需的 Tart）：
 
 ```bash
-f=$(mktemp -t cchouse-bootstrap) && curl -fsSLo "$f" https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.6/bootstrap-macos.sh && printf '%s  %s\n' '63132f4c4f12c10ff0fa70efca8fd1b74c6587fd022543e452238e694300091f' "$f" | shasum -a 256 -c - && /bin/bash "$f" --cleanup-bootstrap
+f=$(mktemp -t cchouse-bootstrap) && curl -fsSLo "$f" https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.7/bootstrap-macos.sh && printf '%s  %s\n' '707d8ed51d65ace6aa457492cd9367561a549f9902623032a1d815af5410075a' "$f" | shasum -a 256 -c - && /bin/bash "$f" --cleanup-bootstrap
 ```
 
 按提示粘贴自己的 SOCKS5 或 HTTP(S) 节点链接，输入不会回显。
@@ -64,6 +64,15 @@ f=$(mktemp -t cchouse-bootstrap) && curl -fsSLo "$f" https://github.com/nana-fox
 - **卸载**：`cchouse remove --tag cc01`，见下方「卸载」。
 - 终端找不到 `cchouse` 时用完整路径：Mac `~/.local/bin/cchouse status --tag cc01`；Windows PowerShell `& "$env:LOCALAPPDATA\cchouse\bin\cchouse.cmd" status --tag cc01`。
 
+### 共享文件夹
+
+装完后本机的 `~/cchouse-share/cc01`（Windows 为 `%USERPROFILE%\cchouse-share\cc01`）就是虚拟机里的 `~/shared`，两边都能读写，用来交换文件。
+
+- **换文件夹或设为只读**：`cchouse share --tag cc01 <文件夹路径>`，加 `--read-only` 则虚拟机里只能读；`cchouse share --tag cc01 --off` 关闭。改完重启虚拟机生效。
+- 只能共享一个文件夹，不能共享整个用户目录、系统盘根或桌面/文档/下载本身（它们下面的子文件夹可以）。
+- 默认读写时，**虚拟机里的程序能改、能删这个文件夹里的文件**。不要放证件、私钥、密码库。卸载时共享文件夹和里面的文件会保留。
+- 共享文件夹不走网络，不影响「只走节点、断了就断网」。
+
 让 AI Agent 协助安装见 [AGENTS.md](AGENTS.md)，手动配置见 [进阶安装](docs/manual-install.md)。
 
 ---
@@ -77,7 +86,7 @@ f=$(mktemp -t cchouse-bootstrap) && curl -fsSLo "$f" https://github.com/nana-fox
 ### 它不是什么
 
 - **不卖节点、不代充值**：不提供、不内置任何代理线路，也不代注册或代付款。账号与节点完全归你。
-- **不改主力机环境**：不修改本机的语言、地区、时区或代理软件，不挂载宿主机文件（仅安装运行所需的虚拟化软件 Tart 或 VirtualBox）。
+- **不改主力机环境**：不修改本机的语言、地区、时区或代理软件，只共享你指定的一个文件夹（仅安装运行所需的虚拟化软件 Tart 或 VirtualBox）。
 - **不承诺永不封号**：cchouse 只负责本地环境隔离与防泄漏，账号状态由 Anthropic 决定。
 
 ---
