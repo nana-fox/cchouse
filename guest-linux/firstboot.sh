@@ -24,11 +24,13 @@ install -m 600 -o root -g root "$MNT/nftables.conf" "$DST/nftables.conf"
 install -m 644 -o root -g root "$MNT/check.html" "$DST/check.html"
 install -m 755 -o root -g root "$MNT/timesync.sh" "$DST/timesync.sh"
 install -m 755 -o root -g root "$MNT/cchouse-probe.sh" /usr/local/sbin/cchouse-probe
+install -m 755 -o root -g root "$MNT/cchouse-share.sh" /usr/local/sbin/cchouse-share
 install -m 644 -o root -g root "$MNT/chromium-policy.json" /etc/chromium/policies/managed/cchouse.json
 install -m 644 -o root -g root "$MNT/cchouse-nftables.service" /etc/systemd/system/cchouse-nftables.service
 install -m 644 -o root -g root "$MNT/cchouse-mihomo.service" /etc/systemd/system/cchouse-mihomo.service
 install -m 644 -o root -g root "$MNT/cchouse-timesync.service" /etc/systemd/system/cchouse-timesync.service
 install -m 644 -o root -g root "$MNT/cchouse-timesync.timer" /etc/systemd/system/cchouse-timesync.timer
+install -m 644 -o root -g root "$MNT/cchouse-share.service" /etc/systemd/system/cchouse-share.service
 
 cat >/etc/sudoers.d/cchouse-verify <<'EOF'
 # 仅允许无参数固定子命令的受控探针，禁止任何通配符
@@ -157,8 +159,14 @@ systemctl disable --no-block avahi-daemon.service avahi-daemon.socket cups-brows
 # 9. 加载实例 nftables、记录内核实际生效规则摘要、启用并拉起服务
 /usr/sbin/nft -f "$DST/nftables.conf"
 /usr/local/sbin/cchouse-probe nft-live-sha >/var/lib/cchouse/expected-nft-live.sha256
+if id -u claude >/dev/null 2>&1; then
+  install -d -m 755 -o claude -g claude /home/claude/shared
+  if getent group vboxsf >/dev/null 2>&1; then
+    usermod -aG vboxsf claude || true
+  fi
+fi
 systemctl daemon-reload
-systemctl enable cchouse-nftables.service cchouse-mihomo.service cchouse-timesync.timer
+systemctl enable cchouse-nftables.service cchouse-mihomo.service cchouse-timesync.timer cchouse-share.service
 systemctl start --no-block cchouse-mihomo.service cchouse-timesync.timer
 
 # 10. 离线安装 Claude Code 原生二进制（无需 Node.js；失败时保留原有的非致命警告）

@@ -17,6 +17,8 @@ bootstrap_to_remove=''
 tag="${CCHOUSE_TAG:-cc01}"
 image_mirror="${CCHOUSE_IMAGE_MIRROR:-}"
 npm_mirror="${CCHOUSE_NPM_MIRROR:-}"
+share_dir="${CCHOUSE_SHARE:-}"
+share_read_only=0
 bootstrap_mirror="${CCHOUSE_BOOTSTRAP_MIRROR:-}"
 curl_bin="${CCHOUSE_CURL_BIN:-curl}"
 fetch_max_attempts="${CCHOUSE_BOOTSTRAP_RETRIES:-6}"
@@ -54,7 +56,16 @@ while [ "$#" -gt 0 ]; do
       npm_mirror="$2"
       shift 2
       ;;
-    *) echo '用法：bootstrap-macos.sh [--tag <实例名>] [--image-mirror <URL>] [--npm-mirror <URL>]' >&2; exit 2 ;;
+    --share)
+      if [ "$#" -lt 2 ]; then echo '--share 需要一个本地文件夹路径。' >&2; exit 2; fi
+      share_dir="$2"
+      shift 2
+      ;;
+    --share-read-only)
+      share_read_only=1
+      shift
+      ;;
+    *) echo '用法：bootstrap-macos.sh [--tag <实例名>] [--image-mirror <URL>] [--npm-mirror <URL>] [--share <路径>] [--share-read-only]' >&2; exit 2 ;;
   esac
 done
 if [[ ! "$tag" =~ ^[a-z][a-z0-9_-]{1,15}$ ]]; then
@@ -255,6 +266,12 @@ if [ -n "$image_mirror" ]; then
 fi
 if [ -n "$npm_mirror" ]; then
   up_args+=(--npm-mirror "$npm_mirror")
+fi
+if [ -n "$share_dir" ]; then
+  up_args+=(--share "$share_dir")
+fi
+if [ "$share_read_only" = 1 ]; then
+  up_args+=(--read-only)
 fi
 
 echo "正在启动 cchouse up。重跑同一条首页命令可续跑。工作目录：$code"

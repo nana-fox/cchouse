@@ -284,6 +284,32 @@ except Exception: print("")' "$1"
   fi
 }
 
+# 读取共享文件夹预期配置（来自同目录 state.json，或由 verify-linux-native.py 经环境变量传入）
+SHARE_ENABLED="${CCHOUSE_SHARE_ENABLED:-}"
+SHARE_READ_ONLY="${CCHOUSE_SHARE_READ_ONLY:-}"
+SHARE_GUEST_PATH="${CCHOUSE_SHARE_GUEST_PATH:-/home/claude/shared}"
+if [ -z "$SHARE_ENABLED" ] && [ "$GUEST_LOCAL" = 0 ]; then
+  case "$ENV_FILE" in
+    */*) _state_json="${ENV_FILE%/*}/state.json" ;;
+    *) _state_json="state.json" ;;
+  esac
+  if [ -f "$_state_json" ] && [ -n "$PY_CMD" ]; then
+    _share_line="$($PY_CMD -c 'import json, sys
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8")).get("share") or {}
+    en = 1 if (d.get("enabled") and d.get("host_path")) else 0
+    ro = 1 if (en and d.get("read_only")) else 0
+    gp = d.get("guest_path") or "/home/claude/shared"
+    print(f"{en}|{ro}|{gp}")
+except Exception:
+    print("0|0|/home/claude/shared")' "$_state_json" 2>/dev/null || echo "0|0|/home/claude/shared")"
+    IFS='|' read -r SHARE_ENABLED SHARE_READ_ONLY SHARE_GUEST_PATH <<< "$_share_line"
+  fi
+fi
+SHARE_ENABLED="${SHARE_ENABLED:-0}"
+SHARE_READ_ONLY="${SHARE_READ_ONLY:-0}"
+SHARE_GUEST_PATH="${SHARE_GUEST_PATH:-/home/claude/shared}"
+
 log "== ${VM_NAME:-$TAG} ($GUEST_IP) 期望出口 $EXPECTED_EGRESS_IP"
 if ! guest true; then
   bad "SSH 连不上客机"
@@ -389,6 +415,91 @@ sudo_audit=$(guest "sudo -n -l 2>/dev/null | awk '
 expect "sudoers 仅放行固定无通配符白名单（cchouse-verify/cchouse-power）" "$sudo_audit" "ok"
 expect "Claude Code CLI 可执行（claude --version）" "$(guest "claude --version >/dev/null 2>&1 && echo ok || echo missing")" "ok"
 expect "Claude Code 自动更新已禁用（profile.d + managed-settings.json）" "$(guest "grep -q 'DISABLE_AUTOUPDATER=1' /etc/profile.d/cchouse-claude.sh 2>/dev/null && grep -q 'DISABLE_AUTOUPDATER' /etc/claude-code/managed-settings.json 2>/dev/null && echo ok || echo missing")" "ok"
+
+log "-- 共享文件夹与隔离"
+dnd_procs="$(guest "ps -eo args= 2>/dev/null | grep -iE 'VBoxClient.*draganddrop|vmtoolsd.*drag' | grep -v grep || true" 2>/dev/null)"
+if [ -z "$dnd_procs" ]; then
+  ok "客机未运行拖放（drag-and-drop）进程"
+else
+  bad "检测到禁止的拖放进程：$dnd_procs"
+fi
+
+share_audit="$(guest "awk -v en='$SHARE_ENABLED' -v gp='$SHARE_GUEST_PATH' '
+  \$3 == \"virtiofs\" || \$3 == \"vboxsf\" || \$3 == \"vmhgfs\" || \$3 == \"fuse.vmhgfs-fuse\" || \$3 == \"9p\" {
+    total++
+    if (en == \"0\") {
+      extra = extra (extra ? \", \" : \"\") \$2 \"(\" \$3 \")\"
+    } else if (\$3 == \"virtiofs\") {
+      if (\$1 == \"com.apple.virtio-fs.automount\" && (\$2 == gp || \$2 == \"/run/cchouse-virtiofs\")) {
+        if (\$2 == gp) { mounted = \"virtiofs\" }
+      } else {
+        extra = extra (extra ? \", \" : \"\") \$2 \"(\" \$3 \":\" \$1 \")\"
+      }
+    } else if (\$3 == \"vboxsf\") {
+      if (\$1 == \"cchouse-shared\" && \$2 == gp) {
+        mounted = \"vboxsf\"
+      } else {
+        extra = extra (extra ? \", \" : \"\") \$2 \"(\" \$3 \":\" \$1 \")\"
+      }
+    } else {
+      extra = extra (extra ? \", \" : \"\") \$2 \"(\" \$3 \")\"
+    }
+  }
+  END {
+    if (en == \"0\") {
+      if (total == 0) print \"ok:off\"
+      else print \"fail:extra:\" extra
+    } else {
+      if (extra != \"\") print \"fail:extra:\" extra
+      else if (mounted == \"\") print \"fail:missing\"
+      else print \"ok:\" mounted
+    }
+  }
+' /proc/mounts" 2>/dev/null || echo "fail:probe")"
+
+case "$share_audit" in
+  ok:off)
+    ok "未开启共享文件夹，客机无共享目录挂载"
+    ;;
+  ok:virtiofs)
+    virtio_entries="$(guest "ls -A /run/cchouse-virtiofs 2>/dev/null | tr '\n' ',' | sed 's/,\$//'" 2>/dev/null || true)"
+    if [ "$virtio_entries" = "shared" ]; then
+      ok "仅挂载 cchouse 配置的单个 virtiofs 共享目录（${SHARE_GUEST_PATH}）"
+    else
+      bad "virtiofs 根下存在多余共享条目（期望仅 shared，实际：${virtio_entries:-无}）"
+    fi
+    ;;
+  ok:vboxsf)
+    ok "仅挂载 cchouse 配置的单个 vboxsf 共享目录（${SHARE_GUEST_PATH}）"
+    ;;
+  fail:extra:*)
+    bad "发现未经 cchouse 配置的多余共享挂载：${share_audit#fail:extra:}"
+    ;;
+  fail:missing)
+    bad "已配置共享文件夹，但客机未挂载 ${SHARE_GUEST_PATH}"
+    ;;
+  *)
+    bad "共享文件夹挂载核对异常（${share_audit:-无}）"
+    ;;
+esac
+
+if [ "$SHARE_ENABLED" = "1" ]; then
+  if [ "$SHARE_READ_ONLY" = "1" ]; then
+    ro_check="$(guest "ls -A '$SHARE_GUEST_PATH' >/dev/null 2>&1 || { echo unreadable; exit 0; }; if touch '$SHARE_GUEST_PATH/.cchouse-ro-verify.\$\$' 2>/dev/null; then rm -f '$SHARE_GUEST_PATH/.cchouse-ro-verify.\$\$' 2>/dev/null || true; echo writable; else echo ro-ok; fi" 2>/dev/null || echo err)"
+    expect "共享文件夹只读属性生效（客机可读不可写）" "$ro_check" "ro-ok"
+  else
+    rw_check="$(guest "f=\$(mktemp '$SHARE_GUEST_PATH/.cchouse-rw-verify.XXXXXX' 2>/dev/null) && rm -f \"\$f\" && echo rw-ok || echo rw-fail" 2>/dev/null || echo err)"
+    expect "共享文件夹读写属性生效（客机可读写）" "$rw_check" "rw-ok"
+  fi
+fi
+
+if [ -n "${CCHOUSE_VBOX_HOST_SHARE_CHECK:-}" ]; then
+  if [ "$CCHOUSE_VBOX_HOST_SHARE_CHECK" = "ok" ]; then
+    ok "VirtualBox 宿主共享目录与禁用拖放配置一致"
+  else
+    bad "VirtualBox 宿主共享目录核对失败：${CCHOUSE_VBOX_HOST_SHARE_CHECK#fail:}"
+  fi
+fi
 
 if [ "$FAIL_CLOSED" = 1 ]; then
   log "-- 断网测试（停 cchouse-mihomo）"

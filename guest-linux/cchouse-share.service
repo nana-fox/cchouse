@@ -1,0 +1,12 @@
+[Unit]
+Description=Mount cchouse configured host shared folder at /home/claude/shared
+After=local-fs.target vboxadd-service.service
+Before=display-manager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/cchouse-share
+
+[Install]
+WantedBy=multi-user.target

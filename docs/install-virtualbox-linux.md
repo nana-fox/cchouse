@@ -38,7 +38,7 @@ Windows 上 SSH 使用 `C:\Windows\System32\OpenSSH\ssh.exe`。`C:\Program Files
 
 ## 虚拟机形态
 
-导入后 `VBoxManage modifyvm` 固定为：BIOS、2 CPU、2048 MB、VMSVGA 128 MB、网卡 1 为 NAT、型号 `82540EM`、剪贴板双向、关闭拖放、关闭声音、关闭 USB。首启时网线断开，验收重启前再接通。不挂共享目录。
+导入后 `VBoxManage modifyvm` 固定为：BIOS、2 CPU、2048 MB、VMSVGA 128 MB、网卡 1 为 NAT、型号 `82540EM`、剪贴板双向、关闭拖放、关闭声音、关闭 USB。首启时网线断开，验收重启前再接通。只挂载 cchouse 配置的那一个共享文件夹（默认 `%USERPROFILE%\cchouse-share\<tag>`，客机路径 `~/shared`，可用 `--share` / `cchouse share` 修改或 `--off` 关闭），拖放保持关闭。
 
 `up` 下载的已发布版本以 `guest-linux/image-manifest.json` 为准。preview.4 的 Windows 安装沿用 preview.2 amd64 OVA，该镜像没有 VirtualBox Guest Additions。
 

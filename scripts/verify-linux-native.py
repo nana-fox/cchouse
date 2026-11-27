@@ -3,6 +3,7 @@
 
 import argparse
 import ipaddress
+import json
 import os
 from pathlib import Path
 import re
@@ -12,7 +13,9 @@ import sys
 
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
+import preflight  # noqa: E402
 import render  # noqa: E402
+import share as share_mod  # noqa: E402
 
 VERIFY_TIMEOUT_SECONDS = 300
 
@@ -25,7 +28,26 @@ GUEST_KEYS = (
 )
 
 
-def verify(env, flags, hostkey_trust=""):
+def _check_vbox_host_share(state, vm_name):
+    if (state or {}).get("vm_backend") != "virtualbox" or not vm_name:
+        return ""
+    vbm = preflight.find_vboxmanage()
+    if not vbm:
+        return ""
+    try:
+        proc = subprocess.run(
+            [vbm, "showvminfo", vm_name, "--machinereadable"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"fail:无法读取 VBoxManage showvminfo：{exc}"
+    if proc.returncode != 0:
+        return f"fail:VBoxManage showvminfo 退出码 {proc.returncode}"
+    ok, detail = share_mod.check_vbox_showvminfo_share(proc.stdout.splitlines(), share_mod.normalize_share_state(state))
+    return "ok" if ok else f"fail:{detail}"
+
+
+def verify(env, flags, hostkey_trust="", share_cfg=None, vbox_host_share_check=""):
     guest_ip = str(ipaddress.IPv4Address(env["GUEST_IP"]))
     ipaddress.IPv4Address(env["ROUTER_IP"])
     if not re.fullmatch(r"[a-z][a-z0-9_-]{1,15}", env["TAG"]):
@@ -51,6 +73,12 @@ def verify(env, flags, hostkey_trust=""):
     config = "".join(f"export {key}={shlex.quote(guest_env.get(key, ''))}\n" for key in GUEST_KEYS)
     if hostkey_trust == "accept-new":
         config += "export CCHOUSE_HOSTKEY_TRUST=accept-new\n"
+    norm_share = share_mod.normalize_share_state({"share": share_cfg}) if share_cfg else share_mod.normalize_share_state({})
+    config += f"export CCHOUSE_SHARE_ENABLED={'1' if norm_share['enabled'] else '0'}\n"
+    config += f"export CCHOUSE_SHARE_READ_ONLY={'1' if norm_share['read_only'] else '0'}\n"
+    config += f"export CCHOUSE_SHARE_GUEST_PATH={shlex.quote(norm_share['guest_path'])}\n"
+    if vbox_host_share_check:
+        config += f"export CCHOUSE_VBOX_HOST_SHARE_CHECK={shlex.quote(vbox_host_share_check)}\n"
     shell_script = (SCRIPTS / "verify-linux.sh").read_text(encoding="utf-8")
     command = "bash -s -- --guest-local " + " ".join(flags)
     return subprocess.run(
@@ -68,7 +96,17 @@ def main():
     try:
         trust_file = args.env.parent / "logs" / "hostkey.trust"
         trust = trust_file.read_text(encoding="utf-8-sig").strip() if trust_file.is_file() else ""
-        return verify(render.load_env(args.env), flags, trust)
+        state = {}
+        state_file = args.env.parent / "state.json"
+        if state_file.is_file():
+            try:
+                state = json.loads(state_file.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                state = {}
+        env = render.load_env(args.env)
+        share_cfg = share_mod.normalize_share_state(state)
+        vbox_check = _check_vbox_host_share(state, state.get("vm_name") or env.get("VM_NAME") or "")
+        return verify(env, flags, trust, share_cfg=share_cfg, vbox_host_share_check=vbox_check)
     except subprocess.TimeoutExpired:
         print(f"客机验收 SSH 超过 {VERIFY_TIMEOUT_SECONDS} 秒，已终止。", file=sys.stderr)
         return 124
