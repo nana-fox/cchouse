@@ -14,6 +14,7 @@
 | 安装或续跑 | 首页对应平台的锁定命令。维护入口为 `scripts/cchouse.py up --tag <TAG>` |
 | 预览并卸载 | `scripts/cchouse.py remove --tag <TAG>`。自定义过 `--private-dir` 时也传原路径。核对归属清单后再确认 |
 | 导出诊断 | `scripts/doctor.py`。有私有配置时加 `--env <instance.env>`，有状态记录时可加 `--state <state.json>`，客机正在运行时可加 `--vm-ssh` |
+| 查状态 | `cchouse status --tag <TAG>`。不在 PATH 时用 Mac `~/.local/bin/cchouse`、Windows PowerShell `& "$env:LOCALAPPDATA\cchouse\bin\cchouse.cmd"` |
 | 查版本 | `scripts/cchouse.py --version`。无需节点或实例 |
 
 用引导准备的私有 Python 加 `-I` 执行这些脚本。具体路径及故障处理见 [运维手册](docs/operations.md)。

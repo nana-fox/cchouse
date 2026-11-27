@@ -28,7 +28,7 @@
 2. 问我是否已有固定 IP 的 SOCKS5 或 HTTP(S) 代理节点；如果没有，说明这是前提并停止，不要替我购买，也不要推荐具体商家。
 3. 阅读本仓库的 AGENTS.md 和 README.md，只使用 README 首页当前锁定版本的安装命令，不要改写或拼装命令。
 4. 把对应平台的首页安装命令给我，让我在自己的终端窗口运行并在提示处粘贴节点链接；你不要索要、读取、记录或保存我的节点链接。
-5. 我安装完成后，帮我运行 `cchouse status --tag cc01` 确认状态；如果安装失败，按 AGENTS.md 用 `scripts/doctor.py` 排查并给出修复建议，再让我重跑同一条首页命令。
+5. 我安装完成后，帮我运行 `cchouse status --tag cc01` 确认状态（找不到 cchouse 时用完整路径：Mac `~/.local/bin/cchouse`，Windows PowerShell `& "$env:LOCALAPPDATA\cchouse\bin\cchouse.cmd"`）；如果安装失败，按 AGENTS.md 用 `scripts/doctor.py` 排查并给出修复建议，再让我重跑同一条首页命令。
 6. 全部通过后，提醒我在虚拟机桌面打开 check.html 核对全绿，并在虚拟机内自行登录 Claude。
 ```
 

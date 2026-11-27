@@ -28,7 +28,7 @@ Help me install cchouse (https://github.com/nana-fox/cchouse). Please follow the
 2. Ask if I already have a fixed-IP SOCKS5 or HTTP(S) proxy node. If not, explain that this is required and stop—do not buy one for me or recommend specific vendors.
 3. Read AGENTS.md and README.md in this repo, and use only the currently version-pinned install command from the README home page without rewriting it.
 4. Give me the home-page command for my platform so I can run it in my own terminal window and paste my node link at the prompt; never ask for, read, log, or store my node link.
-5. After I finish running it, run `cchouse status --tag cc01` to verify the VM status. If installation failed, troubleshoot with `scripts/doctor.py` per AGENTS.md, then have me rerun the same home-page command.
+5. After I finish running it, run `cchouse status --tag cc01` to verify the VM status (if `cchouse` is not found, use the full path: Mac `~/.local/bin/cchouse`, Windows PowerShell `& "$env:LOCALAPPDATA\cchouse\bin\cchouse.cmd"`). If installation failed, troubleshoot with `scripts/doctor.py` per AGENTS.md, then have me rerun the same home-page command.
 6. Once everything passes, remind me to open check.html on the VM desktop to confirm all checks are green and sign in to Claude inside the VM myself.
 ```
 
