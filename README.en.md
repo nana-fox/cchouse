@@ -68,7 +68,7 @@ After installation there is a `cchouse (cc01)` launcher icon on your desktop (on
 
 After installation, `~/cchouse-share/cc01` on your computer (Windows: `%USERPROFILE%\cchouse-share\cc01`) appears as `~/shared` inside the VM, read-write on both sides, for exchanging files.
 
-- **Change the folder or make it read-only**: `cchouse share --tag cc01 <folder path>`; add `--read-only` so the VM can only read; `cchouse share --tag cc01 --off` disables it. Restart the VM to apply.
+- **Change the folder or make it read-only**: `cchouse share --tag cc01 <folder path>`; add `--read-only` so the VM can only read; `cchouse share --tag cc01 --off` disables it. To apply, shut the VM down, then start it from the desktop icon or `cchouse open --tag cc01` (rebooting from inside the VM does not switch folders).
 - Only one folder can be shared. Your whole home folder, the system drive root, and Desktop/Documents/Downloads themselves are refused (their subfolders are fine).
 - In the default read-write mode, **programs inside the VM can modify and delete files in this folder**. Do not put IDs, private keys, or password vaults there. Uninstalling keeps the shared folder and its files.
 - The shared folder does not use the network and does not weaken "only through your node, offline if it drops".

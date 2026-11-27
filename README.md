@@ -68,7 +68,7 @@ f=$(mktemp -t cchouse-bootstrap) && curl -fsSLo "$f" https://github.com/nana-fox
 
 装完后本机的 `~/cchouse-share/cc01`（Windows 为 `%USERPROFILE%\cchouse-share\cc01`）就是虚拟机里的 `~/shared`，两边都能读写，用来交换文件。
 
-- **换文件夹或设为只读**：`cchouse share --tag cc01 <文件夹路径>`，加 `--read-only` 则虚拟机里只能读；`cchouse share --tag cc01 --off` 关闭。改完重启虚拟机生效。
+- **换文件夹或设为只读**：`cchouse share --tag cc01 <文件夹路径>`，加 `--read-only` 则虚拟机里只能读；`cchouse share --tag cc01 --off` 关闭。改完要先关机，再双击桌面图标或运行 `cchouse open --tag cc01` 开机才生效（在虚拟机里点重启不会切换）。
 - 只能共享一个文件夹，不能共享整个用户目录、系统盘根或桌面/文档/下载本身（它们下面的子文件夹可以）。
 - 默认读写时，**虚拟机里的程序能改、能删这个文件夹里的文件**。不要放证件、私钥、密码库。卸载时共享文件夹和里面的文件会保留。
 - 共享文件夹不走网络，不影响「只走节点、断了就断网」。
