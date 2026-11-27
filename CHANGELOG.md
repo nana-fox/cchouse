@@ -1,6 +1,6 @@
 # 变更记录
 
-## 未发布
+## [v2.0.0-preview.11](https://github.com/nana-fox/cchouse/releases/tag/v2.0.0-preview.11) · 2026-11-27
 
 - 一键安装支持三种常见节点并重写 AI 带装话术：
   - 新增宿主临时 mihomo（与客机同版本 `v1.19.19`，SHA-256 固定在 `guest-linux/mihomo-manifest.json` 与引导脚本，缓存至私有 `bootstrap/tools`）统一探测出口，仅监听 `127.0.0.1` 随机端口、无 TUN/控制器/DNS 劫持、无 `DIRECT`，600 临时目录用完即删；间隔探测 3 次核验固定 IP，失败时大白话说明哪一跳不通且不回显链接，并在下载 Tart / VirtualBox / 镜像 / Claude Code 之前完成。
