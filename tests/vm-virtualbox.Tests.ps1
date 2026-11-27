@@ -1,4 +1,4 @@
-﻿# Function tests for scripts/vm-virtualbox.ps1.
+# Function tests for scripts/vm-virtualbox.ps1.
 # Dot-source only. Native-command tests use fake VBoxManage and SSH commands.
 $ErrorActionPreference = "Stop"
 $scriptPath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\scripts\vm-virtualbox.ps1"))
