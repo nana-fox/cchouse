@@ -1,10 +1,11 @@
 # 变更记录
 
-## Unreleased
+## [v2.0.0-preview.7](https://github.com/nana-fox/cchouse/releases/tag/v2.0.0-preview.7) · 2026-11-27
 
 - 新增宿主共享文件夹：默认零配置可用（Mac `~/cchouse-share/<tag>`，Windows `%USERPROFILE%\cchouse-share\<tag>`，客机内 `~/shared` 读写），支持安装时 `--share <路径> [--read-only]`（引导脚本透传 Mac `--share`/`--share-read-only`、Windows `-Share`/`-ShareReadOnly`）及装好后 `cchouse share --tag <tag> [<路径> [--read-only] | --off]` 调整（运行中提示重启后生效）。
-- 共享路径拒绝家目录本身、系统盘根、`/`、`/Users`、`C:\`、`C:\Users`、`Desktop`/`Documents`/`Downloads`/`桌面`/`文档`/`下载` 本身（允许其子目录）、不存在的路径及符号链接解析后落入上述位置的路径；只读模式在宿主侧强制生效。
+- 共享路径拒绝家目录本身、系统盘根、`/`、`/Users`、`C:\`、`C:\Users`、`Desktop`/`Documents`/`Downloads`/`桌面`/`文档`/`下载` 本身（允许其子目录）、不存在的路径及符号链接解析后落入上述位置的路径；只读模式在宿主侧强制生效。Mac 上路径不能含冒号（`tart --dir` 的分隔符）。
 - `status` 增加共享文件夹状态行；`restore` 保留共享设置；`remove` 绝不删除宿主共享文件夹并明确提示已保留；自动验收核对只允许 cchouse 配置的那一个共享挂载且属性一致、拖放保持关闭。
+- 已有 preview.6 及更早的实例缺少客机挂载服务，需重新安装后才能使用共享文件夹（`cchouse share` 会提示）。
 
 ## [v2.0.0-preview.6](https://github.com/nana-fox/cchouse/releases/tag/v2.0.0-preview.6) · 2026-11-27
 
