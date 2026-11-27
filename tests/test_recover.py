@@ -102,7 +102,8 @@ class TestTriStateProbing(unittest.TestCase):
             non_exec = _make_fake_tart(td, executable=False)
             th = Path(td) / "tart-home"
             th.mkdir()
-            with mock.patch.dict(os.environ, {"TART_HOME": str(th)}):
+            with mock.patch.dict(os.environ, {"TART_HOME": str(th)}), \
+                    mock.patch.object(cchouse.os, "access", return_value=False):
                 state, reason, _ = cchouse._probe_tart_target("claude-cc01", non_exec)
             self.assertEqual(state, cchouse.PROBE_UNKNOWN)
             self.assertIn("无法执行", reason)
@@ -277,7 +278,8 @@ class TestUpRecoveryFlows(unittest.TestCase):
             with mock.patch.dict(os.environ, {"TART_HOME": str(th)}), \
                     mock.patch.object(cchouse.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, stdout="[]")), \
                     mock.patch.object(cchouse, "probe_egress_via_proxy", return_value=drifted), \
-                    mock.patch.object(cchouse, "run_pipeline") as m_pipe:
+                    mock.patch.object(cchouse, "run_pipeline") as m_pipe, \
+                    redirect_stdout(io.StringIO()):
                 with self.assertRaises(SystemExit) as cm:
                     cchouse.cmd_up(args)
             msg = str(cm.exception)
