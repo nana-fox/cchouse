@@ -206,6 +206,14 @@ If it still fails, check whether the node is reachable and export a diagnostic p
 </details>
 
 <details>
+<summary><b>What if the VM was deleted or my external drive was disconnected?</b></summary>
+
+If the VM was deleted while your saved settings remain, rerun the one-line install command above to rebuild automatically with your saved node and shared folder settings (files and sign-ins inside the old VM cannot be recovered, while files in the shared folder are unaffected; keep important files in `~/shared`).
+If the VM lives on an external drive that is disconnected, the installer stops and asks you to reconnect the drive rather than rebuilding blindly.
+
+</details>
+
+<details>
 <summary><b>Something went wrong during install. What now?</b></summary>
 
 Use the Python and source that the bootstrap prepared to export a redacted diagnostic package. Follow [Mac](docs/operations.md#mac-一键安装后的诊断与卸载) or [Windows](docs/operations.md#windows-一键安装后的诊断与卸载).

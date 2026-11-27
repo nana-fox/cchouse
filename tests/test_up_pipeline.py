@@ -483,37 +483,58 @@ class TestUpPipeline(unittest.TestCase):
     def test_tart_import_refuses_existing_guest_without_claiming_it(self):
         with tempfile.TemporaryDirectory() as td:
             ctx = _ctx(td)
-            with mock.patch.object(cchouse_mod.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run, \
+            fake_tart = Path(td) / "tart"
+            fake_tart.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            fake_tart.chmod(0o700)
+            tart_home = Path(td) / "tart-home"
+            tart_home.mkdir()
+            ctx.tart_bin = str(fake_tart)
+            inv = json.dumps([{"Name": ctx.vm_name, "State": "stopped"}])
+            with mock.patch.dict(os.environ, {"TART_HOME": str(tart_home)}), \
+                    mock.patch.object(cchouse_mod.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, stdout=inv)) as run, \
                     self.assertRaisesRegex(cchouse_mod.StepError, "已存在同名虚拟机"):
                 cchouse_mod.step_import(ctx)
             run.assert_called_once()
-            self.assertEqual(run.call_args.args[0][-2:], ["exists", ctx.vm_name])
+            self.assertEqual(run.call_args.args[0][1:], ["list", "--source", "local", "--format", "json"])
             self.assertFalse(ctx.state.get("vm_created_by_up"))
             self.assertFalse(ctx.state_path.exists())
 
     def test_tart_reimport_refuses_unverifiable_state_without_identity_or_mac(self):
         with tempfile.TemporaryDirectory() as td:
             ctx = _ctx(td)
-            pinned = str((Path(td) / "pinned-tart").resolve())
-            ctx.tart_bin = pinned
+            pinned = Path(td) / "pinned-tart"
+            pinned.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            pinned.chmod(0o700)
+            tart_home = Path(td) / "tart-home"
+            tart_home.mkdir()
+            ctx.tart_bin = str(pinned.resolve())
             ctx.state["vm_created_by_up"] = True
-            ctx.state["tart_bin"] = pinned
-            with mock.patch.object(cchouse_mod.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run, \
+            ctx.state["tart_bin"] = str(pinned.resolve())
+            inv = json.dumps([{"Name": ctx.vm_name, "State": "stopped"}])
+            with mock.patch.dict(os.environ, {"TART_HOME": str(tart_home)}), \
+                    mock.patch.object(cchouse_mod.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, stdout=inv)) as run, \
                     mock.patch.object(ctx, "tart") as tart_op:
                 with self.assertRaises(cchouse_mod.StepError) as cm:
                     cchouse_mod.step_import(ctx)
             msg = str(cm.exception)
             self.assertIn("无法核验", msg)
-            self.assertIn(f'"{pinned}" list', msg)
-            self.assertIn(f'"{pinned}" delete "{ctx.vm_name}"', msg)
+            self.assertIn(f'"{ctx.tart_bin}" list', msg)
+            self.assertIn(f'"{ctx.tart_bin}" delete "{ctx.vm_name}"', msg)
             run.assert_called_once()
             tart_op.assert_not_called()
 
     def test_failed_fresh_clone_leaves_no_ownership_marker(self):
         with tempfile.TemporaryDirectory() as td:
             ctx = _ctx(td)
-            results = [subprocess.CompletedProcess([], 1), subprocess.CompletedProcess([], 0)]
-            with mock.patch.object(cchouse_mod.subprocess, "run", side_effect=results), \
+            fake_tart = Path(td) / "tart"
+            fake_tart.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            fake_tart.chmod(0o700)
+            tart_home = Path(td) / "tart-home"
+            tart_home.mkdir()
+            ctx.tart_bin = str(fake_tart)
+            inv = json.dumps([{"Name": ctx.golden_name, "State": "stopped"}])
+            with mock.patch.dict(os.environ, {"TART_HOME": str(tart_home)}), \
+                    mock.patch.object(cchouse_mod.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, stdout=inv)), \
                     mock.patch("sys.stdout", io.StringIO()), \
                     mock.patch.object(ctx, "tart", side_effect=cchouse_mod.StepError("name already exists")) as tart, \
                     self.assertRaises(cchouse_mod.StepError):

@@ -206,6 +206,14 @@ Stripe 不通只影响在 claude.ai 网页上付款。已经订阅的、或在�
 </details>
 
 <details>
+<summary><b>虚拟机被删了 / 换了外置盘怎么办？</b></summary>
+
+如果虚拟机被删了但节点设置还在，直接重跑上面的首页安装命令，会自动用保存的设置和共享文件夹重建（旧虚拟机里的文件和登录状态找不回来，共享文件夹里的文件不受影响；重要文件请放 `~/shared`）。
+如果是把虚拟机装在外置盘上、盘没接好，安装器会停下提示，不会盲目重建；接回外置盘后再重跑即可。
+
+</details>
+
+<details>
 <summary><b>装的时候出错了怎么办？</b></summary>
 
 用引导脚本准备的 Python 和源码导出脱敏诊断包。见 [Mac](docs/operations.md#mac-一键安装后的诊断与卸载) 与 [Windows](docs/operations.md#windows-一键安装后的诊断与卸载) 操作说明。

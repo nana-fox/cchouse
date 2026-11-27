@@ -497,6 +497,7 @@ Assert-False "second match does not clobber the capture" $src.Contains('$Matches
 Assert-Equal "state running GUI" (Get-CchouseVBoxState -Lines @('VMState="running"', 'SessionName="GUI/Qt"')) "running"
 Assert-Equal "state running headless" (Get-CchouseVBoxState -Lines @('VMState="running"', 'SessionName="headless"')) "running-headless"
 Assert-Equal "state poweroff" (Get-CchouseVBoxState -Lines @('VMState="poweroff"')) "stopped"
+Assert-Equal "state inaccessible" (Get-CchouseVBoxState -Lines @('VMState="inaccessible"')) "inaccessible"
 Assert-Equal "state missing" (Get-CchouseVBoxState -Lines @()) "missing"
 
 & {
