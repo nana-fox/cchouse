@@ -174,6 +174,34 @@ class TestSharePathValidation(unittest.TestCase):
             got = share.validate_share_path(str(link_ok), home=str(home), allow_create=False)
             self.assertEqual(os.path.realpath(got), os.path.realpath(str(allowed_sub)))
 
+    def test_mac_colon_rejected_and_windows_drive_colon_allowed(self):
+        # Mac 路径（含 Finder 中带 / 在磁盘上呈冒号的目录名）必须拒绝
+        for bad in ("/Users/alice/work:2026", "/Users/alice/a:b/sub"):
+            with self.subTest(bad=bad):
+                with self.assertRaises(share.SharePathError) as ctx:
+                    share.validate_share_path(bad, platform_name="Darwin", home="/Users/alice", check_fs=False)
+                self.assertIn("冒号", str(ctx.exception))
+
+        # Windows 盘符冒号不受影响
+        for good in (r"C:\Users\Alice\cchouse-share\cc01", r"D:\projects\shared"):
+            with self.subTest(good=good):
+                got = share.validate_share_path(good, platform_name="Windows", home=r"C:\Users\Alice", check_fs=False)
+                self.assertIn(":", got)
+
+    @unittest.skipIf(os.name == "nt", "POSIX symlink to colon path test")
+    def test_mac_symlink_resolving_to_colon_path_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "fakehome"
+            home.mkdir()
+            colon_dir = home / "2026:11"
+            colon_dir.mkdir()
+            link_to_colon = Path(tmp) / "clean-link"
+            link_to_colon.symlink_to(colon_dir)
+
+            with self.assertRaises(share.SharePathError) as ctx:
+                share.validate_share_path(str(link_to_colon), home=str(home), allow_create=False)
+            self.assertIn("冒号", str(ctx.exception))
+
 
 class TestShareCliAndLifecycle(unittest.TestCase):
     def test_share_show_set_ro_off_and_running_notice(self):

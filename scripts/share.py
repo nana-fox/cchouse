@@ -121,6 +121,11 @@ def _check_forbidden_windows(norm_path, norm_home):
 
 
 def _check_forbidden_posix(norm_path, norm_home):
+    if ":" in norm_path:
+        raise SharePathError(
+            f"共享文件夹路径不能包含冒号（:）（Mac 下 tart --dir 用冒号分隔参数，Finder 中名称含 / 的文件夹在磁盘上为冒号）：{norm_path}"
+        )
+
     p_clean = "/" if norm_path == "/" else norm_path.rstrip("/")
     h_clean = "/" if norm_home == "/" else norm_home.rstrip("/")
     p_low = p_clean.lower()
@@ -181,7 +186,9 @@ def validate_share_path(
     is_win = sys_name == "Windows"
 
     if not is_win and ":" in raw_path:
-        raise SharePathError(f"macOS/Linux 共享文件夹路径不能包含冒号（:）：{raw_path}")
+        raise SharePathError(
+            f"共享文件夹路径不能包含冒号（:）（Mac 下 tart --dir 用冒号分隔参数，Finder 中名称含 / 的文件夹在磁盘上为冒号）：{raw_path}"
+        )
 
     if is_win:
         raw_home = str(home) if home is not None else (os.environ.get("USERPROFILE") or str(Path.home()))
