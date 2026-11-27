@@ -18,6 +18,20 @@ cchouse runs a small isolated virtual machine on your computer for Claude on the
 
 ## Quick start
 
+### Let AI install it for you
+
+If you use an AI coding assistant such as Claude Code, Codex, or Cursor, copy the prompt below and send it to your assistant. Your node link is only ever pasted by you in your own terminal window—the AI will not ask for, read, or save it (see [AGENTS.md](AGENTS.md) for agent rules):
+
+```text
+Help me install cchouse (https://github.com/nana-fox/cchouse). Please follow these steps strictly:
+1. Check my computer first (only Apple Silicon Mac and Windows x64 are supported; if it is anything else, tell me it is unsupported and stop) and verify free disk space (at least 9 GB / 12 GB recommended on Mac; at least 7 GB / 10 GB recommended on Windows).
+2. Ask if I already have a fixed-IP SOCKS5 or HTTP(S) proxy node. If not, explain that this is required and stop—do not buy one for me or recommend specific vendors.
+3. Read AGENTS.md and README.md in this repo, and use only the currently version-pinned install command from the README home page without rewriting it.
+4. Give me the home-page command for my platform so I can run it in my own terminal window and paste my node link at the prompt; never ask for, read, log, or store my node link.
+5. After I finish running it, run `cchouse status --tag cc01` to verify the VM status. If installation failed, troubleshoot with `scripts/doctor.py` per AGENTS.md, then have me rerun the same home-page command.
+6. Once everything passes, remind me to open check.html on the VM desktop to confirm all checks are green and sign in to Claude inside the VM myself.
+```
+
 Up and running in 3 steps (see [Supported computers](#supported-computers) for measured empty-cache install times):
 
 1. **Run one command**: copy the locked command for your platform below (downloads and verifies the guest image and official Claude Code package; see [Image manifest](guest-linux/image-manifest.json)).
@@ -73,7 +87,7 @@ After installation, `~/cchouse-share/cc01` on your computer (Windows: `%USERPROF
 - In the default read-write mode, **programs inside the VM can modify and delete files in this folder**. Do not put IDs, private keys, or password vaults there. Uninstalling keeps the shared folder and its files.
 - The shared folder does not use the network and does not weaken "only through your node, offline if it drops".
 
-For AI-assisted installation, see [AGENTS.md](AGENTS.md). For manual configuration, see the [advanced installation guide](docs/manual-install.md).
+For manual configuration, see the [advanced installation guide](docs/manual-install.md).
 
 ---
 
@@ -117,8 +131,8 @@ You already have a fixed proxy node, want a dedicated IP and isolated environmen
 
 | Your computer | VM software | Status |
 |---|---|---|
-| Apple Silicon Mac (M series) | Tart | ✅ `v2.0.0-preview.4` passed public-command blind install and real-machine cold-download verification (26 PASS / 0 FAIL / 1 Stripe WARN) |
-| Windows (x64) | VirtualBox | ✅ `v2.0.0-preview.4` passed an empty-cache public-command blind install on a real Windows 11 PC (26 PASS / 0 FAIL / 1 Stripe WARN) |
+| Apple Silicon Mac (M series) | Tart | ✅ Latest release automated verification: 29 checks passed (0 FAIL; Stripe reachability WARN depends on the node) |
+| Windows (x64) | VirtualBox | ✅ Latest release automated verification: 30 checks passed (0 FAIL; Stripe reachability WARN depends on the node) |
 | Intel Mac | — | Not supported for now |
 
 The guest is always Debian 13 + Chromium + Claude Code. A Linux computer is not supported as the host.
@@ -130,7 +144,7 @@ In addition to the guest image and official Claude Code package, the bootstrap s
 - **Guest image**: Apple Silicon Mac (`.tvm`) is about **874 MiB** (`915,980,115` bytes); Windows x64 (`.ova`) is about **1511 MiB** (`1,584,588,800` bytes, about 1.5 GB).
 - **Official Claude Code package**: about **175 MiB** (`183,973,219` bytes).
 
-`v2.0.0-preview.4` real-machine measurements (keep waiting as long as progress keeps updating):
+`v2.0.0-preview.4` real-machine measurements (26 automated checks at the time; keep waiting as long as progress keeps updating):
 
 - **Windows 11 (x64)**: empty-cache public-command blind install passed (26 PASS / 0 FAIL / 1 Stripe WARN) in **48 minutes 09 seconds** inside the installer; the guest image download took **45 minutes 38 seconds** (averaging 0.37 MB/s, limited by network speed at the time; Claude Code took 16 minutes 49 seconds and VirtualBox took 16 minutes 10 seconds, overlapping with install steps).
 - **Apple Silicon Mac**: public-command blind install passed (26 PASS / 0 FAIL / 1 Stripe WARN); with pre-warmed image and Claude Code caches, the bootstrap downloads (source zip, private Python, and private Tart) took about **7 minutes 33 seconds**, `cchouse up` took **1 minute 57 seconds**, and total runtime was **9 minutes 30 seconds**. In a separate `v2.0.0-preview.4` real-machine cold-download check (through the host proxy), the TVM image took **51.8 seconds** (16.85 MiB/s), Claude Code took **15.3 seconds** (11.47 MiB/s), and core install + verification excluding node input wait took **88.5 seconds** (also 26 PASS / 0 FAIL / 1 Stripe WARN).

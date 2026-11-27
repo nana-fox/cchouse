@@ -83,6 +83,36 @@ function Get-CchouseBootstrapUpArgs {
   return $upArgs.ToArray()
 }
 
+function Get-CchouseHomeCommand {
+  param(
+    [string]$Version,
+    [string]$SelfHash,
+    [string]$Tag = 'cc01',
+    [string]$ImageMirror = '',
+    [string]$NpmMirror = '',
+    [string]$Share = '',
+    [switch]$ShareReadOnly
+  )
+  $effectiveTag = if ([string]::IsNullOrWhiteSpace($Tag)) { 'cc01' } else { $Tag.Trim() }
+  $cmd = "`$f = `"`$env:TEMP\cchouse-bootstrap-`$([guid]::NewGuid().ToString('N')).ps1`"; iwr https://github.com/nana-fox/cchouse/releases/download/$Version/bootstrap-windows.ps1 -UseBasicParsing -OutFile `$f -ErrorAction Stop; if ((Get-FileHash `$f -Algorithm SHA256).Hash -ne '$SelfHash') { throw 'SHA-256 mismatch' }; Unblock-File -LiteralPath `$f; powershell -NoProfile -ExecutionPolicy RemoteSigned -File `$f -CleanupBootstrap"
+  if ($effectiveTag -cne 'cc01') {
+    $cmd += " -Tag '$($effectiveTag -replace "'", "''")'"
+  }
+  if (-not [string]::IsNullOrWhiteSpace($ImageMirror)) {
+    $cmd += " -ImageMirror '$($ImageMirror.Trim() -replace "'", "''")'"
+  }
+  if (-not [string]::IsNullOrWhiteSpace($NpmMirror)) {
+    $cmd += " -NpmMirror '$($NpmMirror.Trim() -replace "'", "''")'"
+  }
+  if (-not [string]::IsNullOrWhiteSpace($Share)) {
+    $cmd += " -Share '$($Share.Trim() -replace "'", "''")'"
+  }
+  if ($ShareReadOnly) {
+    $cmd += ' -ShareReadOnly'
+  }
+  return $cmd
+}
+
 function Write-CchouseCmdEntry {
   param(
     [string]$LocalAppData,
@@ -187,71 +217,92 @@ try {
   if ($sourceHash -cnotmatch '^[0-9a-f]{64}$') {
     throw '请使用 GitHub Release 上已固定版本和 SHA-256 的引导脚本。'
   }
-  $root = Join-Path $env:LOCALAPPDATA 'cchouse\bootstrap'
-  Write-Host "cchouse $version 将校验并准备私有 Python 和源码，写入 $root。"
-  Write-Host '随后启动 cchouse up，按提示输入节点链接。'
   $openSsh = Join-Path $env:WINDIR 'System32\OpenSSH'
   foreach ($tool in @('ssh.exe', 'ssh-keygen.exe')) {
     if (-not (Test-Path -LiteralPath (Join-Path $openSsh $tool) -PathType Leaf)) {
       throw '缺少 OpenSSH 客户端。请到 Windows 设置 → 可选功能 → 添加功能，安装 OpenSSH 客户端后重试。'
     }
   }
-  $downloads = Join-Path $root 'downloads'
-  $tools = Join-Path $root 'tools'
-  $packages = Join-Path $root 'packages'
-  [void][IO.Directory]::CreateDirectory($downloads)
-  [void][IO.Directory]::CreateDirectory($tools)
-  [void][IO.Directory]::CreateDirectory($packages)
-  try {
-    $lock = [IO.File]::Open((Join-Path $root '.prepare'), 'OpenOrCreate', 'ReadWrite', 'None')
-  } catch [IO.IOException] {
-    throw '另一个 cchouse 引导正在准备文件，或私有目录不可写。请确认后重试。'
-  }
-  $stage = Join-Path $root ('.install-' + [guid]::NewGuid().ToString('N'))
-  [void][IO.Directory]::CreateDirectory($stage)
-
-  $sourceZip = Join-Path $downloads "cchouse-$version-$sourceHash.zip"
-  $sourceUrl = if ($env:CCHOUSE_BOOTSTRAP_MIRROR) {
-    "$($env:CCHOUSE_BOOTSTRAP_MIRROR.TrimEnd('/'))/cchouse-$version.zip"
+  $effectiveTag = if ([string]::IsNullOrWhiteSpace($Tag)) { 'cc01' } else { $Tag.Trim() }
+  $instanceEnv = Join-Path $env:LOCALAPPDATA (Join-Path 'cchouse' (Join-Path $effectiveTag 'instance.env'))
+  $selfHash = if ($PSCommandPath -and (Test-Path -LiteralPath $PSCommandPath -PathType Leaf)) {
+    (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash.ToLowerInvariant()
   } else {
-    "https://github.com/nana-fox/cchouse/releases/download/$version/cchouse-$version.zip"
+    ''
   }
-  Get-VerifiedArchive $sourceUrl $sourceHash $sourceZip
-  $pythonZip = Join-Path $downloads "python-$pythonHash.zip"
-  Get-VerifiedArchive $pythonUrl $pythonHash $pythonZip
-  $pythonHome = Join-Path $tools "python-$pythonVersion-embed-amd64"
-  if (-not (Test-Path -LiteralPath $pythonHome -PathType Container)) {
-    $pythonStage = Join-Path $stage 'python'
-    Expand-Archive -LiteralPath $pythonZip -DestinationPath $pythonStage
-    Move-Item -LiteralPath $pythonStage -Destination $pythonHome
-  }
-  $code = Join-Path $packages "$version-$($sourceHash.Substring(0,12))"
-  if (-not (Test-Path -LiteralPath $code -PathType Container)) {
-    Expand-Archive -LiteralPath $sourceZip -DestinationPath (Join-Path $stage 'source')
-    $sourceStage = Join-Path $stage 'source\cchouse'
-    if (-not (Test-Path -LiteralPath (Join-Path $sourceStage 'scripts\cchouse.py') -PathType Leaf)) {
-      throw '源码包中缺少 scripts/cchouse.py。'
+  $homeCmd = Get-CchouseHomeCommand -Version $version -SelfHash $selfHash -Tag $effectiveTag -ImageMirror $ImageMirror -NpmMirror $NpmMirror -Share $Share -ShareReadOnly:$ShareReadOnly
+  if (-not (Test-Path -LiteralPath $instanceEnv -PathType Leaf) -and [Console]::IsInputRedirected) {
+    Write-Host ''
+    Write-Host '需要你本人输入节点链接：请在你自己的终端窗口运行下面这条命令（AI 无法也不应替你输入）'
+    Write-Host ''
+    Write-Host $homeCmd
+    $exitCode = 20
+  } else {
+    $root = Join-Path $env:LOCALAPPDATA 'cchouse\bootstrap'
+    Write-Host "cchouse $version 将校验并准备私有 Python 和源码，写入 $root。"
+    if (Test-Path -LiteralPath $instanceEnv -PathType Leaf) {
+      Write-Host '检测到已有节点配置，随后启动 cchouse up 继续安装或重建。'
+    } else {
+      Write-Host '随后启动 cchouse up，按提示输入节点链接。'
     }
-    Move-Item -LiteralPath $sourceStage -Destination $code
-  }
-  $lock.Dispose()
-  $lock = $null
+    $downloads = Join-Path $root 'downloads'
+    $tools = Join-Path $root 'tools'
+    $packages = Join-Path $root 'packages'
+    [void][IO.Directory]::CreateDirectory($downloads)
+    [void][IO.Directory]::CreateDirectory($tools)
+    [void][IO.Directory]::CreateDirectory($packages)
+    try {
+      $lock = [IO.File]::Open((Join-Path $root '.prepare'), 'OpenOrCreate', 'ReadWrite', 'None')
+    } catch [IO.IOException] {
+      throw '另一个 cchouse 引导正在准备文件，或私有目录不可写。请确认后重试。'
+    }
+    $stage = Join-Path $root ('.install-' + [guid]::NewGuid().ToString('N'))
+    [void][IO.Directory]::CreateDirectory($stage)
 
-  $env:PATH = "$openSsh;$env:PATH"
-  $python = Join-Path $pythonHome 'python.exe'
-  $cmdEntry = Write-CchouseCmdEntry -LocalAppData $env:LOCALAPPDATA -PythonExe $python -CodeDir $code
-  Push-Location -LiteralPath $code
-  try {
-    $cliVersion = & $python -I 'scripts/cchouse.py' --version
-    if ($LASTEXITCODE -ne 0 -or $cliVersion -cne "cchouse $version") {
-      throw 'Source package version does not match the bootstrap Release.'
+    $sourceZip = Join-Path $downloads "cchouse-$version-$sourceHash.zip"
+    $sourceUrl = if ($env:CCHOUSE_BOOTSTRAP_MIRROR) {
+      "$($env:CCHOUSE_BOOTSTRAP_MIRROR.TrimEnd('/'))/cchouse-$version.zip"
+    } else {
+      "https://github.com/nana-fox/cchouse/releases/download/$version/cchouse-$version.zip"
     }
-    $upArgs = @(Get-CchouseBootstrapUpArgs -Tag $Tag -ImageMirror $ImageMirror -NpmMirror $NpmMirror -Share $Share -ShareReadOnly:$ShareReadOnly)
-    Write-Host "正在启动 cchouse up（命令入口：$cmdEntry）。重跑同一条首页命令可续跑。工作目录：$code"
-    & $python -I 'scripts/cchouse.py' @upArgs
-    $exitCode = $LASTEXITCODE
-  } finally {
-    Pop-Location
+    Get-VerifiedArchive $sourceUrl $sourceHash $sourceZip
+    $pythonZip = Join-Path $downloads "python-$pythonHash.zip"
+    Get-VerifiedArchive $pythonUrl $pythonHash $pythonZip
+    $pythonHome = Join-Path $tools "python-$pythonVersion-embed-amd64"
+    if (-not (Test-Path -LiteralPath $pythonHome -PathType Container)) {
+      $pythonStage = Join-Path $stage 'python'
+      Expand-Archive -LiteralPath $pythonZip -DestinationPath $pythonStage
+      Move-Item -LiteralPath $pythonStage -Destination $pythonHome
+    }
+    $code = Join-Path $packages "$version-$($sourceHash.Substring(0,12))"
+    if (-not (Test-Path -LiteralPath $code -PathType Container)) {
+      Expand-Archive -LiteralPath $sourceZip -DestinationPath (Join-Path $stage 'source')
+      $sourceStage = Join-Path $stage 'source\cchouse'
+      if (-not (Test-Path -LiteralPath (Join-Path $sourceStage 'scripts\cchouse.py') -PathType Leaf)) {
+        throw '源码包中缺少 scripts/cchouse.py。'
+      }
+      Move-Item -LiteralPath $sourceStage -Destination $code
+    }
+    $lock.Dispose()
+    $lock = $null
+
+    $env:PATH = "$openSsh;$env:PATH"
+    $env:CCHOUSE_HOME_CMD = $homeCmd
+    $python = Join-Path $pythonHome 'python.exe'
+    $cmdEntry = Write-CchouseCmdEntry -LocalAppData $env:LOCALAPPDATA -PythonExe $python -CodeDir $code
+    Push-Location -LiteralPath $code
+    try {
+      $cliVersion = & $python -I 'scripts/cchouse.py' --version
+      if ($LASTEXITCODE -ne 0 -or $cliVersion -cne "cchouse $version") {
+        throw 'Source package version does not match the bootstrap Release.'
+      }
+      $upArgs = @(Get-CchouseBootstrapUpArgs -Tag $Tag -ImageMirror $ImageMirror -NpmMirror $NpmMirror -Share $Share -ShareReadOnly:$ShareReadOnly)
+      Write-Host "正在启动 cchouse up（命令入口：$cmdEntry）。重跑同一条首页命令可续跑。工作目录：$code"
+      & $python -I 'scripts/cchouse.py' @upArgs
+      $exitCode = $LASTEXITCODE
+    } finally {
+      Pop-Location
+    }
   }
 } catch {
   Write-Host "cchouse 引导失败：$($_.Exception.Message)"

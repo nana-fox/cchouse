@@ -86,6 +86,45 @@ if [[ ! "$source_sha" =~ ^[0-9a-f]{64}$ ]]; then
   exit 1
 fi
 
+shell_quote() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+build_home_cmd() {
+  local self_sha=''
+  if [ -f "$0" ]; then
+    self_sha="$(shasum -a 256 "$0" | awk '{print $1}')"
+  fi
+  local cmd="f=\$(mktemp -t cchouse-bootstrap) && curl -fsSLo \"\$f\" https://github.com/nana-fox/cchouse/releases/download/${version}/bootstrap-macos.sh && printf '%s  %s\\n' '${self_sha}' \"\$f\" | shasum -a 256 -c - && /bin/bash \"\$f\" --cleanup-bootstrap"
+  if [ "$tag" != 'cc01' ]; then
+    cmd="${cmd} --tag $(shell_quote "$tag")"
+  fi
+  if [ -n "$image_mirror" ]; then
+    cmd="${cmd} --image-mirror $(shell_quote "$image_mirror")"
+  fi
+  if [ -n "$npm_mirror" ]; then
+    cmd="${cmd} --npm-mirror $(shell_quote "$npm_mirror")"
+  fi
+  if [ -n "$share_dir" ]; then
+    cmd="${cmd} --share $(shell_quote "$share_dir")"
+  fi
+  if [ "$share_read_only" = 1 ]; then
+    cmd="${cmd} --share-read-only"
+  fi
+  printf '%s\n' "$cmd"
+}
+
+instance_env="$HOME/Library/Application Support/cchouse/$tag/instance.env"
+home_cmd="$(build_home_cmd)"
+export CCHOUSE_HOME_CMD="$home_cmd"
+if [ ! -f "$instance_env" ] && [ ! -t 0 ]; then
+  echo ''
+  echo '需要你本人输入节点链接：请在你自己的终端窗口运行下面这条命令（AI 无法也不应替你输入）'
+  echo ''
+  echo "$home_cmd"
+  exit 20
+fi
+
 root="$HOME/Library/Application Support/cchouse/bootstrap"
 python_home="$root/tools/python-3.12.16-20261124"
 tart_home="$root/tools/tart-2.42.0"
@@ -104,7 +143,11 @@ else
   echo '将从官方 Release 校验并准备私有 Tart。'
   needs_tart=1
 fi
-echo '随后启动 cchouse up，按提示输入节点链接。'
+if [ -f "$instance_env" ]; then
+  echo '检测到已有节点配置，随后启动 cchouse up 继续安装或重建。'
+else
+  echo '随后启动 cchouse up，按提示输入节点链接。'
+fi
 
 mkdir -p "$root/downloads" "$root/tools" "$root/packages"
 if ! mkdir "$root/.prepare"; then

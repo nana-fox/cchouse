@@ -58,6 +58,7 @@ SAFE_HOST_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 SAFE_CIPHER_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 SAFE_TAG_RE = re.compile(r"^[a-z][a-z0-9_-]{1,15}$")
 FORBIDDEN_VALUE_CHARS = ("'", "\r", "\n", "\x00")
+EXIT_NEED_TTY = 20
 
 
 class NodeLinkError(ValueError):
@@ -1037,10 +1038,81 @@ class UpContext:
         return f'"{py_exe}" -I "{doc_script}"{env_arg}{vm_arg}'
 
 
+def _stdin_is_tty():
+    try:
+        if sys.stdin is None or not sys.stdin.isatty():
+            return False
+        if os.name == "nt":
+            import ctypes
+            handle = ctypes.windll.kernel32.GetStdHandle(-10)  # STD_INPUT_HANDLE
+            if not handle or handle == -1:
+                return False
+            mode = ctypes.c_uint32()
+            return bool(ctypes.windll.kernel32.GetConsoleMode(handle, ctypes.byref(mode)))
+        return True
+    except Exception:
+        return False
+
+
+def _readme_home_cmd(route):
+    readme = ROOT / "README.md"
+    if not readme.is_file():
+        return None
+    heading = "### Windows（x64）" if route == "virtualbox-linux" else "### Apple Silicon Mac"
+    try:
+        text = readme.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    pos = text.find(heading)
+    if pos < 0:
+        return None
+    m = re.search(r"```(?:powershell|bash)\s*\n([^\n]+)\n```", text[pos:])
+    return m.group(1).strip() if m else None
+
+
+def _home_install_cmd(ctx):
+    env_cmd = os.environ.get("CCHOUSE_HOME_CMD", "").strip()
+    if env_cmd:
+        return env_cmd
+    cmd = _readme_home_cmd(ctx.route)
+    if not cmd:
+        return ctx.rerun_cmd()
+    is_win = ctx.route == "virtualbox-linux"
+    if ctx.tag != "cc01":
+        cmd += f" -Tag '{ctx.tag}'" if is_win else f" --tag '{ctx.tag}'"
+    if getattr(ctx.args, "image_mirror", None):
+        val = ctx.args.image_mirror
+        cmd += f" -ImageMirror '{val}'" if is_win else f" --image-mirror '{val}'"
+    if getattr(ctx.args, "npm_mirror", None):
+        val = ctx.args.npm_mirror
+        cmd += f" -NpmMirror '{val}'" if is_win else f" --npm-mirror '{val}'"
+    if getattr(ctx.args, "share", None):
+        val = ctx.args.share
+        cmd += f" -Share '{val}'" if is_win else f" --share '{val}'"
+    if getattr(ctx.args, "read_only", False):
+        cmd += " -ShareReadOnly" if is_win else " --share-read-only"
+    return cmd
+
+
+def _need_tty_message(home_cmd):
+    return (
+        "需要你本人输入节点链接：请在你自己的终端窗口运行下面这条命令（AI 无法也不应替你输入）\n\n"
+        f"{home_cmd}"
+    )
+
+
+def _needs_interactive_node_input(ctx):
+    return (not getattr(ctx.args, "link_stdin", False)) and (
+        not ctx.env_path.is_file() or bool(getattr(ctx.args, "reconfigure", False))
+    )
+
+
 def do_config(ctx):
     """第一轮逻辑：无回显读取节点链接 → 解析 → 探测出口 → 生成密钥 → 写 600 权限 instance.env。"""
     args = ctx.args
     tag, route, private_dir = ctx.tag, ctx.route, ctx.private_dir
+    if not args.link_stdin and not _stdin_is_tty():
+        raise StepError(_need_tty_message(_home_install_cmd(ctx)), exit_code=EXIT_NEED_TTY)
     try:
         if args.link_stdin:
             raw_link = sys.stdin.readline()
@@ -2007,6 +2079,20 @@ def cmd_up(args):
     except StateCorruptError as exc:
         sys.exit(str(exc))
 
+    if (ctx.state.get("tag", tag) != tag or ctx.state.get("route", route) != route
+            or Path(ctx.state.get("private_dir", private_dir)).resolve() != private_dir.resolve()):
+        sys.exit("错误：现有安装记录与当前标签、路线或私有目录不匹配，请使用新的 --tag")
+    previous_backend = ctx.state.get("vm_backend")
+    if previous_backend and previous_backend != ctx.backend:
+        sys.exit("错误：该实例的安装记录属于另一个后端，请使用新的 --tag 创建实例")
+    # 早期安装记录没有 vm_backend，但会在私有配置记录旧版虚拟机路径。
+    if ctx.route == "virtualbox-linux" and ctx.env_path.is_file() and _env_raw_value(ctx.env_path, "VMX_PATH"):
+        sys.exit("错误：该实例包含旧版虚拟机路径，请使用新的 --tag 创建 VirtualBox 实例")
+
+    if _needs_interactive_node_input(ctx) and not _stdin_is_tty():
+        print(f"\n{_need_tty_message(_home_install_cmd(ctx))}")
+        return EXIT_NEED_TTY
+
     share_arg = getattr(args, "share", None)
     share_ro = bool(getattr(args, "read_only", False))
     try:
@@ -2028,15 +2114,6 @@ def cmd_up(args):
             ctx.state["share"] = share_mod.make_share_state(validated_share, read_only=share_ro, enabled=True)
     except share_mod.SharePathError as exc:
         sys.exit(f"错误：{exc}")
-    if (ctx.state.get("tag", tag) != tag or ctx.state.get("route", route) != route
-            or Path(ctx.state.get("private_dir", private_dir)).resolve() != private_dir.resolve()):
-        sys.exit("错误：现有安装记录与当前标签、路线或私有目录不匹配，请使用新的 --tag")
-    previous_backend = ctx.state.get("vm_backend")
-    if previous_backend and previous_backend != ctx.backend:
-        sys.exit("错误：该实例的安装记录属于另一个后端，请使用新的 --tag 创建实例")
-    # 早期安装记录没有 vm_backend，但会在私有配置记录旧版虚拟机路径。
-    if ctx.route == "virtualbox-linux" and ctx.env_path.is_file() and _env_raw_value(ctx.env_path, "VMX_PATH"):
-        sys.exit("错误：该实例包含旧版虚拟机路径，请使用新的 --tag 创建 VirtualBox 实例")
 
     live_run = not args.dry_run and not args.config_only
     if live_run and ctx.backend != "manual":
