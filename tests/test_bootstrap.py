@@ -1,4 +1,5 @@
 import base64
+import gzip
 import hashlib
 import importlib.util
 import io
@@ -86,13 +87,23 @@ class WindowsNativeVerifyTests(unittest.TestCase):
             }
             with mock.patch.object(verify.subprocess, "run", return_value=subprocess.CompletedProcess([], 1)) as run:
                 self.assertEqual(verify.verify(env, ["--fail-closed"], "accept-new"), 1)
-            args, payload = run.call_args.args[0], run.call_args.kwargs["input"].decode()
+            args = run.call_args.args[0]
             self.assertIn(str(identity.resolve()), args)
             self.assertIn(f'UserKnownHostsFile="{known_hosts.resolve().as_posix()}"', args)
             self.assertIn("StrictHostKeyChecking=yes", args)
             self.assertIn("ServerAliveInterval=5", args)
             self.assertEqual(run.call_args.kwargs["timeout"], verify.VERIFY_TIMEOUT_SECONDS)
-            self.assertEqual(args[-4:], ["-p", "49732", "claude@127.0.0.1", "bash -s -- --guest-local --fail-closed"])
+            if os.name == "nt":
+                self.assertIn("-n", args)
+                self.assertEqual(run.call_args.kwargs["stdin"], subprocess.DEVNULL)
+                self.assertEqual(args[-4:-1], ["-p", "49732", "claude@127.0.0.1"])
+                self.assertTrue(args[-1].endswith("| bash -s -- --guest-local --fail-closed"))
+                m = re.match(r"^printf %s ([A-Za-z0-9+/=]+) \| base64 -d \| gzip -dc \| ", args[-1])
+                self.assertIsNotNone(m)
+                payload = gzip.decompress(base64.b64decode(m.group(1))).decode("utf-8")
+            else:
+                payload = run.call_args.kwargs["input"].decode()
+                self.assertEqual(args[-4:], ["-p", "49732", "claude@127.0.0.1", "bash -s -- --guest-local --fail-closed"])
             self.assertIn("export EXPECTED_EGRESS_IP=203.0.113.9\n", payload)
             self.assertIn("export CCHOUSE_HOSTKEY_TRUST=accept-new\n", payload)
             self.assertIn("restore_mihomo", payload)

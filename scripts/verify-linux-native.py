@@ -2,6 +2,8 @@
 """Run the Debian verifier via native OpenSSH, with no host Bash required."""
 
 import argparse
+import base64
+import gzip
 import ipaddress
 import json
 import os
@@ -80,9 +82,19 @@ def verify(env, flags, hostkey_trust="", share_cfg=None, vbox_host_share_check="
     if vbox_host_share_check:
         config += f"export CCHOUSE_VBOX_HOST_SHARE_CHECK={shlex.quote(vbox_host_share_check)}\n"
     shell_script = (SCRIPTS / "verify-linux.sh").read_text(encoding="utf-8")
+    payload_bytes = (config + shell_script).encode("utf-8")
     command = "bash -s -- --guest-local " + " ".join(flags)
+    if os.name == "nt":
+        # Win32-OpenSSH hangs reading piped/file stdin when the parent has no console (e.g. ssh -T / AI agent).
+        # Pass the non-secret verifier script via gzip+base64 with -n / DEVNULL instead.
+        b64 = base64.b64encode(gzip.compress(payload_bytes)).decode("ascii")
+        remote_cmd = f"printf %s {b64} | base64 -d | gzip -dc | {command}"
+        win_args = [ssh_args[0], "-n", *ssh_args[1:], remote_cmd]
+        return subprocess.run(
+            win_args, stdin=subprocess.DEVNULL, timeout=VERIFY_TIMEOUT_SECONDS,
+        ).returncode
     return subprocess.run(
-        ssh_args + [command], input=(config + shell_script).encode("utf-8"), timeout=VERIFY_TIMEOUT_SECONDS,
+        ssh_args + [command], input=payload_bytes, timeout=VERIFY_TIMEOUT_SECONDS,
     ).returncode
 
 
