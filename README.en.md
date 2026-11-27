@@ -28,7 +28,7 @@ Help me install cchouse (https://github.com/nana-fox/cchouse). Please follow the
 2. Ask if I already have a fixed-IP SOCKS5 or HTTP(S) proxy node. If not, explain that this is required and stop—do not buy one for me or recommend specific vendors.
 3. Read AGENTS.md and README.md in this repo, and use only the currently version-pinned install command from the README home page without rewriting it.
 4. Give me the home-page command for my platform so I can run it in my own terminal window and paste my node link at the prompt; never ask for, read, log, or store my node link.
-5. After I finish running it, run `cchouse status --tag cc01` to verify the VM status. If installation failed, troubleshoot with `scripts/doctor.py` per AGENTS.md, then have me rerun the same home-page command.
+5. After I finish running it, run `cchouse status --tag cc01` to verify the VM status (if `cchouse` is not found, use the full path: Mac `~/.local/bin/cchouse`, Windows PowerShell `& "$env:LOCALAPPDATA\cchouse\bin\cchouse.cmd"`). If installation failed, troubleshoot with `scripts/doctor.py` per AGENTS.md, then have me rerun the same home-page command.
 6. Once everything passes, remind me to open check.html on the VM desktop to confirm all checks are green and sign in to Claude inside the VM myself.
 ```
 
@@ -40,20 +40,20 @@ Up and running in 3 steps (see [Supported computers](#supported-computers) for m
 
 ### Windows (x64)
 
-Open Windows PowerShell and run this one line to install `v2.0.0-preview.8`:
+Open Windows PowerShell and run this one line to install `v2.0.0-preview.9`:
 
 ```powershell
-$f = "$env:TEMP\cchouse-bootstrap-$([guid]::NewGuid().ToString('N')).ps1"; iwr https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.8/bootstrap-windows.ps1 -UseBasicParsing -OutFile $f -ErrorAction Stop; if ((Get-FileHash $f -Algorithm SHA256).Hash -ne '7ab8199d26898780995c47fc1a8537726da2e3390e610adcd3e8466d0e2407fc') { throw 'SHA-256 mismatch' }; Unblock-File -LiteralPath $f; powershell -NoProfile -ExecutionPolicy RemoteSigned -File $f -CleanupBootstrap
+$f = "$env:TEMP\cchouse-bootstrap-$([guid]::NewGuid().ToString('N')).ps1"; iwr https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.9/bootstrap-windows.ps1 -UseBasicParsing -OutFile $f -ErrorAction Stop; if ((Get-FileHash $f -Algorithm SHA256).Hash -ne '17452adb65a3f088beab606456ebe1a9d5174d272ecb36d39049041f4a7a4f26') { throw 'SHA-256 mismatch' }; Unblock-File -LiteralPath $f; powershell -NoProfile -ExecutionPolicy RemoteSigned -File $f -CleanupBootstrap
 ```
 
 When prompted, paste your node link (hidden input). If VirtualBox is missing, the installer installs it automatically; click **Yes** once when Windows asks for User Account Control (UAC) approval.
 
 ### Apple Silicon Mac
 
-Requires Apple Silicon (M series) and macOS 13.0 Ventura or later. Open Terminal and run this one line to install `v2.0.0-preview.8` (the bootstrap verifies and prepares a private Python and Tart if needed):
+Requires Apple Silicon (M series) and macOS 13.0 Ventura or later. Open Terminal and run this one line to install `v2.0.0-preview.9` (the bootstrap verifies and prepares a private Python and Tart if needed):
 
 ```bash
-f=$(mktemp -t cchouse-bootstrap) && curl -fsSLo "$f" https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.8/bootstrap-macos.sh && printf '%s  %s\n' '5f582dd63b8c93247beecf7abab4bf04b2fdc057f45141acb54584e19c671134' "$f" | shasum -a 256 -c - && /bin/bash "$f" --cleanup-bootstrap
+f=$(mktemp -t cchouse-bootstrap) && curl -fsSLo "$f" https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.9/bootstrap-macos.sh && printf '%s  %s\n' 'd563d5a6b06ca5cfdeb10d13f96615e863a3d405b9d5b2976ca4d0e92c29c60a' "$f" | shasum -a 256 -c - && /bin/bash "$f" --cleanup-bootstrap
 ```
 
 When prompted, paste your SOCKS5 or HTTP(S) node link (hidden input).

@@ -28,7 +28,7 @@
 2. 问我是否已有固定 IP 的 SOCKS5 或 HTTP(S) 代理节点；如果没有，说明这是前提并停止，不要替我购买，也不要推荐具体商家。
 3. 阅读本仓库的 AGENTS.md 和 README.md，只使用 README 首页当前锁定版本的安装命令，不要改写或拼装命令。
 4. 把对应平台的首页安装命令给我，让我在自己的终端窗口运行并在提示处粘贴节点链接；你不要索要、读取、记录或保存我的节点链接。
-5. 我安装完成后，帮我运行 `cchouse status --tag cc01` 确认状态；如果安装失败，按 AGENTS.md 用 `scripts/doctor.py` 排查并给出修复建议，再让我重跑同一条首页命令。
+5. 我安装完成后，帮我运行 `cchouse status --tag cc01` 确认状态（找不到 cchouse 时用完整路径：Mac `~/.local/bin/cchouse`，Windows PowerShell `& "$env:LOCALAPPDATA\cchouse\bin\cchouse.cmd"`）；如果安装失败，按 AGENTS.md 用 `scripts/doctor.py` 排查并给出修复建议，再让我重跑同一条首页命令。
 6. 全部通过后，提醒我在虚拟机桌面打开 check.html 核对全绿，并在虚拟机内自行登录 Claude。
 ```
 
@@ -40,20 +40,20 @@
 
 ### Windows（x64）
 
-打开 Windows PowerShell，运行下面这一行安装 `v2.0.0-preview.8`：
+打开 Windows PowerShell，运行下面这一行安装 `v2.0.0-preview.9`：
 
 ```powershell
-$f = "$env:TEMP\cchouse-bootstrap-$([guid]::NewGuid().ToString('N')).ps1"; iwr https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.8/bootstrap-windows.ps1 -UseBasicParsing -OutFile $f -ErrorAction Stop; if ((Get-FileHash $f -Algorithm SHA256).Hash -ne '7ab8199d26898780995c47fc1a8537726da2e3390e610adcd3e8466d0e2407fc') { throw 'SHA-256 mismatch' }; Unblock-File -LiteralPath $f; powershell -NoProfile -ExecutionPolicy RemoteSigned -File $f -CleanupBootstrap
+$f = "$env:TEMP\cchouse-bootstrap-$([guid]::NewGuid().ToString('N')).ps1"; iwr https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.9/bootstrap-windows.ps1 -UseBasicParsing -OutFile $f -ErrorAction Stop; if ((Get-FileHash $f -Algorithm SHA256).Hash -ne '17452adb65a3f088beab606456ebe1a9d5174d272ecb36d39049041f4a7a4f26') { throw 'SHA-256 mismatch' }; Unblock-File -LiteralPath $f; powershell -NoProfile -ExecutionPolicy RemoteSigned -File $f -CleanupBootstrap
 ```
 
 按提示粘贴自己的节点链接，输入不会回显。缺少 VirtualBox 时，安装器会自动安装；Windows 弹出用户账户控制（UAC）提示时，点一次「是」。
 
 ### Apple Silicon Mac
 
-需要 Apple Silicon（M 系列）及 macOS 13.0 Ventura 或更新版本。打开「终端」，运行下面这一行安装 `v2.0.0-preview.8`（引导脚本会校验并准备私有 Python 和所需的 Tart）：
+需要 Apple Silicon（M 系列）及 macOS 13.0 Ventura 或更新版本。打开「终端」，运行下面这一行安装 `v2.0.0-preview.9`（引导脚本会校验并准备私有 Python 和所需的 Tart）：
 
 ```bash
-f=$(mktemp -t cchouse-bootstrap) && curl -fsSLo "$f" https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.8/bootstrap-macos.sh && printf '%s  %s\n' '5f582dd63b8c93247beecf7abab4bf04b2fdc057f45141acb54584e19c671134' "$f" | shasum -a 256 -c - && /bin/bash "$f" --cleanup-bootstrap
+f=$(mktemp -t cchouse-bootstrap) && curl -fsSLo "$f" https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.9/bootstrap-macos.sh && printf '%s  %s\n' 'd563d5a6b06ca5cfdeb10d13f96615e863a3d405b9d5b2976ca4d0e92c29c60a' "$f" | shasum -a 256 -c - && /bin/bash "$f" --cleanup-bootstrap
 ```
 
 按提示粘贴自己的 SOCKS5 或 HTTP(S) 节点链接，输入不会回显。
