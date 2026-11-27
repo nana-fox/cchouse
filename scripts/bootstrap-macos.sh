@@ -19,6 +19,9 @@ image_mirror="${CCHOUSE_IMAGE_MIRROR:-}"
 npm_mirror="${CCHOUSE_NPM_MIRROR:-}"
 share_dir="${CCHOUSE_SHARE:-}"
 share_read_only=0
+link_file=""
+link_clipboard=0
+reconfigure=0
 bootstrap_mirror="${CCHOUSE_BOOTSTRAP_MIRROR:-}"
 curl_bin="${CCHOUSE_CURL_BIN:-curl}"
 fetch_max_attempts="${CCHOUSE_BOOTSTRAP_RETRIES:-6}"
@@ -65,7 +68,20 @@ while [ "$#" -gt 0 ]; do
       share_read_only=1
       shift
       ;;
-    *) echo '用法：bootstrap-macos.sh [--tag <实例名>] [--image-mirror <URL>] [--npm-mirror <URL>] [--share <路径>] [--share-read-only]' >&2; exit 2 ;;
+    --link-file)
+      if [ "$#" -lt 2 ]; then echo '--link-file 需要一个文件路径。' >&2; exit 2; fi
+      link_file="$2"
+      shift 2
+      ;;
+    --link-clipboard)
+      link_clipboard=1
+      shift
+      ;;
+    --reconfigure)
+      reconfigure=1
+      shift
+      ;;
+    *) echo '用法：bootstrap-macos.sh [--tag <实例名>] [--image-mirror <URL>] [--npm-mirror <URL>] [--share <路径>] [--share-read-only] [--link-clipboard] [--link-file <路径>] [--reconfigure]' >&2; exit 2 ;;
   esac
 done
 if [[ ! "$tag" =~ ^[a-z][a-z0-9_-]{1,15}$ ]]; then
@@ -114,10 +130,18 @@ build_home_cmd() {
   printf '%s\n' "$cmd"
 }
 
+if [ -n "$link_file" ]; then
+  case "$link_file" in
+    /*) ;;
+    ~/*) link_file="$HOME/${link_file#\~/}" ;;
+    *) link_file="$(pwd)/$link_file" ;;
+  esac
+fi
+
 instance_env="$HOME/Library/Application Support/cchouse/$tag/instance.env"
 home_cmd="$(build_home_cmd)"
 export CCHOUSE_HOME_CMD="$home_cmd"
-if [ ! -f "$instance_env" ] && [ ! -t 0 ]; then
+if [ \( ! -f "$instance_env" -o "$reconfigure" = 1 \) ] && [ -z "$link_file" ] && [ "$link_clipboard" = 0 ] && [ ! -t 0 ]; then
   echo ''
   echo '需要你本人输入节点链接：请在你自己的终端窗口运行下面这条命令（AI 无法也不应替你输入）'
   echo ''
@@ -143,8 +167,12 @@ else
   echo '将从官方 Release 校验并准备私有 Tart。'
   needs_tart=1
 fi
-if [ -f "$instance_env" ]; then
+if [ -f "$instance_env" ] && [ "$reconfigure" = 0 ]; then
   echo '检测到已有节点配置，随后启动 cchouse up 继续安装或重建。'
+elif [ "$link_clipboard" = 1 ]; then
+  echo '随后启动 cchouse up，从本机剪贴板读取节点配置（不回显，保存后自动清空）。'
+elif [ -n "$link_file" ]; then
+  echo '随后启动 cchouse up，从指定的链接文件读取节点配置。'
 else
   echo '随后启动 cchouse up，按提示输入节点链接。'
 fi
@@ -315,6 +343,15 @@ if [ -n "$share_dir" ]; then
 fi
 if [ "$share_read_only" = 1 ]; then
   up_args+=(--read-only)
+fi
+if [ "$link_clipboard" = 1 ]; then
+  up_args+=(--link-clipboard)
+fi
+if [ -n "$link_file" ]; then
+  up_args+=(--link-file "$link_file")
+fi
+if [ "$reconfigure" = 1 ]; then
+  up_args+=(--reconfigure)
 fi
 
 echo "正在启动 cchouse up。重跑同一条首页命令可续跑。工作目录：$code"

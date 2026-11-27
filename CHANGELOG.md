@@ -1,5 +1,9 @@
 # 变更记录
 
+## 未发布（Unreleased）
+
+- 剪贴板/链接文件输入与重建提示优化：Mac/Windows 引导脚本及 `cchouse up` 新增 `--link-clipboard`（Windows `-LinkClipboard`）与 `--link-file <路径>`（Windows `-LinkFile`），无 TTY 亦可完整安装。`--link-clipboard` 由安装器直接读取本机剪贴板第一条非空行（Mac `pbpaste` / Windows `Get-Clipboard`），绝不回显，非链接仅提示「剪贴板里不是节点链接，请复制后重试」，成功写入 `instance.env` 后自动清空剪贴板并告知，无桌面会话/读不到剪贴板时提示改用其他方式；`--link-file` 校验普通文件与当前用户归属（POSIX 对组/其他人可读给出警告并继续），写入 `instance.env` 后提醒用户自行删除文件。已有配置未传 `--reconfigure` 时提示并忽略 `--link-clipboard` / `--link-file`（传 `--reconfigure` 时正常更新配置）。自动重建前补充显示旧记录创建日期与 `--reconfigure` 提示；同步更新中英首页「让 AI 帮你装」与 `AGENTS.md`。
+
 ## [v2.0.0-preview.9](https://github.com/nana-fox/cchouse/releases/tag/v2.0.0-preview.9) · 2026-11-27
 
 - 面向 AI 协助安装的无 TTY 保护与引导优化：Mac/Windows 引导脚本及 `cchouse up` 在需要输入节点链接但标准输入不是交互终端时不再卡住，立即以独立退出码 `20` 退出并打印说明与原样可复制的首页安装命令；已有保存节点配置（续跑/重建）时无 TTY 仍可正常完成，且引导提示不再误导为需要输入节点链接。修复 Windows 无控制台环境下 Win32-OpenSSH 管道 stdin 阻塞导致 `verify-linux-native.py` 超时的问题（改用 `ssh -n` + gzip/base64 传递非敏感验收脚本）。中英首页新增「让 AI 帮你装」整段可复制指引，同步更新 `AGENTS.md` 与「支持的电脑」验收项说明。

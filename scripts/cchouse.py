@@ -59,10 +59,204 @@ SAFE_CIPHER_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 SAFE_TAG_RE = re.compile(r"^[a-z][a-z0-9_-]{1,15}$")
 FORBIDDEN_VALUE_CHARS = ("'", "\r", "\n", "\x00")
 EXIT_NEED_TTY = 20
+LINK_FILE_MAX_BYTES = 65536
 
 
 class NodeLinkError(ValueError):
     """节点链接解析错误（错误文案绝不回显原始链接或凭据）。"""
+
+
+def _is_owned_by_current_user(path, st):
+    """确认链接文件归当前用户所有（POSIX 核对 uid，Windows 核对文件所有者 SID）。"""
+    if os.name != "nt":
+        return st.st_uid == os.getuid()
+    import ctypes
+    from ctypes import wintypes
+
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    kernel32.LocalFree.argtypes = [wintypes.HLOCAL]
+    kernel32.LocalFree.restype = wintypes.HLOCAL
+
+    advapi32.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+    advapi32.OpenProcessToken.restype = wintypes.BOOL
+    advapi32.GetTokenInformation.argtypes = [
+        wintypes.HANDLE, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD),
+    ]
+    advapi32.GetTokenInformation.restype = wintypes.BOOL
+    advapi32.GetNamedSecurityInfoW.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+        ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    advapi32.GetNamedSecurityInfoW.restype = wintypes.DWORD
+    advapi32.EqualSid.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    advapi32.EqualSid.restype = wintypes.BOOL
+
+    token = wintypes.HANDLE()
+    if not advapi32.OpenProcessToken(kernel32.GetCurrentProcess(), 0x0008, ctypes.byref(token)):
+        return False
+    sd = ctypes.c_void_p()
+    try:
+        owner_sid = ctypes.c_void_p()
+        rc = advapi32.GetNamedSecurityInfoW(
+            str(path), 1, 1, ctypes.byref(owner_sid), None, None, None, ctypes.byref(sd),
+        )
+        if rc != 0 or not owner_sid.value:
+            return False
+        # Windows 管理员会话新建文件的 NTFS 所有者可能为 TokenOwner（如 BUILTIN\Administrators），
+        # 普通会话为 TokenUser；核对两者任一匹配即可，仍拒绝其他用户拥有的文件。
+        for info_class in (1, 4):  # TokenUser=1, TokenOwner=4
+            needed = wintypes.DWORD(0)
+            advapi32.GetTokenInformation(token, info_class, None, 0, ctypes.byref(needed))
+            if needed.value == 0:
+                continue
+            buf = ctypes.create_string_buffer(needed.value)
+            if not advapi32.GetTokenInformation(token, info_class, buf, needed.value, ctypes.byref(needed)):
+                continue
+            token_sid = ctypes.c_void_p.from_buffer(buf).value
+            if token_sid and advapi32.EqualSid(owner_sid, token_sid):
+                return True
+        return False
+    finally:
+        if sd.value:
+            kernel32.LocalFree(sd)
+        kernel32.CloseHandle(token)
+
+
+def read_link_file(path):
+    """安全读取节点链接文件第一条非空行；绝不在异常或输出中回显文件内容。"""
+    p = Path(path).expanduser()
+    try:
+        st = os.lstat(p)
+    except FileNotFoundError:
+        raise NodeLinkError(f"找不到链接文件：{p}") from None
+    except OSError:
+        raise NodeLinkError(f"无法访问链接文件：{p}") from None
+    if stat.S_ISDIR(st.st_mode):
+        raise NodeLinkError(f"链接路径是目录，不是普通文件：{p}")
+    if not stat.S_ISREG(st.st_mode):
+        raise NodeLinkError(f"链接文件必须是普通文件（不支持符号链接或特殊文件）：{p}")
+    if not _is_owned_by_current_user(p, st):
+        raise NodeLinkError(f"链接文件不属于当前用户，已拒绝读取：{p}")
+    if os.name != "nt" and (st.st_mode & 0o044):
+        print(
+            f"警告：链接文件 {p} 对同组或其他用户可读，建议执行 chmod 600，用完后删除。",
+            file=sys.stderr,
+        )
+    if st.st_size > LINK_FILE_MAX_BYTES:
+        raise NodeLinkError(f"链接文件过大（超过 {LINK_FILE_MAX_BYTES} 字节），请确认路径正确：{p}")
+    try:
+        raw_bytes = p.read_bytes()
+    except OSError:
+        raise NodeLinkError(f"无法读取链接文件：{p}") from None
+    try:
+        text = raw_bytes.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise NodeLinkError(f"链接文件不是有效的 UTF-8 文本：{p}") from None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    raise NodeLinkError(f"链接文件为空，未找到节点链接：{p}")
+
+
+CLIPBOARD_NOT_LINK_MSG = "剪贴板里不是节点链接，请复制后重试"
+CLIPBOARD_UNAVAILABLE_MSG = (
+    "无法读取剪贴板（可能当前没有桌面会话或剪贴板工具不可用）。"
+    "请改用 --link-file <路径>，或在自己的终端窗口直接运行首页命令并粘贴。"
+)
+
+
+def _read_clipboard_raw():
+    """读取系统剪贴板文本；失败抛出 RuntimeError（不回显任何内容）。"""
+    sys_name = platform.system()
+    if sys_name == "Darwin":
+        cmd = ["pbpaste"]
+    elif sys_name == "Windows":
+        cmd = [
+            "powershell", "-NoProfile", "-Command",
+            "[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); Get-Clipboard -Raw",
+        ]
+    else:
+        for cand in (["wl-paste", "--no-newline"], ["xclip", "-o", "-selection", "clipboard"], ["xsel", "-ob"]):
+            if shutil.which(cand[0]):
+                cmd = cand
+                break
+        else:
+            raise RuntimeError("clipboard_tool_missing")
+    try:
+        proc = subprocess.run(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        raise RuntimeError("clipboard_read_failed") from None
+    if proc.returncode != 0:
+        raise RuntimeError(f"clipboard_exit_{proc.returncode}")
+    return proc.stdout or ""
+
+
+def read_clipboard_link():
+    """从剪贴板读取第一条非空行作为节点链接；绝不回显剪贴板内容。"""
+    try:
+        text = _read_clipboard_raw()
+    except RuntimeError:
+        raise NodeLinkError(CLIPBOARD_UNAVAILABLE_MSG) from None
+    if text.startswith("\ufeff"):
+        text = text[1:]
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    raise NodeLinkError(CLIPBOARD_NOT_LINK_MSG)
+
+
+def clear_clipboard():
+    """清空系统剪贴板；返回是否成功。"""
+    sys_name = platform.system()
+    try:
+        if sys_name == "Darwin":
+            proc = subprocess.run(
+                ["pbcopy"],
+                input=b"",
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            )
+            return proc.returncode == 0
+        if sys_name == "Windows":
+            proc = subprocess.run(
+                ["clip"],
+                input=b"",
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            )
+            return proc.returncode == 0
+        for cand in (["wl-copy", "--clear"], ["xclip", "-i", "-selection", "clipboard"], ["xsel", "-cb"]):
+            if shutil.which(cand[0]):
+                proc = subprocess.run(
+                    cand,
+                    input=b"",
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=5,
+                )
+                return proc.returncode == 0
+        return False
+    except (OSError, subprocess.TimeoutExpired):
+        return False
 
 
 def _check_safe_env_value(val, field_name):
@@ -900,7 +1094,9 @@ class UpContext:
     def save_state(self):
         if self.dry_run:
             return
-        self.state["updated_at"] = _now_iso()
+        now = _now_iso()
+        self.state.setdefault("created_at", now)
+        self.state["updated_at"] = now
         self.state["route"] = self.route
         self.state["cchouse_version"] = (ROOT / "VERSION").read_text(encoding="ascii").strip()
         self.state.setdefault("tag", self.tag)
@@ -1102,19 +1298,30 @@ def _need_tty_message(home_cmd):
 
 
 def _needs_interactive_node_input(ctx):
-    return (not getattr(ctx.args, "link_stdin", False)) and (
-        not ctx.env_path.is_file() or bool(getattr(ctx.args, "reconfigure", False))
+    return (
+        not getattr(ctx.args, "link_stdin", False)
+        and not getattr(ctx.args, "link_file", None)
+        and not getattr(ctx.args, "link_clipboard", False)
+        and (not ctx.env_path.is_file() or bool(getattr(ctx.args, "reconfigure", False)))
     )
 
 
 def do_config(ctx):
-    """第一轮逻辑：无回显读取节点链接 → 解析 → 探测出口 → 生成密钥 → 写 600 权限 instance.env。"""
+    """第一轮逻辑：无回显读取节点链接（或安全读取 --link-clipboard / --link-file）→ 解析 → 探测出口 → 生成密钥 → 写 600 权限 instance.env。"""
     args = ctx.args
     tag, route, private_dir = ctx.tag, ctx.route, ctx.private_dir
-    if not args.link_stdin and not _stdin_is_tty():
+    link_file = getattr(args, "link_file", None)
+    link_clipboard = bool(getattr(args, "link_clipboard", False))
+    if link_file and link_clipboard:
+        raise StepError("--link-file 与 --link-clipboard 不能同时使用，请二选一。")
+    if not link_file and not link_clipboard and not args.link_stdin and not _stdin_is_tty():
         raise StepError(_need_tty_message(_home_install_cmd(ctx)), exit_code=EXIT_NEED_TTY)
     try:
-        if args.link_stdin:
+        if link_clipboard:
+            raw_link = read_clipboard_link()
+        elif link_file:
+            raw_link = read_link_file(link_file)
+        elif args.link_stdin:
             raw_link = sys.stdin.readline()
             if raw_link == "":
                 raise EOFError
@@ -1122,8 +1329,10 @@ def do_config(ctx):
         else:
             with ctx.downloader.pause_logs():
                 raw_link = getpass.getpass("请粘贴单节点代理链接（输入不回显，支持 SOCKS5 / HTTP(S)）: ")
+    except NodeLinkError as exc:
+        raise StepError(str(exc)) from None
     except EOFError:
-        raise StepError("输入已结束，请在终端交互运行，或用 --link-stdin 提供节点链接") from None
+        raise StepError("输入已结束，请在终端交互运行，或用 --link-clipboard / --link-file / --link-stdin 提供节点链接") from None
     except KeyboardInterrupt:
         raise StepError("已取消输入节点链接") from None
 
@@ -1132,6 +1341,8 @@ def do_config(ctx):
             raise StepError(ADVANCED_NODE_MESSAGE)
         single_fields = parse_node_link(raw_link)
     except NodeLinkError as exc:
+        if link_clipboard:
+            raise StepError(CLIPBOARD_NOT_LINK_MSG) from None
         raise StepError(f"节点链接校验失败：{exc}") from None
     finally:
         raw_link = ""
@@ -1203,11 +1414,23 @@ def do_config(ctx):
     )
     write_env_secure(ctx.env_path, env_text)
     print(f"[cchouse up] 已生成私有配置（权限 600）：{ctx.env_path}")
+    if link_clipboard:
+        if clear_clipboard():
+            print("[cchouse up] 节点配置已保存，已清空剪贴板。")
+        else:
+            print("[cchouse up] 节点配置已保存，但未能自动清空剪贴板，请手动清空。")
+    elif link_file:
+        print(f"[cchouse up] 节点配置已保存，现在可以删掉 {link_file} 了（cchouse 不会自动删除该文件）。")
 
 
 def step_config(ctx):
     if ctx.env_path.is_file() and not ctx.args.reconfigure:
-        print(f"  已有私有配置 {ctx.env_path}，沿用（更换节点请加 --reconfigure）")
+        if getattr(ctx.args, "link_clipboard", False):
+            print(f"  已有私有配置 {ctx.env_path}，已忽略 --link-clipboard（更换节点请加 --reconfigure）")
+        elif getattr(ctx.args, "link_file", None):
+            print(f"  已有私有配置 {ctx.env_path}，已忽略 --link-file（更换节点请加 --reconfigure）")
+        else:
+            print(f"  已有私有配置 {ctx.env_path}，沿用（更换节点请加 --reconfigure）")
         return True
     do_config(ctx)
     return False
@@ -1800,7 +2023,11 @@ STEP_FUNCS = {
 
 def needs_redo(ctx, name):
     # 失败时明文 seed.iso 会被删除；首启前恢复运行需重新生成
-    return name == "seed" and not ctx.done("firstboot") and not ctx.seed_iso.is_file()
+    if name == "seed" and not ctx.done("firstboot") and not ctx.seed_iso.is_file():
+        return True
+    if ctx.args.reconfigure and name in ("config", "preflight"):
+        return True
+    return False
 
 
 def print_timing_table(ctx, steps):
@@ -2030,6 +2257,21 @@ def _clear_stale_guest_trust(ctx):
             pass
 
 
+def _saved_record_date(ctx):
+    """提取旧安装记录的创建日期（YYYY-MM-DD），兼容未记录 created_at 的旧版 state.json。"""
+    for key in ("created_at", "updated_at"):
+        val = ctx.state.get(key)
+        if isinstance(val, str) and re.match(r"^\d{4}-\d{2}-\d{2}", val):
+            return val[:10]
+    try:
+        if ctx.env_path.is_file():
+            mtime = ctx.env_path.stat().st_mtime
+            return datetime.datetime.fromtimestamp(mtime, tz=datetime.timezone.utc).strftime("%Y-%m-%d")
+    except OSError:
+        pass
+    return ""
+
+
 def _reset_for_rebuild(ctx, *, keep_config=True):
     """为确认双失后的自动重建重置过期信任记录与完成步骤，保留 instance.env、SSH 密钥和共享设置。"""
     _clear_stale_guest_trust(ctx)
@@ -2198,7 +2440,10 @@ def cmd_up(args):
         elif has_prior_record:
             # VM 与干净快照均确认不存在（含旧版无归属字段记录）→ 自动重建，不再询问
             if ctx.env_path.is_file() and not ctx.args.reconfigure:
-                print(f"之前的虚拟机和干净快照已找不到。正在用保存的节点设置重新建一台 {ctx.tag}。")
+                created_date = _saved_record_date(ctx)
+                date_hint = f"（旧记录创建日期：{created_date}）" if created_date else ""
+                print(f"之前的虚拟机和干净快照已找不到。正在用保存的节点设置重新建一台 {ctx.tag}{date_hint}。")
+                print("如果这不是你装的，或想换节点，加 --reconfigure 重新输入。")
                 print("旧虚拟机里的文件和登录状态找不回来，共享文件夹里的文件不受影响。")
                 try:
                     _verify_saved_egress(ctx)
@@ -3035,6 +3280,8 @@ def main():
     p_up.add_argument("--expected-ip", default=None, help="覆盖自动采用的预期出口 IP")
     p_up.add_argument("--expected-country", default=None, help="覆盖自动采用的两位出口国家/地区代码")
     p_up.add_argument("--expected-asn", default=None, help="覆盖自动采用的预期出口 ASN（如 AS64500）")
+    p_up.add_argument("--link-clipboard", action="store_true", help="从本机剪贴板读取第一条非空行作为节点链接（不回显，保存后自动清空剪贴板）")
+    p_up.add_argument("--link-file", default=None, help="从指定普通文本文件读取第一条非空行作为节点链接（不回显、不自动删除文件）")
     p_up.add_argument("--link-stdin", action="store_true", help="从标准输入读取一行节点链接（不回显，适合脚本/测试）")
     p_up.add_argument("--non-interactive", action="store_true", help=argparse.SUPPRESS)
     p_up.add_argument("--no-probe", action="store_true", help="跳过宿主探测，手工提供 IP、国家、ASN 和时区")
