@@ -12,6 +12,16 @@ case "${1:-}" in
   nft-live-sha)
     /usr/sbin/nft list table inet cchouse_guard | sha256sum | awk '{print $1}'
     ;;
+  nft-egress-sha)
+    /usr/sbin/nft -n list table inet cchouse_guard | awk '/meta skuid/ && /ip daddr/ && /tcp dport/ && /accept/ {
+      ip=""; port=""
+      for (i=1; i<=NF; i++) {
+        if ($i=="daddr" && i+1<=NF) ip=$(i+1)
+        if ($i=="dport" && i+1<=NF) port=$(i+1)
+      }
+      if (ip != "" && port != "") print ip ":" port
+    }' | sort -u | sha256sum | awk '{print $1}'
+    ;;
   direct-count)
     grep -Eic '^[[:space:]]*-[[:space:]]*[^#]*,[[:space:]]*DIRECT([[:space:]]|$)' "$CFG" || true
     ;;

@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "version": "v1.19.19",
+  "artifacts": {
+    "darwin-arm64": {
+      "filename": "mihomo-darwin-arm64-v1.19.19.gz",
+      "binary_name": "mihomo",
+      "format": "gz",
+      "size_bytes": 11496425,
+      "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.19/mihomo-darwin-arm64-v1.19.19.gz",
+      "sha256": "29fdde431e69e17f4e8e7cda2046402c4cba254a26ad66ce17e37ad946490dc0"
+    },
+    "windows-amd64": {
+      "filename": "mihomo-windows-amd64-compatible-v1.19.19.zip",
+      "binary_name": "mihomo.exe",
+      "format": "zip",
+      "size_bytes": 12729251,
+      "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.19/mihomo-windows-amd64-compatible-v1.19.19.zip",
+      "sha256": "94c042f4f9ad0e040a27394623740f6e76cf7c3d8c708c0db8f18d1ac6c6153c"
+    }
+  }
+}

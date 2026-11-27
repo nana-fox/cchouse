@@ -1,5 +1,13 @@
 # 变更记录
 
+## 未发布
+
+- 一键安装支持三种常见节点并重写 AI 带装话术：
+  - 新增宿主临时 mihomo（与客机同版本 `v1.19.19`，SHA-256 固定在 `guest-linux/mihomo-manifest.json` 与引导脚本，缓存至私有 `bootstrap/tools`）统一探测出口，仅监听 `127.0.0.1` 随机端口、无 TUN/控制器/DNS 劫持、无 `DIRECT`，600 临时目录用完即删；间隔探测 3 次核验固定 IP，失败时大白话说明哪一跳不通且不回显链接，并在下载 Tart / VirtualBox / 镜像 / Claude Code 之前完成。
+  - 支持输入 1 或 2 条链接（剪贴板 / 文件 / stdin / 无回显交互）：1 条支持 SOCKS5 / HTTP(S) / VLESS / Trojan / SS；2 条支持「加密前置 + SOCKS5/HTTP 固定出口」或两条 SOCKS5/HTTP（第一行前置、第二行出口），拒绝超过 2 条或两条均为加密协议。
+  - 保持 `EXIT_MODE=single`，新增可选 `SINGLE_VIA_*` 前置渲染：`dialer-proxy` 指向前置、域名钉死同样适用前置、客机 `nftables` 白名单只放行前置 `IP:端口`、Stripe 默认走前置直出（仍只给 WARN），`verify-linux.sh` / `verify-linux-native.py` 新增前置白名单哈希核对（`cchouse-probe nft-egress-sha`）。
+  - 精简中英 README「让 AI 帮你装」可复制话术并新增 `AGENTS.md` 固定「AI 带装」章节，同步 `docs/proxy-modes.md` 与「你需要准备什么」。
+
 ## [v2.0.0-preview.10](https://github.com/nana-fox/cchouse/releases/tag/v2.0.0-preview.10) · 2026-11-27
 
 - 剪贴板/链接文件输入与重建提示优化：Mac/Windows 引导脚本及 `cchouse up` 新增 `--link-clipboard`（Windows `-LinkClipboard`）与 `--link-file <路径>`（Windows `-LinkFile`），无 TTY 亦可完整安装。`--link-clipboard` 由安装器直接读取本机剪贴板第一条非空行（Mac `pbpaste` / Windows `Get-Clipboard`），绝不回显，非链接仅提示「剪贴板里不是节点链接，请复制后重试」，成功写入 `instance.env` 后自动清空剪贴板并告知，无桌面会话/读不到剪贴板时提示改用其他方式；`--link-file` 校验普通文件与当前用户归属（POSIX 对组/其他人可读给出警告并继续），写入 `instance.env` 后提醒用户自行删除文件。已有配置未传 `--reconfigure` 时提示并忽略 `--link-clipboard` / `--link-file`（传 `--reconfigure` 时正常更新配置）。自动重建前补充显示旧记录创建日期与 `--reconfigure` 提示；同步更新中英首页「让 AI 帮你装」与 `AGENTS.md`。

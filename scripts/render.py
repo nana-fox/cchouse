@@ -128,6 +128,10 @@ def render_text(text, env, name, optional_keys=()):
     return PLACEHOLDER.sub(lambda m: env.get(m.group(1), ""), text)
 
 
+def has_single_via(env):
+    return bool(env.get("SINGLE_VIA_TYPE", "").strip() or env.get("SINGLE_VIA_SERVER", "").strip())
+
+
 def effective_stripe_mode(env, guest_os, exit_mode):
     raw = env.get("STRIPE_EXIT_MODE", "").strip().lower()
     if raw:
@@ -135,6 +139,8 @@ def effective_stripe_mode(env, guest_os, exit_mode):
     if guest_os == "linux" and exit_mode == "single":
         if env.get("STRIPE_NODE_SERVER", "").strip():
             return "node"
+        if has_single_via(env):
+            return "front"
         return "off"
     return "front"
 
@@ -185,7 +191,7 @@ def yaml_kv(key, value, indent=2):
     return f"{' ' * indent}{key}: {value}"
 
 
-def build_proxy_node_lines(env, prefix, node_name, pinned_ip, orig_host):
+def build_proxy_node_lines(env, prefix, node_name, pinned_ip, orig_host, dialer_proxy=None):
     k = lambda suffix: f"{prefix}_{suffix}"
     stype = env.get(k("TYPE"), "").strip().lower()
     if stype in REJECTED_UDP_TYPES:
@@ -203,6 +209,8 @@ def build_proxy_node_lines(env, prefix, node_name, pinned_ip, orig_host):
         yaml_kv("port", port),
         yaml_kv("udp", "false"),
     ]
+    if dialer_proxy:
+        lines.append(yaml_kv("dialer-proxy", dialer_proxy))
     raw_tls = env.get(k("TLS"), "").strip().lower()
     if stype in ("socks5", "http"):
         if env.get(k("USER")):
@@ -287,15 +295,27 @@ def build_proxy_node_lines(env, prefix, node_name, pinned_ip, orig_host):
     return "\n".join(lines), int(port)
 
 
-def build_single_linux_config(env, pinned_ip, orig_host, stripe_node=None):
+def build_single_linux_config(env, pinned_ip, orig_host, stripe_node=None, via_node=None, stripe_mode="off"):
     tag_upper = env["TAG_UPPER"]
     lan_cidr = env.get("HOME_LAN_CIDR", "").strip()
     if not lan_cidr:
         sys.exit("instance.env 缺少 HOME_LAN_CIDR")
 
     node_name = f"{tag_upper}-Single-Exit"
-    proxy_block, main_port = build_proxy_node_lines(env, "SINGLE", node_name, pinned_ip, orig_host)
-    targets = [(pinned_ip, main_port)]
+    via_name = None
+    if via_node is not None:
+        via_pinned_ip, via_orig_host = via_node
+        via_name = f"{tag_upper}-Single-Front"
+        via_proxy_block, via_port = build_proxy_node_lines(env, "SINGLE_VIA", via_name, via_pinned_ip, via_orig_host)
+        exit_proxy_block, _main_port = build_proxy_node_lines(
+            env, "SINGLE", node_name, pinned_ip, orig_host, dialer_proxy=via_name
+        )
+        proxy_block = via_proxy_block + "\n" + exit_proxy_block
+        # 有前置跳时客机不直连出口，nftables 白名单只放行前置的 IP:端口
+        targets = [(via_pinned_ip, via_port)]
+    else:
+        proxy_block, main_port = build_proxy_node_lines(env, "SINGLE", node_name, pinned_ip, orig_host)
+        targets = [(pinned_ip, main_port)]
 
     stripe_group_block = ""
     stripe_rules_block = ""
@@ -312,6 +332,19 @@ def build_single_linux_config(env, pinned_ip, orig_host, stripe_node=None):
             f"  type: select\n"
             f"  proxies:\n"
             f"  - {stripe_node_name}\n"
+            f"  disable-udp: true\n"
+        )
+        stripe_rules_block = (
+            f"- DOMAIN-SUFFIX,stripe.com,{tag_upper}-Stripe\n"
+            f"- DOMAIN-SUFFIX,stripe.network,{tag_upper}-Stripe\n"
+            f"- DOMAIN-SUFFIX,stripecdn.com,{tag_upper}-Stripe\n"
+        )
+    elif stripe_mode == "front" and via_name is not None:
+        stripe_group_block = (
+            f"- name: {tag_upper}-Stripe\n"
+            f"  type: select\n"
+            f"  proxies:\n"
+            f"  - {via_name}\n"
             f"  disable-udp: true\n"
         )
         stripe_rules_block = (
@@ -498,13 +531,21 @@ def render_linux(env, out, exit_mode, stripe_mode, allow_resolve):
     env["SSH_NETS"] = ", ".join(str(n) for n in collapsed)
 
     if exit_mode == "single":
-        if stripe_mode not in ("off", "node"):
-            sys.exit("EXIT_MODE=single 时 STRIPE_EXIT_MODE 仅支持 off 或 node")
+        via_present = has_single_via(env)
+        if stripe_mode not in ("off", "node", "front"):
+            sys.exit("EXIT_MODE=single 时 STRIPE_EXIT_MODE 仅支持 off、node 或 front")
+        if stripe_mode == "front" and not via_present:
+            sys.exit("EXIT_MODE=single 时 STRIPE_EXIT_MODE=front 需要配置 SINGLE_VIA_* 前置节点")
         pinned_ip, orig_host = resolve_node_server_ip(env, prefix="SINGLE", allow_resolve=allow_resolve)
+        via_node = None
+        if via_present:
+            via_node = resolve_node_server_ip(env, prefix="SINGLE_VIA", allow_resolve=allow_resolve)
         stripe_node = None
         if stripe_mode == "node":
             stripe_node = resolve_node_server_ip(env, prefix="STRIPE_NODE", allow_resolve=allow_resolve)
-        config_text, targets = build_single_linux_config(env, pinned_ip, orig_host, stripe_node=stripe_node)
+        config_text, targets = build_single_linux_config(
+            env, pinned_ip, orig_host, stripe_node=stripe_node, via_node=via_node, stripe_mode=stripe_mode
+        )
     elif exit_mode == "chain":
         if stripe_mode not in ("off", "front", "tmh-chain"):
             sys.exit("EXIT_MODE=chain 时 STRIPE_EXIT_MODE 必须为 off、front 或 tmh-chain")
@@ -518,7 +559,7 @@ def render_linux(env, out, exit_mode, stripe_mode, allow_resolve):
 
     rendered = [("config.yaml", config_text)]
     for src in sorted(GUEST_LINUX.iterdir()):
-        if not src.is_file() or src.name == "image-manifest.json":
+        if not src.is_file() or src.name in ("image-manifest.json", "mihomo-manifest.json"):
             continue
         content = render_text(
             src.read_text(encoding="utf-8"),

@@ -20,25 +20,20 @@ cchouse runs a small isolated virtual machine on your computer for Claude on the
 
 ### Let AI install it for you
 
-If you use an AI coding assistant such as Claude Code, Codex, or Cursor, copy the prompt below and send it to your assistant. The recommended flow lets the installer read your copied node link directly from the clipboard and clear it afterward without pasting the link into chat (note: the AI has local command permissions, so this relies on instruction compliance rather than technical isolation; if you prefer, run the home-page command in your own terminal and paste it yourself; see [AGENTS.md](AGENTS.md) for agent rules):
+Requires an AI assistant that can run local commands (such as Claude Code, Codex, or Cursor; web-only chat AI will not work). Copy and send this prompt:
 
 ```text
-Help me install cchouse (https://github.com/nana-fox/cchouse). Please follow these steps strictly:
-1. Check my computer first (only Apple Silicon Mac and Windows x64 are supported; if anything else, tell me it is unsupported and stop) and verify free disk space (at least 9 GB / 12 GB recommended on Mac; at least 7 GB / 10 GB recommended on Windows). Read AGENTS.md and README.md in this repo, and use only the currently version-pinned bootstrap command from the README home page without altering its download/verification part.
-2. Provide the node link using one of these three options (option (a) is recommended; all three verify the node type and connectivity in steps 1–2 and stop immediately if unsupported or unreachable—if so, relay the result to me and stop):
-   (a) Recommended (clipboard): tell me verbatim: "Please copy your node link first—no need to send it to me. Next, the installer will read the link directly from your clipboard on your computer; it will not be displayed or sent to me, and the clipboard will be cleared once read. Reply 'ready' when you've copied it." Once I reply "ready", run the home-page bootstrap command with `--link-clipboard` (Windows: `-LinkClipboard`) appended.
-   (b) Existing link file: if I give you the path to a file containing my node link, run the home-page bootstrap command with `--link-file <path>` (Windows: `-LinkFile <path>`) appended; never open, read, or display that file, and remind me to delete it when done.
-   (c) Sending the link directly (not recommended, as the link passes through the AI provider): if I paste the link to you directly, write it to a temporary file readable only by the current user (never pass the link in command-line arguments), install with `--link-file <temp-file>` (Windows: `-LinkFile`), and delete that temporary file immediately afterward.
-   (Alternative: if I prefer manual input, give me the plain home-page command so I can run it in my own terminal window and paste the link with hidden input.)
-3. Rules: never run `pbpaste`, `Get-Clipboard`, or any command to read the clipboard or `instance.env` yourself, and never scan other proxy apps on my computer—only run the home-page bootstrap command.
-4. After installation finishes, run `cchouse status --tag cc01` to confirm the VM status (if `cchouse` is not found, use the full path: Mac `~/.local/bin/cchouse`, Windows PowerShell `& "$env:LOCALAPPDATA\cchouse\bin\cchouse.cmd"`). If anything fails, troubleshoot with `scripts/doctor.py` per AGENTS.md and rerun after fixing.
-5. Once everything passes, remind me to open check.html on the VM desktop to confirm all checks are green and sign in to Claude inside the VM myself.
+Help me install cchouse (https://github.com/nana-fox/cchouse) on this computer,
+following the "AI 带装" section in AGENTS.md step by step.
 ```
+
+- Recommended: copy your node link(s) to the clipboard so the installer reads and clears them locally without pasting links into chat (see [AGENTS.md](AGENTS.md#ai-带装)).
+- One-click install supports three common setups: a single fixed-IP SOCKS5 / HTTP(S) node, a single VLESS / Trojan / SS node, or a two-hop chain (encrypted front + fixed-IP SOCKS5 / HTTP(S) exit — copy both lines).
 
 Up and running in 3 steps (see [Supported computers](#supported-computers) for measured empty-cache install times):
 
 1. **Run one command**: copy the locked command for your platform below (downloads and verifies the guest image and official Claude Code package; see [Image manifest](guest-linux/image-manifest.json)).
-2. **Paste your node**: enter your own fixed SOCKS5 or HTTP(S) node link (hidden input). The installer provisions the VM, aligns locale and time zone with your exit IP, runs automated checks, and saves a clean snapshot.
+2. **Paste your node**: enter 1 fixed node link (SOCKS5 / HTTP(S) / VLESS / Trojan / SS) or 2 links for two-hop (front + fixed exit) with hidden input. The installer verifies the node and fixed IP locally first, then provisions the VM, aligns locale and time zone, runs automated checks, and saves a clean snapshot.
 3. **Verify green, then sign in**: open the desktop network check page inside the VM. Once every check is green, sign in to Claude inside the VM.
 
 ### Windows (x64)
@@ -59,7 +54,7 @@ Requires Apple Silicon (M series) and macOS 13.0 Ventura or later. Open Terminal
 f=$(mktemp -t cchouse-bootstrap) && curl -fsSLo "$f" https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.10/bootstrap-macos.sh && printf '%s  %s\n' '416fead5541da12efcb4d5db626dd5e615b5be4fea821d01e759731b23e333f9' "$f" | shasum -a 256 -c - && /bin/bash "$f" --cleanup-bootstrap
 ```
 
-When prompted, paste your SOCKS5 or HTTP(S) node link (hidden input).
+When prompted, paste your node link (SOCKS5 / HTTP(S) / VLESS / Trojan / SS; for two-hop, paste the front link first and then the exit link; hidden input).
 
 ### Open the guest and sign in
 
@@ -156,7 +151,11 @@ In addition to the guest image and official Claude Code package, the bootstrap s
 
 ## What you need
 
-- **One SOCKS5 or HTTP(S) node**. Bring a node with a fixed IP and a stable region. See the [advanced proxy guide](docs/proxy-modes.md) for VLESS, Trojan, Shadowsocks, and two-hop routing.
+- **A fixed-IP proxy setup** (one-click install supports three common setups):
+  1. A single fixed-IP SOCKS5 / HTTP(S) node;
+  2. A single encrypted VLESS / Trojan / SS node (self-hosted VPS acting as the exit);
+  3. Two-hop: an encrypted front node (VLESS / Trojan / SS) + a fixed-IP SOCKS5 / HTTP(S) exit (Stripe defaults to routing via the front hop).
+  See the [proxy modes guide](docs/proxy-modes.md) for advanced topologies.
 - **The computer**: 16 GB of memory recommended. Allow at least **7 GB** of free space on Windows (**10 GB** recommended), or at least **9 GB** on Apple Silicon (**12 GB** recommended), including the downloads.
 
 > **About Stripe**: some nodes block the payment service Stripe. That only affects paying on the claude.ai website. It does not affect signing in or day-to-day use. The installer warns you and does not stop the install. The check only tests whether Stripe can be reached. It does not mean a payment will succeed. You can add a node used only for payment. See [docs/proxy-modes.md](docs/proxy-modes.md).

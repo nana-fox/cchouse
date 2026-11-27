@@ -31,6 +31,7 @@ import socket
 import stat
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -47,11 +48,13 @@ import share as share_mod  # noqa: E402
 
 REJECTED_SCHEMES = frozenset(set(render_mod.REJECTED_UDP_TYPES) | {"wg", "quic"})
 SUPPORTED_SCHEMES = frozenset({"socks5", "socks5h", "socks", "http", "https", "vless", "trojan", "ss"})
-QUICK_NODE_TYPES = frozenset({"socks5", "http"})
+ENCRYPTED_NODE_TYPES = frozenset({"vless", "trojan", "ss"})
+EXIT_PROXY_TYPES = frozenset({"socks5", "http"})
+QUICK_NODE_TYPES = frozenset({"socks5", "http", "vless", "trojan", "ss"})
 ADVANCED_NODE_GUIDE = "https://github.com/nana-fox/cchouse/blob/main/docs/proxy-modes.md#单节点支持的协议single_type"
 ADVANCED_NODE_MESSAGE = (
-    "一键安装接收 SOCKS5 / HTTP(S)。该协议请按进阶文档手动配置，"
-    "需要节点参数、实际出口 IPv4、国家/地区代码、ASN 和 IANA 时区。"
+    "一键安装支持单个 SOCKS5 / HTTP(S) / VLESS / Trojan / SS 节点，或两跳「前置 + SOCKS5/HTTP 固定出口」。"
+    "其他协议或更复杂拓扑请按进阶文档手动配置。"
     f"\n  {ADVANCED_NODE_GUIDE}"
 )
 SAFE_HOST_RE = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -129,8 +132,8 @@ def _is_owned_by_current_user(path, st):
         kernel32.CloseHandle(token)
 
 
-def read_link_file(path):
-    """安全读取节点链接文件第一条非空行；绝不在异常或输出中回显文件内容。"""
+def read_link_file_lines(path):
+    """安全读取节点链接文件中所有非空行；绝不在异常或输出中回显文件内容。"""
     p = Path(path).expanduser()
     try:
         st = os.lstat(p)
@@ -159,11 +162,15 @@ def read_link_file(path):
         text = raw_bytes.decode("utf-8-sig")
     except UnicodeDecodeError:
         raise NodeLinkError(f"链接文件不是有效的 UTF-8 文本：{p}") from None
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped:
-            return stripped
-    raise NodeLinkError(f"链接文件为空，未找到节点链接：{p}")
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        raise NodeLinkError(f"链接文件为空，未找到节点链接：{p}")
+    return lines
+
+
+def read_link_file(path):
+    """安全读取节点链接文件第一条非空行；绝不在异常或输出中回显文件内容。"""
+    return read_link_file_lines(path)[0]
 
 
 CLIPBOARD_NOT_LINK_MSG = "剪贴板里不是节点链接，请复制后重试"
@@ -207,19 +214,23 @@ def _read_clipboard_raw():
     return proc.stdout or ""
 
 
-def read_clipboard_link():
-    """从剪贴板读取第一条非空行作为节点链接；绝不回显剪贴板内容。"""
+def read_clipboard_links():
+    """从剪贴板读取所有非空行作为节点链接列表；绝不回显剪贴板内容。"""
     try:
         text = _read_clipboard_raw()
     except RuntimeError:
         raise NodeLinkError(CLIPBOARD_UNAVAILABLE_MSG) from None
     if text.startswith("\ufeff"):
         text = text[1:]
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped:
-            return stripped
-    raise NodeLinkError(CLIPBOARD_NOT_LINK_MSG)
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        raise NodeLinkError(CLIPBOARD_NOT_LINK_MSG)
+    return lines
+
+
+def read_clipboard_link():
+    """从剪贴板读取第一条非空行作为节点链接；绝不回显剪贴板内容。"""
+    return read_clipboard_links()[0]
 
 
 def clear_clipboard():
@@ -483,6 +494,51 @@ def parse_node_link(raw_link):
     return fields
 
 
+def _to_via_fields(single_fields):
+    return {f"SINGLE_VIA_{k[len('SINGLE_'):]}": v for k, v in single_fields.items() if k.startswith("SINGLE_")}
+
+
+def parse_and_classify_links(raw_links):
+    """解析 1 或 2 条节点链接并分类为 (exit_fields, via_fields)；绝不回显原始链接或凭据。
+
+    规则：
+    - 1 条：任意支持协议（socks5/http(s)/vless/trojan/ss）→ 单节点。
+    - 2 条：其中 vless/trojan/ss 那条是前置，socks5/http(s) 那条是出口；
+      两条都是 socks5/http(s) 时按「第一行前置、第二行出口」；
+      出口必须是 socks5/http(s)；超过 2 条或两条都是加密协议 → 拒绝并说明。
+    """
+    links = [s.strip() for s in (raw_links or []) if isinstance(s, str) and s.strip()]
+    if not links:
+        raise NodeLinkError("节点链接不能为空")
+    if len(links) > 2:
+        raise NodeLinkError(
+            "一键安装最多支持 2 条节点链接（1 条单节点，或 2 条「前置 + 固定出口」）；"
+            "三跳及以上请参考 docs/manual-install.md。"
+        )
+    parsed = [parse_node_link(link) for link in links]
+    if len(parsed) == 1:
+        return parsed[0], None
+
+    first, second = parsed
+    first_enc = first["SINGLE_TYPE"] in ENCRYPTED_NODE_TYPES
+    second_enc = second["SINGLE_TYPE"] in ENCRYPTED_NODE_TYPES
+    if first_enc and second_enc:
+        raise NodeLinkError(
+            "两条链接都是加密协议（VLESS / Trojan / SS）。两跳模式要求出口必须是 SOCKS5 或 HTTP(S) 固定 IP 节点。"
+        )
+    if first_enc and not second_enc:
+        front, exit_node = first, second
+    elif not first_enc and second_enc:
+        front, exit_node = second, first
+    else:
+        # 两条都是 socks5/http(s)：第一行前置、第二行出口
+        front, exit_node = first, second
+
+    if exit_node["SINGLE_TYPE"] not in EXIT_PROXY_TYPES:
+        raise NodeLinkError("两跳模式的出口节点必须是 SOCKS5 或 HTTP(S) 协议。")
+    return exit_node, _to_via_fields(front)
+
+
 def detect_route():
     sys_name = platform.system()
     arch = preflight_mod.detect_arch()
@@ -520,60 +576,292 @@ def resolve_server_ipv4(server):
         return ""
 
 
-def probe_egress_via_proxy(fields, timeout=15):
-    """用系统 curl 通过该节点探测实际出口，代理凭据只经 stdin 传入。"""
+def _pick_free_loopback_port():
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+    finally:
+        sock.close()
+
+
+def _probe_orig_host(fields, prefix):
+    server = (fields.get(f"{prefix}_SERVER") or "").strip()
+    pinned = (fields.get(f"{prefix}_SERVER_IP") or "").strip()
+    if server and not render_mod.is_ipv4(server):
+        return server
+    return None if pinned else None
+
+
+def build_host_probe_config(single_fields, listen_port, via_fields=None):
+    """生成宿主临时 mihomo 最小探测配置：仅 127.0.0.1 mixed-port，无 TUN/控制器/DNS，仅 MATCH,<出口>，绝无 DIRECT。"""
+    merged = dict(single_fields)
+    if via_fields:
+        merged.update(via_fields)
+    exit_ip = (merged.get("SINGLE_SERVER_IP") or "").strip()
+    if not render_mod.is_ipv4(exit_ip):
+        raise StepError("缺少出口节点的 IPv4 地址，无法生成探测配置。")
+    exit_orig = _probe_orig_host(merged, "SINGLE")
+    if via_fields:
+        via_ip = (merged.get("SINGLE_VIA_SERVER_IP") or "").strip()
+        if not render_mod.is_ipv4(via_ip):
+            raise StepError("缺少前置节点的 IPv4 地址，无法生成探测配置。")
+        via_orig = _probe_orig_host(merged, "SINGLE_VIA")
+        front_block, _ = render_mod.build_proxy_node_lines(merged, "SINGLE_VIA", "PROBE-Front", via_ip, via_orig)
+        exit_block, _ = render_mod.build_proxy_node_lines(
+            merged, "SINGLE", "PROBE-Exit", exit_ip, exit_orig, dialer_proxy="PROBE-Front"
+        )
+        proxy_block = front_block + "\n" + exit_block
+    else:
+        proxy_block, _ = render_mod.build_proxy_node_lines(merged, "SINGLE", "PROBE-Exit", exit_ip, exit_orig)
+    config_text = (
+        "---\n"
+        f"mixed-port: {int(listen_port)}\n"
+        "bind-address: 127.0.0.1\n"
+        "allow-lan: false\n"
+        "mode: rule\n"
+        "log-level: warning\n"
+        "ipv6: false\n"
+        "proxies:\n"
+        f"{proxy_block}\n"
+        "rules:\n"
+        "- MATCH,PROBE-Exit\n"
+    )
+    render_mod.assert_no_direct_rules(config_text, "probe-config.yaml")
+    return config_text
+
+
+def build_host_front_probe_config(via_fields, listen_port):
+    """仅用于两跳失败时诊断前置节点本身是否连通的最小 mihomo 配置（无 DIRECT、仅 127.0.0.1）。"""
+    via_ip = (via_fields.get("SINGLE_VIA_SERVER_IP") or "").strip()
+    if not render_mod.is_ipv4(via_ip):
+        raise StepError("缺少前置节点的 IPv4 地址，无法生成探测配置。")
+    via_orig = _probe_orig_host(via_fields, "SINGLE_VIA")
+    front_block, _ = render_mod.build_proxy_node_lines(via_fields, "SINGLE_VIA", "PROBE-Front", via_ip, via_orig)
+    config_text = (
+        "---\n"
+        f"mixed-port: {int(listen_port)}\n"
+        "bind-address: 127.0.0.1\n"
+        "allow-lan: false\n"
+        "mode: rule\n"
+        "log-level: warning\n"
+        "ipv6: false\n"
+        "proxies:\n"
+        f"{front_block}\n"
+        "rules:\n"
+        "- MATCH,PROBE-Front\n"
+    )
+    render_mod.assert_no_direct_rules(config_text, "probe-front-config.yaml")
+    return config_text
+
+
+def _write_probe_config_secure(tmp_dir, config_text):
+    cfg_path = Path(tmp_dir) / "config.yaml"
+    data = config_text.replace("\r\n", "\n").encode("utf-8")
+    if os.name != "nt":
+        os.chmod(tmp_dir, 0o700)
+        fd = os.open(str(cfg_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        os.chmod(cfg_path, 0o600)
+    else:
+        cfg_path.write_bytes(data)
+    return cfg_path
+
+
+def _wait_loopback_ready(port, proc, wait_seconds=5.0):
+    deadline = time.monotonic() + wait_seconds
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            return False
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            s.settimeout(0.2)
+            s.connect(("127.0.0.1", int(port)))
+            return True
+        except OSError:
+            time.sleep(0.1)
+        finally:
+            s.close()
+    return False
+
+
+def _stop_temp_mihomo(proc):
+    output = ""
+    if proc is None:
+        return output
+    try:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                out_bytes, _ = proc.communicate(timeout=3)
+                output = (out_bytes or b"").decode("utf-8", errors="replace")
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                out_bytes, _ = proc.communicate(timeout=3)
+                output = (out_bytes or b"").decode("utf-8", errors="replace")
+        else:
+            out_bytes, _ = proc.communicate(timeout=2)
+            output = (out_bytes or b"").decode("utf-8", errors="replace")
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+    return output
+
+
+def _curl_via_local_mihomo(port, url, timeout=15):
     windows = platform.system() == "Windows"
     curl = shutil.which("curl.exe" if windows else "curl")
     if curl is None:
-        return None
-    host = fields["SINGLE_SERVER_IP"]
-    port = fields["SINGLE_PORT"]
-    scheme = "socks5h" if fields["SINGLE_TYPE"] == "socks5" else "http"
-    config = []
-    if fields["SINGLE_TLS"] == "true":
-        scheme = "https"
-        server = fields["SINGLE_SERVER"]
-        config.append(f'resolve = "{server}:{port}:{host}"')
-        host = server
-    user = urllib.parse.quote(fields["SINGLE_USER"], safe="")
-    password = urllib.parse.quote(fields["SINGLE_PASS"], safe="")
-    auth = f"{user}:{password}@" if user or password else ""
-    config.append(f'proxy = "{scheme}://{auth}{host}:{port}"')
-    command = [
-        curl, "-q", "--silent", "--fail", "--noproxy", "", "--max-time", str(timeout),
-        "--config", "-", "https://ipinfo.io/json",
+        raise StepError("系统缺少 curl，无法进行出口探测。")
+    cmd = [
+        curl, "-q", "--silent", "--show-error", "--noproxy", "",
+        "--proxy", f"http://127.0.0.1:{int(port)}",
+        "--max-time", str(timeout),
+        url,
     ]
-    config_input = "\n".join(config) + "\n"
-    # Each attempt gets a separate response buffer, including partial transfers.
-    for delay in ((0, 1, 2) if windows else (0,)):
-        if delay:
-            time.sleep(delay)
-        try:
-            proc = subprocess.run(
-                command, input=config_input, capture_output=True, text=True,
-                encoding="utf-8", errors="replace", timeout=timeout + 2,
-            )
-        except subprocess.TimeoutExpired:
-            continue
-        except OSError:
-            return None
-        if proc.returncode != 28:
-            break
-    else:
-        return None
-    if proc.returncode != 0:
-        return None
     try:
-        info = json.loads(proc.stdout)
-        asn = (info.get("org") or "").split(maxsplit=1)
-        return {
-            "ip": info.get("ip") or "",
-            "timezone": info.get("timezone") or "",
-            "country": info.get("country") or "",
-            "asn": asn[0] if asn else "",
-        }
-    except (ValueError, AttributeError):
-        return None
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout + 3,
+        )
+        return proc.returncode, proc.stdout or "", proc.stderr or ""
+    except subprocess.TimeoutExpired:
+        return 28, "", "timeout"
+    except OSError as exc:
+        return 1, "", type(exc).__name__
+
+
+def _probe_front_reachable(mihomo_bin, via_fields, timeout=8):
+    """快速探测两跳中的前置节点自身是否连通（返回 True/False，绝不泄露凭据）。"""
+    tmp_dir = Path(tempfile.mkdtemp(prefix="cchouse-probe-front-"))
+    proc = None
+    try:
+        port = _pick_free_loopback_port()
+        cfg_text = build_host_front_probe_config(via_fields, port)
+        cfg_path = _write_probe_config_secure(tmp_dir, cfg_text)
+        proc = subprocess.Popen(
+            [str(mihomo_bin), "-d", str(tmp_dir), "-f", str(cfg_path)],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        )
+        if not _wait_loopback_ready(port, proc, wait_seconds=4.0):
+            return False
+        rc, out, _ = _curl_via_local_mihomo(port, "https://www.cloudflare.com/cdn-cgi/trace", timeout=timeout)
+        return rc == 0 and "ip=" in out
+    except Exception:
+        return False
+    finally:
+        _stop_temp_mihomo(proc)
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def _classify_probe_failure(mihomo_log, curl_rc, curl_err, has_via, front_ok=None):
+    """将探测失败转为大白话原因（绝不回显链接、地址或凭据）。"""
+    blob = f"{mihomo_log}\n{curl_err}".lower()
+    is_auth = any(k in blob for k in (
+        "407", "authentication", "auth fail", "auth error", "username/password",
+        "invalid credential", "proxy auth", "socks5 auth", "wrong password",
+    ))
+    is_tls = any(k in blob for k in (
+        "reality", "x509", "certificate", "tls:", "handshake", "bad record mac", "unexpected eof",
+    ))
+    is_timeout = curl_rc == 28 or any(k in blob for k in ("i/o timeout", "context deadline exceeded", "timed out"))
+
+    if has_via:
+        if is_auth:
+            return "出口节点认证失败（用户名或密码错误），请检查第二条 SOCKS5/HTTP 出口链接后重试。"
+        if front_ok is False:
+            if is_tls:
+                return "前置节点连不上（TLS / REALITY 握手失败），请检查第一条加密前置链接的公钥（pbk）、SNI 或参数。"
+            if is_timeout:
+                return "前置节点连接超时，请检查第一条前置链接的地址、端口及当前网络是否可达。"
+            return "前置节点连不上，请检查第一条前置链接的地址、端口、协议参数或服务端状态。"
+        if is_timeout:
+            return "前置节点正常，但出口节点超时，请检查第二条 SOCKS5/HTTP 出口链接是否可用或已过期。"
+        return "前置节点正常，但出口节点连不上或认证失败，请检查第二条 SOCKS5/HTTP 出口链接的地址、端口和账号密码。"
+
+    if is_auth:
+        return "节点认证失败（用户名或密码错误），请检查节点链接后重试。"
+    if is_tls:
+        return "节点 TLS / REALITY 握手失败，请检查节点链接中的公钥（pbk）、SNI 或证书配置。"
+    if is_timeout:
+        return "连接节点超时，请检查节点地址、端口是否可达或网络是否正常。"
+    return "无法通过该节点访问外网（连接被拒绝或中断），请检查节点服务、端口与协议参数是否正确。"
+
+
+def probe_egress_via_proxy(single_fields, via_fields=None, timeout=15, probe_count=3, probe_interval=2.0, mihomo_bin=None):
+    """统一用宿主临时 mihomo（与客机同版本）探测出口 IP/国家/ASN/时区；间隔几秒测 3 次，IP 不一致即停。"""
+    if mihomo_bin is None:
+        try:
+            mihomo_bin = downloads.ensure_host_mihomo(
+                ROOT / "guest-linux" / "mihomo-manifest.json",
+                default_private_root() / "bootstrap",
+            )
+        except downloads.DownloadError as exc:
+            raise StepError(f"准备宿主临时探测程序 mihomo 失败：{exc}") from None
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix="cchouse-probe-"))
+    proc = None
+    mihomo_log = ""
+    last_rc = 0
+    last_err = ""
+    try:
+        port = _pick_free_loopback_port()
+        cfg_text = build_host_probe_config(single_fields, port, via_fields=via_fields)
+        cfg_path = _write_probe_config_secure(tmp_dir, cfg_text)
+        try:
+            proc = subprocess.Popen(
+                [str(mihomo_bin), "-d", str(tmp_dir), "-f", str(cfg_path)],
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            )
+        except OSError as exc:
+            raise StepError(f"启动宿主临时 mihomo 失败（{type(exc).__name__}）") from None
+
+        if not _wait_loopback_ready(port, proc, wait_seconds=5.0):
+            mihomo_log = _stop_temp_mihomo(proc)
+            proc = None
+            raise StepError("宿主临时 mihomo 未能启动监听本地端口，请检查节点参数格式是否正确。")
+
+        first_result = None
+        for idx in range(max(1, int(probe_count))):
+            if idx > 0 and probe_interval > 0:
+                time.sleep(probe_interval)
+            rc, out, err = _curl_via_local_mihomo(port, "https://ipinfo.io/json", timeout=timeout)
+            last_rc, last_err = rc, err
+            if rc != 0 or not out.strip():
+                mihomo_log = _stop_temp_mihomo(proc)
+                proc = None
+                front_ok = _probe_front_reachable(mihomo_bin, via_fields) if via_fields else None
+                raise StepError(_classify_probe_failure(mihomo_log, last_rc, last_err, bool(via_fields), front_ok=front_ok))
+            try:
+                info = json.loads(out)
+                asn = (info.get("org") or "").split(maxsplit=1)
+                cur = {
+                    "ip": (info.get("ip") or "").strip(),
+                    "timezone": (info.get("timezone") or "").strip(),
+                    "country": (info.get("country") or "").strip(),
+                    "asn": asn[0] if asn else "",
+                }
+            except (ValueError, AttributeError):
+                mihomo_log = _stop_temp_mihomo(proc)
+                proc = None
+                front_ok = _probe_front_reachable(mihomo_bin, via_fields) if via_fields else None
+                raise StepError(_classify_probe_failure(mihomo_log, last_rc, last_err, bool(via_fields), front_ok=front_ok))
+
+            if not render_mod.is_ipv4(cur["ip"]):
+                raise StepError("节点返回的出口地址不是有效 IPv4，请确认节点支持 IPv4 出口。")
+            if first_result is None:
+                first_result = cur
+            elif cur["ip"] != first_result["ip"]:
+                raise StepError(
+                    "连续 3 次探测得到的出口 IP 不一致，说明这不是固定 IP 节点。"
+                    "cchouse 要求固定 IP 出口，请更换固定 IP 节点后重试。"
+                )
+        return first_result
+    finally:
+        _stop_temp_mihomo(proc)
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 def generate_ssh_keypair(private_dir, tag):
@@ -615,7 +903,7 @@ def _env_quote_single(val):
     return f"'{val}'"
 
 
-def format_instance_env(tag, route, private_dir, ssh_key, ssh_pubkey, single_fields, net_cfg, egress_cfg, backend=None, ssh_port=None):
+def format_instance_env(tag, route, private_dir, ssh_key, ssh_pubkey, single_fields, net_cfg, egress_cfg, backend=None, ssh_port=None, via_fields=None):
     if backend == "virtualbox":
         guest_if = VBOX_GUEST_IF
     else:
@@ -648,11 +936,12 @@ def format_instance_env(tag, route, private_dir, ssh_key, ssh_pubkey, single_fie
         f"EXPECTED_EGRESS_LOC={egress_cfg['loc']}",
         f"EXPECTED_EGRESS_ASN={egress_cfg['asn']}",
     ]
+    stripe_mode = "front" if via_fields else "off"
     lines = [
         "# Generated by scripts/cchouse.py up (600 permissions; keep private, never commit)",
         "GUEST_OS=linux",
         "EXIT_MODE=single",
-        "STRIPE_EXIT_MODE=off",
+        f"STRIPE_EXIT_MODE={stripe_mode}",
         "",
         f"TAG={tag}",
         f"VM_NAME=claude-{tag}",
@@ -685,6 +974,28 @@ def format_instance_env(tag, route, private_dir, ssh_key, ssh_pubkey, single_fie
         f"SINGLE_TLS={_env_quote_single(single_fields['SINGLE_TLS'])}",
         f"SINGLE_HOST_KEY={_env_quote_single(single_fields['SINGLE_HOST_KEY'])}",
     ]
+    if via_fields:
+        lines += [
+            "",
+            f"SINGLE_VIA_TYPE={via_fields['SINGLE_VIA_TYPE']}",
+            f"SINGLE_VIA_SERVER={_env_quote_single(via_fields['SINGLE_VIA_SERVER'])}",
+            f"SINGLE_VIA_SERVER_IP={_env_quote_single(via_fields['SINGLE_VIA_SERVER_IP'])}",
+            f"SINGLE_VIA_PORT={_env_quote_single(via_fields['SINGLE_VIA_PORT'])}",
+            f"SINGLE_VIA_USER={_env_quote_single(via_fields['SINGLE_VIA_USER'])}",
+            f"SINGLE_VIA_PASS={_env_quote_single(via_fields['SINGLE_VIA_PASS'])}",
+            f"SINGLE_VIA_UUID={_env_quote_single(via_fields['SINGLE_VIA_UUID'])}",
+            f"SINGLE_VIA_SNI={_env_quote_single(via_fields['SINGLE_VIA_SNI'])}",
+            f"SINGLE_VIA_FINGERPRINT={_env_quote_single(via_fields['SINGLE_VIA_FINGERPRINT'])}",
+            f"SINGLE_VIA_FLOW={_env_quote_single(via_fields['SINGLE_VIA_FLOW'])}",
+            f"SINGLE_VIA_NETWORK={_env_quote_single(via_fields['SINGLE_VIA_NETWORK'])}",
+            f"SINGLE_VIA_WS_PATH={_env_quote_single(via_fields['SINGLE_VIA_WS_PATH'])}",
+            f"SINGLE_VIA_WS_HOST={_env_quote_single(via_fields['SINGLE_VIA_WS_HOST'])}",
+            f"SINGLE_VIA_PUBLIC_KEY={_env_quote_single(via_fields['SINGLE_VIA_PUBLIC_KEY'])}",
+            f"SINGLE_VIA_SHORT_ID={_env_quote_single(via_fields['SINGLE_VIA_SHORT_ID'])}",
+            f"SINGLE_VIA_CIPHER={_env_quote_single(via_fields['SINGLE_VIA_CIPHER'])}",
+            f"SINGLE_VIA_TLS={_env_quote_single(via_fields['SINGLE_VIA_TLS'])}",
+            f"SINGLE_VIA_HOST_KEY={_env_quote_single(via_fields['SINGLE_VIA_HOST_KEY'])}",
+        ]
     return "\n".join(lines) + "\n"
 
 
@@ -1307,7 +1618,7 @@ def _needs_interactive_node_input(ctx):
 
 
 def do_config(ctx):
-    """第一轮逻辑：无回显读取节点链接（或安全读取 --link-clipboard / --link-file）→ 解析 → 探测出口 → 生成密钥 → 写 600 权限 instance.env。"""
+    """第一轮逻辑：无回显读取 1 或 2 条节点链接（或安全读取 --link-clipboard / --link-file）→ 分类解析 → 临时 mihomo 探测出口 → 生成密钥 → 写 600 权限 instance.env。"""
     args = ctx.args
     tag, route, private_dir = ctx.tag, ctx.route, ctx.private_dir
     link_file = getattr(args, "link_file", None)
@@ -1316,50 +1627,80 @@ def do_config(ctx):
         raise StepError("--link-file 与 --link-clipboard 不能同时使用，请二选一。")
     if not link_file and not link_clipboard and not args.link_stdin and not _stdin_is_tty():
         raise StepError(_need_tty_message(_home_install_cmd(ctx)), exit_code=EXIT_NEED_TTY)
+
+    raw_links = []
     try:
         if link_clipboard:
-            raw_link = read_clipboard_link()
+            raw_links = read_clipboard_links()
         elif link_file:
-            raw_link = read_link_file(link_file)
+            raw_links = read_link_file_lines(link_file)
         elif args.link_stdin:
-            raw_link = sys.stdin.readline()
-            if raw_link == "":
+            raw_text = sys.stdin.read()
+            if raw_text.startswith("\ufeff"):
+                raw_text = raw_text[1:]
+            raw_links = [line.strip() for line in raw_text.splitlines() if line.strip()]
+            if not raw_links:
                 raise EOFError
-            raw_link = raw_link.rstrip("\r\n")
         else:
             with ctx.downloader.pause_logs():
-                raw_link = getpass.getpass("请粘贴单节点代理链接（输入不回显，支持 SOCKS5 / HTTP(S)）: ")
+                first_link = getpass.getpass("请粘贴节点链接（输入不回显，支持 SOCKS5 / HTTP(S) / VLESS / Trojan / SS）: ")
+            raw_links = [first_link]
+            # 先解析第一条以确定是否为加密协议，若是则追问是否有第二条出口链接
+            first_parsed = parse_node_link(first_link)
+            if first_parsed["SINGLE_TYPE"] in ENCRYPTED_NODE_TYPES:
+                with ctx.downloader.pause_logs():
+                    second_link = getpass.getpass(
+                        "如果你的固定 IP 出口是另一条 SOCKS5/HTTP 链接，请粘贴；没有直接回车: "
+                    )
+                if second_link.strip():
+                    raw_links.append(second_link)
     except NodeLinkError as exc:
-        raise StepError(str(exc)) from None
+        if link_clipboard and str(exc) != CLIPBOARD_UNAVAILABLE_MSG:
+            raise StepError(CLIPBOARD_NOT_LINK_MSG) from None
+        raise StepError(str(exc) if (link_file or link_clipboard) else f"节点链接校验失败：{exc}") from None
     except EOFError:
         raise StepError("输入已结束，请在终端交互运行，或用 --link-clipboard / --link-file / --link-stdin 提供节点链接") from None
     except KeyboardInterrupt:
         raise StepError("已取消输入节点链接") from None
 
     try:
-        if raw_link.strip().split("://", 1)[0].strip().lower() in ("vless", "trojan", "ss"):
-            raise StepError(ADVANCED_NODE_MESSAGE)
-        single_fields = parse_node_link(raw_link)
+        single_fields, via_fields = parse_and_classify_links(raw_links)
     except NodeLinkError as exc:
-        if link_clipboard:
+        if link_clipboard and len(raw_links) == 1 and "://" not in raw_links[0]:
+            raise StepError(CLIPBOARD_NOT_LINK_MSG) from None
+        if link_clipboard and "缺少协议头" in str(exc):
             raise StepError(CLIPBOARD_NOT_LINK_MSG) from None
         raise StepError(f"节点链接校验失败：{exc}") from None
     finally:
-        raw_link = ""
+        raw_links = []
 
     if not single_fields["SINGLE_SERVER_IP"]:
         resolved = resolve_server_ipv4(single_fields["SINGLE_SERVER"])
         if resolved:
             single_fields["SINGLE_SERVER_IP"] = resolved
         else:
-            raise StepError("宿主机无法解析节点的 IPv4 地址。请检查节点地址与 DNS 后重试。")
+            raise StepError("宿主机无法解析出口节点的 IPv4 地址。请检查节点地址与 DNS 后重试。")
+    if via_fields and not via_fields["SINGLE_VIA_SERVER_IP"]:
+        resolved_via = resolve_server_ipv4(via_fields["SINGLE_VIA_SERVER"])
+        if resolved_via:
+            via_fields["SINGLE_VIA_SERVER_IP"] = resolved_via
+        else:
+            raise StepError("宿主机无法解析前置节点的 IPv4 地址。请检查前置节点地址与 DNS 后重试。")
 
-    print(f"[cchouse up] 虚拟机后端：{ctx.backend} | 协议：{single_fields['SINGLE_TYPE']}")
+    if via_fields:
+        print(
+            f"[cchouse up] 虚拟机后端：{ctx.backend} | 模式：两跳（前置 {via_fields['SINGLE_VIA_TYPE']} → 出口 {single_fields['SINGLE_TYPE']}）"
+        )
+    else:
+        print(f"[cchouse up] 虚拟机后端：{ctx.backend} | 协议：{single_fields['SINGLE_TYPE']}")
 
     probed = None
     if not args.no_probe:
-        print("[cchouse up] 正在通过代理探测出口 IP 与时区（凭据不落盘不回显）...")
-        probed = probe_egress_via_proxy(single_fields)
+        print("[cchouse up] 正在通过宿主临时 mihomo 连续 3 次探测固定出口 IP 与时区（凭据不落盘不回显）...")
+        if via_fields:
+            probed = probe_egress_via_proxy(single_fields, via_fields=via_fields)
+        else:
+            probed = probe_egress_via_proxy(single_fields)
     probed = probed or {}
     egress_cfg = {
         "timezone": args.timezone or probed.get("timezone", ""),
@@ -1411,6 +1752,7 @@ def do_config(ctx):
         egress_cfg=egress_cfg,
         backend=ctx.backend,
         ssh_port=ssh_port,
+        via_fields=via_fields,
     )
     write_env_secure(ctx.env_path, env_text)
     print(f"[cchouse up] 已生成私有配置（权限 600）：{ctx.env_path}")
@@ -2085,12 +2427,21 @@ def print_handoff(ctx):
 
 
 def run_pipeline(ctx):
-    steps = UP_STEPS[:2] if ctx.args.config_only else UP_STEPS
+    if getattr(ctx.args, "skip_preflight", False) and ctx.args.config_only:
+        steps = UP_STEPS[:1]
+    elif ctx.args.config_only:
+        steps = UP_STEPS[:2]
+    else:
+        steps = UP_STEPS
     n = len(steps)
     if ctx.dry_run:
         print(f"[cchouse up] dry-run：路线 {ctx.route} | 虚拟机后端 {ctx.backend} | 不下载、不动虚拟机、不写 state.json")
-    ctx.start_downloads()
+    downloads_started = False
     for i, (name, title) in enumerate(steps, 1):
+        # 节点校验（config/preflight）通过后再启动大文件下载（VirtualBox/镜像/Claude Code），节点不行不白等
+        if not downloads_started and name not in ("config", "preflight"):
+            ctx.start_downloads()
+            downloads_started = True
         if ctx.done(name) and not needs_redo(ctx, name):
             print(f"\n[{i}/{n}] {title}：已完成（state.json），跳过")
             continue
@@ -2198,6 +2549,15 @@ def _conflict_object_msg(name, backend):
     )
 
 
+def _extract_env_node_fields(env, prefix):
+    suffixes = (
+        "TYPE", "SERVER", "SERVER_IP", "PORT", "USER", "PASS", "UUID",
+        "SNI", "FINGERPRINT", "FLOW", "NETWORK", "WS_PATH", "WS_HOST",
+        "PUBLIC_KEY", "SHORT_ID", "CIPHER", "TLS", "HOST_KEY",
+    )
+    return {f"{prefix}_{s}": env.get(f"{prefix}_{s}", "") for s in suffixes}
+
+
 def _verify_saved_egress(ctx):
     """重建前复验保存的节点可用性与出口一致性；不可用或出口漂移即停，绝不打印节点或凭据。"""
     if ctx.args.no_probe:
@@ -2210,15 +2570,7 @@ def _verify_saved_egress(ctx):
         return
     if env.get("SINGLE_TYPE", "") not in QUICK_NODE_TYPES:
         return
-    fields = {
-        "SINGLE_TYPE": env.get("SINGLE_TYPE", ""),
-        "SINGLE_SERVER": env.get("SINGLE_SERVER", ""),
-        "SINGLE_SERVER_IP": env.get("SINGLE_SERVER_IP", ""),
-        "SINGLE_PORT": env.get("SINGLE_PORT", ""),
-        "SINGLE_USER": env.get("SINGLE_USER", ""),
-        "SINGLE_PASS": env.get("SINGLE_PASS", ""),
-        "SINGLE_TLS": env.get("SINGLE_TLS", ""),
-    }
+    fields = _extract_env_node_fields(env, "SINGLE")
     if not fields["SINGLE_SERVER_IP"] and fields["SINGLE_SERVER"]:
         fields["SINGLE_SERVER_IP"] = resolve_server_ipv4(fields["SINGLE_SERVER"])
     if not fields["SINGLE_SERVER_IP"]:
@@ -2226,7 +2578,20 @@ def _verify_saved_egress(ctx):
             "保存的节点暂时无法验证（无法解析节点地址）。\n"
             "请检查节点，在恢复可用后重跑同一条命令；如果要更换节点，请加 --reconfigure 重新粘贴链接。"
         )
-    probed = probe_egress_via_proxy(fields)
+    via_fields = None
+    if render_mod.has_single_via(env):
+        via_fields = _extract_env_node_fields(env, "SINGLE_VIA")
+        if not via_fields["SINGLE_VIA_SERVER_IP"] and via_fields["SINGLE_VIA_SERVER"]:
+            via_fields["SINGLE_VIA_SERVER_IP"] = resolve_server_ipv4(via_fields["SINGLE_VIA_SERVER"])
+        if not via_fields["SINGLE_VIA_SERVER_IP"]:
+            raise StepError(
+                "保存的前置节点暂时无法验证（无法解析前置节点地址）。\n"
+                "请检查节点，在恢复可用后重跑同一条命令；如果要更换节点，请加 --reconfigure 重新粘贴链接。"
+            )
+    try:
+        probed = probe_egress_via_proxy(fields, via_fields=via_fields) if via_fields else probe_egress_via_proxy(fields)
+    except StepError:
+        probed = None
     if not probed or not probed.get("ip"):
         raise StepError(
             "保存的节点暂时无法验证（可能已过期或暂时不可用）。\n"
@@ -3291,6 +3656,7 @@ def main():
     p_up.add_argument("--share", default=None, help="自定义共享给客机 ~/shared 的宿主文件夹路径（默认 ~/cchouse-share/<tag>）")
     p_up.add_argument("--read-only", action="store_true", help="以只读方式共享宿主文件夹给客机")
     p_up.add_argument("--config-only", action="store_true", help="只生成 instance.env 并跑 preflight（第一轮行为），不下载不建虚拟机")
+    p_up.add_argument("--skip-preflight", action="store_true", help=argparse.SUPPRESS)
     p_up.add_argument("--dry-run", action="store_true", help="只演练：生成配置并跑 preflight，其余步骤只打印命令，不下载、不动虚拟机、不写 state.json")
 
     p_remove = sub.add_parser("remove", help="预览并卸载指定实例")

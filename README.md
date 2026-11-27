@@ -20,25 +20,20 @@
 
 ### 让 AI 帮你装
 
-如果你用 Claude Code、Codex、Cursor 等 AI 助手，把下面这段话直接复制给它，AI 会带你一步步装完。推荐复制节点链接后由安装程序直接读取剪贴板并清空，不用把链接发进对话（AI 有本机命令权限，这一条靠约定而不是技术隔离，介意可改为在自己终端粘贴；AI 执行规范见 [AGENTS.md](AGENTS.md)）：
+需要能在本机运行命令的 AI 助手（如 Claude Code、Codex、Cursor；网页版聊天 AI 不行）。把下面这段话直接发给它：
 
 ```text
-帮我安装 cchouse（https://github.com/nana-fox/cchouse）。请严格按以下步骤协助我：
-1. 先检查我的电脑类型（仅支持 Apple Silicon Mac 或 Windows x64，其他平台直接告诉我暂不支持并停止）和可用磁盘空间（Mac 至少 9 GB / 建议 12 GB，Windows 至少 7 GB / 建议 10 GB），并阅读仓库的 AGENTS.md 和 README.md（只使用 README 首页当前锁定版本的引导命令，不要改写下载校验段）。
-2. 提供节点链接（以下三种方式任选，推荐第一种；三种都会在安装第 1–2 步先检查节点类型与连通性，不支持或不可用会立即停下，你把结果转述给我并停止）：
-   (a) 推荐（剪贴板）：你对我说「请先复制你的节点链接，不用发给我。接下来安装程序会在你的电脑上直接读取剪贴板里的链接，链接不会显示出来，也不会传给我；读完会清空剪贴板。复制好了回复『好了』。」我回复「好了」后，你在首页引导命令末尾追加 `--link-clipboard`（Windows 为 `-LinkClipboard`）运行安装。
-   (b) 已有链接文件：如果我告诉你一个存放节点链接的文件路径，你在首页引导命令末尾追加 `--link-file <路径>`（Windows 为 `-LinkFile <路径>`）运行安装，不要打开、读取或显示该文件，装完提醒我删除。
-   (c) 直接发送链接（不推荐，链接会经过 AI 服务商）：如果我直接把链接发给你，你先把它写入仅当前用户可读的临时文件（不要把链接放进命令行参数），用 `--link-file <临时文件>`（Windows `-LinkFile`）安装，装完后立即删除该临时文件。
-   （备选：如果我更愿意手动输入，把原样首页命令给我，让我在自己终端窗口运行并无回显粘贴。）
-3. 规矩：你不要自己运行 `pbpaste`、`Get-Clipboard` 或任何读取剪贴板、读取 `instance.env` 的命令，也不要扫描我电脑上的其他代理软件，只运行首页引导命令。
-4. 安装完成后运行 `cchouse status --tag cc01` 确认状态（找不到 cchouse 时用完整路径：Mac `~/.local/bin/cchouse`，Windows PowerShell `& "$env:LOCALAPPDATA\cchouse\bin\cchouse.cmd"`）；若失败，按 AGENTS.md 用 `scripts/doctor.py` 排查并给出修复建议后重跑。
-5. 全部通过后，提醒我在虚拟机桌面打开 check.html 核对全绿，并在虚拟机内自行登录 Claude。
+帮我在这台电脑上安装 cchouse（https://github.com/nana-fox/cchouse），
+按仓库 AGENTS.md 里『AI 带装』一节一步步做。
 ```
+
+- 推荐复制节点链接后由安装程序直接读剪贴板并清空，不用把链接发进对话（详细规范见 [AGENTS.md](AGENTS.md#ai-带装)）。
+- 一键支持三种节点：单个 SOCKS5 / HTTP(S) 固定 IP、单个 VLESS / Trojan / SS 加密节点、或两跳（加密前置 + SOCKS5 / HTTP(S) 固定出口，两跳直接给两条）。
 
 三步完成部署（空缓存首次安装实测耗时见[支持的电脑](#支持的电脑)）：
 
 1. **运行一行命令**：按你的系统复制下方命令（自动下载并校验客机镜像与官方 Claude Code 包，见[镜像清单](guest-linux/image-manifest.json)）。
-2. **粘贴你的节点**：无回显输入你自己的 SOCKS5 或 HTTP(S) 固定节点链接，安装器自动建机、对齐出口时区与语言、运行网络验收并拍干净快照。
+2. **粘贴你的节点**：无回显输入 1 条固定节点链接（SOCKS5 / HTTP(S) / VLESS / Trojan / SS），或两跳的 2 条链接（加密前置 + 固定出口）。安装器会先在本地验证节点与固定 IP，再自动建机、对齐出口时区与语言、运行网络验收并拍干净快照。
 3. **全绿后登录**：在虚拟机桌面打开网络检查页，确认全部通过后，再在虚拟机内的浏览器与终端登录 Claude。
 
 ### Windows（x64）
@@ -59,7 +54,7 @@ $f = "$env:TEMP\cchouse-bootstrap-$([guid]::NewGuid().ToString('N')).ps1"; iwr h
 f=$(mktemp -t cchouse-bootstrap) && curl -fsSLo "$f" https://github.com/nana-fox/cchouse/releases/download/v2.0.0-preview.10/bootstrap-macos.sh && printf '%s  %s\n' '416fead5541da12efcb4d5db626dd5e615b5be4fea821d01e759731b23e333f9' "$f" | shasum -a 256 -c - && /bin/bash "$f" --cleanup-bootstrap
 ```
 
-按提示粘贴自己的 SOCKS5 或 HTTP(S) 节点链接，输入不会回显。
+按提示粘贴自己的节点链接（支持 SOCKS5 / HTTP(S) / VLESS / Trojan / SS；两跳可粘贴前置后再粘贴出口），输入不会回显。
 
 ### 打开客机并登录
 
@@ -156,7 +151,11 @@ f=$(mktemp -t cchouse-bootstrap) && curl -fsSLo "$f" https://github.com/nana-fox
 
 ## 你需要准备什么
 
-- **一个 SOCKS5 或 HTTP(S) 节点**。请自备固定 IP、地区稳定的节点。VLESS、Trojan、Shadowsocks 和两跳代理见 [进阶出口配置](docs/proxy-modes.md)。
+- **固定 IP 节点**（一键安装支持三种常见形态）：
+  1. 单个 SOCKS5 / HTTP(S) 固定 IP 节点；
+  2. 单个加密节点 VLESS / Trojan / SS（自建 VPS，出口即该节点）；
+  3. 两跳：加密前置（VLESS / Trojan / SS）+ SOCKS5 / HTTP(S) 固定 IP 出口（两跳时 Stripe 默认走前置直出）。
+  更多高级形态见 [出口配置说明](docs/proxy-modes.md)。
 - **电脑配置**：建议内存 16 GB。含所需下载，Windows 安装卷至少剩余 **7 GB**（建议 **10 GB**），Apple Silicon 至少 **9 GB**（建议 **12 GB**）。
 
 > **关于 Stripe**：有些节点会拦截付款服务 Stripe。这只影响在 claude.ai 网页上付款，不影响登录和日常使用；安装时会提示你，但不会拦着你装。这只检查能否连通，不代表付款一定成功。需要的话可以加一个付款专用节点，见 [docs/proxy-modes.md](docs/proxy-modes.md)。

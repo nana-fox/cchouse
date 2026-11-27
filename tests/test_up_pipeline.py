@@ -265,25 +265,22 @@ class TestUpPipeline(unittest.TestCase):
             self.assertNotIn("203.0.113.9", out.getvalue())
             self.assertNotIn("test-password", out.getvalue())
 
-    def test_windows_curl_retries_timeout_with_the_same_private_proxy(self):
+    def test_probe_egress_via_temp_mihomo_three_consistent_probes(self):
         fields = cchouse_mod.parse_node_link("socks5://fixture:proxy-secret@203.0.113.8:1080")
         reply = {"ip": "203.0.113.9", "timezone": "America/New_York", "country": "US", "org": "AS64500 test"}
-        with mock.patch.object(cchouse_mod.platform, "system", return_value="Windows"), \
-                mock.patch.object(cchouse_mod.shutil, "which", return_value="curl.exe") as which, \
-                mock.patch.object(cchouse_mod.time, "sleep") as sleep, \
-                mock.patch.object(cchouse_mod.subprocess, "run", side_effect=[
-                    subprocess.CompletedProcess([], 28, stdout='{"ip":'),
-                    subprocess.CompletedProcess([], 0, stdout=json.dumps(reply)),
-                ]) as curl:
-            result = cchouse_mod.probe_egress_via_proxy(fields)
+        fake_proc = mock.MagicMock()
+        fake_proc.poll.return_value = None
+        fake_proc.communicate.return_value = (b"", b"")
+        with mock.patch.object(cchouse_mod.subprocess, "Popen", return_value=fake_proc) as popen, \
+                mock.patch.object(cchouse_mod, "_wait_loopback_ready", return_value=True), \
+                mock.patch.object(cchouse_mod, "_curl_via_local_mihomo", return_value=(0, json.dumps(reply), "")) as curl_fn, \
+                mock.patch.object(cchouse_mod.time, "sleep"):
+            result = cchouse_mod.probe_egress_via_proxy(fields, probe_count=3, probe_interval=0, mihomo_bin="/fake/mihomo")
         self.assertEqual(result, {"ip": reply["ip"], "timezone": reply["timezone"], "country": "US", "asn": "AS64500"})
-        which.assert_called_once_with("curl.exe")
-        sleep.assert_called_once_with(1)
-        self.assertEqual(curl.call_count, 2)
-        first_attempt, second_attempt = curl.call_args_list
-        self.assertEqual(first_attempt, second_attempt)
-        self.assertIn("socks5h://fixture:proxy-secret@", second_attempt.kwargs["input"])
-        self.assertNotIn("proxy-secret", " ".join(second_attempt.args[0]))
+        self.assertEqual(curl_fn.call_count, 3)
+        popen.assert_called_once()
+        # 命令行参数不得包含任何凭据
+        self.assertNotIn("proxy-secret", " ".join(popen.call_args.args[0]))
 
     def test_background_download_logs_pause_only_during_hidden_prompt(self):
         with tempfile.TemporaryDirectory() as td:
@@ -317,21 +314,28 @@ class TestUpPipeline(unittest.TestCase):
                 ctx.downloader.log("after input")
 
             self.assertIn("before input", out.getvalue())
-            self.assertIn("请粘贴单节点代理链接", out.getvalue())
+            self.assertIn("请粘贴节点链接", out.getvalue())
             self.assertNotIn("during input", out.getvalue())
             self.assertIn("after input", out.getvalue())
 
-    def test_advanced_link_or_missing_probe_cannot_create_instance_env(self):
-        for scheme in ("vless", "trojan", "ss", "http"):
+    def test_supported_links_missing_probe_cannot_create_instance_env(self):
+        ss_cred = base64.b64encode(b"aes-256-gcm:private-secret").decode("ascii")
+        samples = (
+            ("vless", "vless://private-secret@203.0.113.9:443?security=reality&pbk=demo-pbk"),
+            ("trojan", "trojan://private-secret@203.0.113.9:443?sni=example.com"),
+            ("ss", f"ss://{ss_cred}@203.0.113.9:8388"),
+            ("http", "http://u:private-secret@203.0.113.9:8080"),
+        )
+        for scheme, link in samples:
             with self.subTest(scheme=scheme), tempfile.TemporaryDirectory() as td:
                 ctx = _ctx(td, link_stdin=True, no_probe=False)
-                with mock.patch("sys.stdin", io.StringIO(f"{scheme}://private-secret@203.0.113.9:443\n")), \
+                with mock.patch("sys.stdin", io.StringIO(link + "\n")), \
                         mock.patch("sys.stdout", io.StringIO()) as out, \
                         mock.patch.object(cchouse_mod, "probe_egress_via_proxy", return_value=None) as probe, \
                         self.assertRaisesRegex(cchouse_mod.StepError, "IPv4.*ASN.*时区") as failure:
                     cchouse_mod.do_config(ctx)
                 self.assertNotIn("private-secret", str(failure.exception) + out.getvalue())
-                self.assertEqual(probe.call_count, int(scheme == "http"))
+                self.assertEqual(probe.call_count, 1)
                 self.assertFalse(ctx.env_path.exists())
 
     def test_required_input_eof_fails_and_cleans_plaintext(self):

@@ -4,6 +4,7 @@
 import argparse
 import base64
 import gzip
+import hashlib
 import ipaddress
 import json
 import os
@@ -70,9 +71,18 @@ def verify(env, flags, hostkey_trust="", share_cfg=None, vbox_host_share_check="
         "-o", f'UserKnownHostsFile="{known_hosts}"', "-p", port, f"claude@{guest_ip}",
     ]
     guest_env = dict(env)
-    if env.get("EXIT_MODE") == "single" and env.get("STRIPE_NODE_SERVER") and not env.get("STRIPE_EXIT_MODE"):
-        guest_env["STRIPE_EXIT_MODE"] = "node"
+    if env.get("EXIT_MODE") == "single" and not env.get("STRIPE_EXIT_MODE"):
+        if env.get("STRIPE_NODE_SERVER"):
+            guest_env["STRIPE_EXIT_MODE"] = "node"
+        elif env.get("SINGLE_VIA_TYPE") or env.get("SINGLE_VIA_SERVER"):
+            guest_env["STRIPE_EXIT_MODE"] = "front"
     config = "".join(f"export {key}={shlex.quote(guest_env.get(key, ''))}\n" for key in GUEST_KEYS)
+    if env.get("EXIT_MODE") == "single" and env.get("SINGLE_VIA_SERVER_IP") and env.get("SINGLE_VIA_PORT"):
+        targets = {f"{env['SINGLE_VIA_SERVER_IP'].strip()}:{env['SINGLE_VIA_PORT'].strip()}"}
+        if guest_env.get("STRIPE_EXIT_MODE") == "node" and env.get("STRIPE_NODE_SERVER_IP") and env.get("STRIPE_NODE_PORT"):
+            targets.add(f"{env['STRIPE_NODE_SERVER_IP'].strip()}:{env['STRIPE_NODE_PORT'].strip()}")
+        egress_sha = hashlib.sha256(("\n".join(sorted(targets)) + "\n").encode("utf-8")).hexdigest()
+        config += f"export CCHOUSE_EXPECTED_NFT_EGRESS_SHA={shlex.quote(egress_sha)}\n"
     if hostkey_trust == "accept-new":
         config += "export CCHOUSE_HOSTKEY_TRUST=accept-new\n"
     norm_share = share_mod.normalize_share_state({"share": share_cfg}) if share_cfg else share_mod.normalize_share_state({})

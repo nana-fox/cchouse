@@ -8,6 +8,9 @@ source_sha='@CCHOUSE_SHA256@'
 python_asset='cpython-3.12.16%2B20261124-aarch64-apple-darwin-install_only_stripped.tar.gz'
 python_url="https://github.com/astral-sh/python-build-standalone/releases/download/20261124/$python_asset"
 python_sha='9d6d9d0d85feda3f9cb4eb3e048f0fed21ed280feda087927eaa4fbc7124826f'
+mihomo_version='v1.19.19'
+mihomo_url="https://github.com/MetaCubeX/mihomo/releases/download/${mihomo_version}/mihomo-darwin-arm64-${mihomo_version}.gz"
+mihomo_sha='29fdde431e69e17f4e8e7cda2046402c4cba254a26ad66ce17e37ad946490dc0'
 tart_url='https://github.com/openai/tart/releases/download/2.42.0/tart.tar.gz'
 tart_sha='a95dda214b5f676298430d665a8174992e6b300dd20c653385b60481ae819ddf'
 
@@ -151,6 +154,8 @@ fi
 
 root="$HOME/Library/Application Support/cchouse/bootstrap"
 python_home="$root/tools/python-3.12.16-20261124"
+mihomo_home="$root/tools/mihomo-$mihomo_version"
+mihomo_bin="$mihomo_home/mihomo"
 tart_home="$root/tools/tart-2.42.0"
 code="$root/packages/$version-${source_sha:0:12}"
 echo "cchouse $version 将校验并准备私有 Python 和源码，写入 ${root}。"
@@ -303,14 +308,16 @@ python_tar="$root/downloads/python-$python_sha.tar.gz"
 fetch "私有 Python" "$python_url" "$python_sha" "$python_tar"
 install_tar "$python_tar" "$python_home" python
 
-if [ "$needs_tart" = 1 ]; then
-  tart_tar="$root/downloads/tart-$tart_sha.tar.gz"
-  fetch "私有 Tart" "$tart_url" "$tart_sha" "$tart_tar"
-  install_tar "$tart_tar" "$tart_home" tart.app
-  export CCHOUSE_TART_BIN="$tart_home/Contents/MacOS/tart"
-  export PATH="$tart_home/Contents/MacOS:$PATH"
-  "$CCHOUSE_TART_BIN" --version >/dev/null
+if [ ! -x "$mihomo_bin" ]; then
+  mihomo_gz="$root/downloads/mihomo-$mihomo_version-$mihomo_sha.gz"
+  fetch "临时探测组件 mihomo $mihomo_version" "$mihomo_url" "$mihomo_sha" "$mihomo_gz"
+  mkdir -p "$mihomo_home"
+  gzip -dc "$mihomo_gz" >"$stage/mihomo"
+  chmod 700 "$stage/mihomo"
+  mv -f -- "$stage/mihomo" "$mihomo_bin"
 fi
+export CCHOUSE_MIHOMO_BIN="$mihomo_bin"
+
 if [ ! -d "$code" ]; then
   mkdir "$stage/zip"
   /usr/bin/ditto -x -k "$source_zip" "$stage/zip"
@@ -331,6 +338,39 @@ fi
 # 安装 ~/.local/bin/cchouse 命令入口
 "$python_home/bin/python3" -I -c "import sys; sys.path.insert(0, 'scripts'); import launcher; launcher.install_cli_entry()" || true
 
+# 若本机缺少 Tart 且尚未验证节点，先完成节点探测再下载私有 Tart（节点不行不白等）
+pre_configured=0
+if [ "$needs_tart" = 1 ] && [ ! -f "$instance_env" -o "$reconfigure" = 1 ]; then
+  pre_args=(up --tag "$tag" --config-only --skip-preflight)
+  if [ "$link_clipboard" = 1 ]; then
+    pre_args+=(--link-clipboard)
+  fi
+  if [ -n "$link_file" ]; then
+    pre_args+=(--link-file "$link_file")
+  fi
+  if [ "$reconfigure" = 1 ]; then
+    pre_args+=(--reconfigure)
+  fi
+  "$python_home/bin/python3" -I scripts/cchouse.py "${pre_args[@]}"
+  pre_configured=1
+fi
+
+if [ "$needs_tart" = 1 ]; then
+  if ! mkdir "$root/.prepare"; then
+    echo '另一个 cchouse 引导正在准备文件。若上次被强制结束，确认没有引导在运行后删除 bootstrap/.prepare 再试。' >&2
+    exit 1
+  fi
+  lock="$root/.prepare"
+  tart_tar="$root/downloads/tart-$tart_sha.tar.gz"
+  fetch "私有 Tart" "$tart_url" "$tart_sha" "$tart_tar"
+  install_tar "$tart_tar" "$tart_home" tart.app
+  export CCHOUSE_TART_BIN="$tart_home/Contents/MacOS/tart"
+  export PATH="$tart_home/Contents/MacOS:$PATH"
+  "$CCHOUSE_TART_BIN" --version >/dev/null
+  rmdir -- "$lock"
+  lock=''
+fi
+
 up_args=(up --tag "$tag")
 if [ -n "$image_mirror" ]; then
   up_args+=(--image-mirror "$image_mirror")
@@ -344,14 +384,16 @@ fi
 if [ "$share_read_only" = 1 ]; then
   up_args+=(--read-only)
 fi
-if [ "$link_clipboard" = 1 ]; then
-  up_args+=(--link-clipboard)
-fi
-if [ -n "$link_file" ]; then
-  up_args+=(--link-file "$link_file")
-fi
-if [ "$reconfigure" = 1 ]; then
-  up_args+=(--reconfigure)
+if [ "$pre_configured" = 0 ]; then
+  if [ "$link_clipboard" = 1 ]; then
+    up_args+=(--link-clipboard)
+  fi
+  if [ -n "$link_file" ]; then
+    up_args+=(--link-file "$link_file")
+  fi
+  if [ "$reconfigure" = 1 ]; then
+    up_args+=(--reconfigure)
+  fi
 fi
 
 echo "正在启动 cchouse up。重跑同一条首页命令可续跑。工作目录：$code"
